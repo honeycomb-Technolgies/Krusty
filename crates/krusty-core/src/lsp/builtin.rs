@@ -20,9 +20,7 @@ pub enum LspInstallMethod {
         install_cmd: &'static [&'static str],
     },
     /// Install via npm/bun (typescript-language-server, etc.)
-    Npm {
-        package: &'static str,
-    },
+    Npm { package: &'static str },
 }
 
 /// A built-in LSP server definition
@@ -115,27 +113,35 @@ pub static BUILTIN_LSPS: &[BuiltinLsp] = &[
         binary: "typescript-language-server",
         args: &["--stdio"],
         extensions: &["ts", "tsx", "js", "jsx", "mjs", "cts", "mts"],
-        install: LspInstallMethod::Npm { package: "typescript-language-server" },
+        install: LspInstallMethod::Npm {
+            package: "typescript-language-server",
+        },
     },
     BuiltinLsp {
         id: "builtin-bash",
         binary: "bash-language-server",
         args: &["start"],
         extensions: &["sh", "bash"],
-        install: LspInstallMethod::Npm { package: "bash-language-server" },
+        install: LspInstallMethod::Npm {
+            package: "bash-language-server",
+        },
     },
     BuiltinLsp {
         id: "builtin-yaml",
         binary: "yaml-language-server",
         args: &["--stdio"],
         extensions: &["yaml", "yml"],
-        install: LspInstallMethod::Npm { package: "yaml-language-server" },
+        install: LspInstallMethod::Npm {
+            package: "yaml-language-server",
+        },
     },
     BuiltinLsp {
         id: "builtin-json",
         binary: "vscode-json-language-server",
         args: &["--stdio"],
         extensions: &["json"],
-        install: LspInstallMethod::Npm { package: "vscode-langservers-extracted" },
+        install: LspInstallMethod::Npm {
+            package: "vscode-langservers-extracted",
+        },
     },
 ];

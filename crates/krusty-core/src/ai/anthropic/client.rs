@@ -17,12 +17,12 @@ use crate::ai::sse::{
     SseEvent, SseParser, SseStreamProcessor, ThinkingAccumulator, ToolCallAccumulator,
 };
 use crate::ai::streaming::StreamPart;
+use crate::ai::transform::build_provider_params;
 use crate::ai::types::{
     AiTool, Citation, Content, ContextEditingMetrics, ContextManagement, FinishReason,
     ModelMessage, Role, ThinkingConfig, Usage, WebFetchConfig, WebFetchContent, WebSearchConfig,
     WebSearchResult,
 };
-use crate::ai::transform::build_provider_params;
 use crate::auth::token_manager::TokenManager;
 use crate::constants;
 
@@ -90,7 +90,7 @@ Before any commit:
 You are honest. If an approach is wrong, you say so directly. No excessive praise. No flattery. Just the work."#;
 
 use crate::ai::models::ApiFormat;
-use crate::ai::providers::{AuthHeader, ProviderId, ProviderCapabilities, ReasoningFormat};
+use crate::ai::providers::{AuthHeader, ProviderCapabilities, ProviderId, ReasoningFormat};
 
 /// Configuration for the Anthropic client
 #[derive(Debug, Clone)]
@@ -162,7 +162,10 @@ impl AnthropicConfig {
 
     /// Check if this config uses OpenAI chat/completions format
     pub fn uses_openai_format(&self) -> bool {
-        matches!(self.api_format, ApiFormat::OpenAI | ApiFormat::OpenAIResponses)
+        matches!(
+            self.api_format,
+            ApiFormat::OpenAI | ApiFormat::OpenAIResponses
+        )
     }
 
     /// Check if this provider uses Anthropic-compatible API
@@ -295,17 +298,18 @@ impl AnthropicClient {
 
         // Determine which assistant message (if any) should keep thinking blocks.
         // This is the last assistant message that has tool_use AND is followed by tool_result.
-        let non_system_messages: Vec<_> = messages
-            .iter()
-            .filter(|m| m.role != Role::System)
-            .collect();
+        let non_system_messages: Vec<_> =
+            messages.iter().filter(|m| m.role != Role::System).collect();
 
         let last_assistant_with_tools_idx = {
             // Find the last assistant message with tool_use that is followed by a tool message
             let mut idx = None;
             for (i, msg) in non_system_messages.iter().enumerate() {
                 if msg.role == Role::Assistant
-                    && msg.content.iter().any(|c| matches!(c, Content::ToolUse { .. }))
+                    && msg
+                        .content
+                        .iter()
+                        .any(|c| matches!(c, Content::ToolUse { .. }))
                 {
                     // Check if followed by tool result
                     if i + 1 < non_system_messages.len()
@@ -498,7 +502,12 @@ impl AnthropicClient {
             // For tool results, use special format
             if msg.role == Role::Tool {
                 for content in &msg.content {
-                    if let Content::ToolResult { tool_use_id, output, .. } = content {
+                    if let Content::ToolResult {
+                        tool_use_id,
+                        output,
+                        ..
+                    } = content
+                    {
                         result.push(serde_json::json!({
                             "role": "tool",
                             "tool_call_id": tool_use_id,
@@ -510,7 +519,10 @@ impl AnthropicClient {
             }
 
             // For assistant messages with tool calls
-            let has_tool_use = msg.content.iter().any(|c| matches!(c, Content::ToolUse { .. }));
+            let has_tool_use = msg
+                .content
+                .iter()
+                .any(|c| matches!(c, Content::ToolUse { .. }));
             if has_tool_use && role == "assistant" {
                 let mut tool_calls = Vec::new();
                 let mut text_content = String::new();
@@ -544,7 +556,9 @@ impl AnthropicClient {
             }
 
             // Regular messages - extract text content
-            let text: String = msg.content.iter()
+            let text: String = msg
+                .content
+                .iter()
                 .filter_map(|c| match c {
                     Content::Text { text } => Some(text.as_str()),
                     _ => None,
@@ -567,27 +581,30 @@ impl AnthropicClient {
     fn convert_tools_openai(&self, tools: &[AiTool]) -> Vec<Value> {
         let use_responses_format = matches!(self.config.api_format, ApiFormat::OpenAIResponses);
 
-        tools.iter().map(|tool| {
-            if use_responses_format {
-                // Responses API: flat structure with name at top level
-                serde_json::json!({
-                    "type": "function",
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": tool.input_schema
-                })
-            } else {
-                // Chat Completions: nested under "function"
-                serde_json::json!({
-                    "type": "function",
-                    "function": {
+        tools
+            .iter()
+            .map(|tool| {
+                if use_responses_format {
+                    // Responses API: flat structure with name at top level
+                    serde_json::json!({
+                        "type": "function",
                         "name": tool.name,
                         "description": tool.description,
                         "parameters": tool.input_schema
-                    }
-                })
-            }
-        }).collect()
+                    })
+                } else {
+                    // Chat Completions: nested under "function"
+                    serde_json::json!({
+                        "type": "function",
+                        "function": {
+                            "name": tool.name,
+                            "description": tool.description,
+                            "parameters": tool.input_schema
+                        }
+                    })
+                }
+            })
+            .collect()
     }
 
     /// Make a simple non-streaming API call
@@ -951,7 +968,9 @@ impl AnthropicClient {
 
         // Route to OpenAI format handler for non-Anthropic models
         if self.config.uses_openai_format() {
-            return self.call_streaming_openai(messages, options, call_start).await;
+            return self
+                .call_streaming_openai(messages, options, call_start)
+                .await;
         }
 
         let token = self.get_auth_token().await?;
@@ -1152,7 +1171,10 @@ impl AnthropicClient {
                 if !model.ends_with(":online") {
                     let online_model = format!("{}:online", model);
                     body["model"] = serde_json::json!(online_model);
-                    info!("OpenRouter web search enabled via model suffix: {}", online_model);
+                    info!(
+                        "OpenRouter web search enabled via model suffix: {}",
+                        online_model
+                    );
                 }
             }
         }
@@ -1270,13 +1292,14 @@ impl AnthropicClient {
 
         if let Some(temp) = provider_params.temperature {
             body["temperature"] = Value::Number(serde_json::Number::from(temp as i32));
-            debug!("Setting temperature: {} for model {}", temp, self.config.model);
+            debug!(
+                "Setting temperature: {} for model {}",
+                temp, self.config.model
+            );
         }
 
         if let Some(top_p) = provider_params.top_p {
-            body["top_p"] = Value::Number(
-                serde_json::Number::from_f64(top_p as f64).unwrap(),
-            );
+            body["top_p"] = Value::Number(serde_json::Number::from_f64(top_p as f64).unwrap());
             debug!("Setting top_p: {} for model {}", top_p, self.config.model);
         }
 
@@ -1432,7 +1455,10 @@ impl AnthropicClient {
         options: &CallOptions,
         call_start: Instant,
     ) -> Result<mpsc::UnboundedReceiver<StreamPart>> {
-        info!("Using OpenAI chat/completions format for {}", self.config.model);
+        info!(
+            "Using OpenAI chat/completions format for {}",
+            self.config.model
+        );
 
         let token = self.get_auth_token().await?;
         let openai_messages = self.convert_messages_openai(&messages);
@@ -1462,11 +1488,12 @@ impl AnthropicClient {
         let max_tokens = options.max_tokens.unwrap_or(self.config.max_tokens);
 
         // Responses API uses "input", Chat Completions uses "messages"
-        let (messages_key, max_tokens_key) = if matches!(self.config.api_format, ApiFormat::OpenAIResponses) {
-            ("input", "max_output_tokens")
-        } else {
-            ("messages", "max_tokens")
-        };
+        let (messages_key, max_tokens_key) =
+            if matches!(self.config.api_format, ApiFormat::OpenAIResponses) {
+                ("input", "max_output_tokens")
+            } else {
+                ("messages", "max_tokens")
+            };
 
         // Build request body
         let mut body = serde_json::json!({
@@ -1479,10 +1506,13 @@ impl AnthropicClient {
         // Add system message at the start if present
         if let Some(sys) = system_prompt {
             if let Some(msgs) = body.get_mut(messages_key).and_then(|m| m.as_array_mut()) {
-                msgs.insert(0, serde_json::json!({
-                    "role": "system",
-                    "content": sys
-                }));
+                msgs.insert(
+                    0,
+                    serde_json::json!({
+                        "role": "system",
+                        "content": sys
+                    }),
+                );
             }
         }
 
@@ -1591,19 +1621,30 @@ impl OpenAIParser {
 
             // Response completed
             "response.done" | "response.completed" => {
-                return SseEvent::Finish { reason: FinishReason::Stop };
+                return SseEvent::Finish {
+                    reason: FinishReason::Stop,
+                };
             }
 
             // Function/tool call start
             "response.function_call_arguments.start" | "response.output_item.added" => {
                 if let Some(item) = json.get("item") {
                     if item.get("type").and_then(|t| t.as_str()) == Some("function_call") {
-                        let id = item.get("call_id").and_then(|i| i.as_str()).unwrap_or("").to_string();
-                        let name = item.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
+                        let id = item
+                            .get("call_id")
+                            .and_then(|i| i.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let name = item
+                            .get("name")
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("")
+                            .to_string();
                         if !name.is_empty() {
                             let mut accumulators = self.tool_accumulators.lock().unwrap();
                             let index = accumulators.len();
-                            accumulators.insert(index, ToolCallAccumulator::new(id.clone(), name.clone()));
+                            accumulators
+                                .insert(index, ToolCallAccumulator::new(id.clone(), name.clone()));
                             return SseEvent::ToolCallStart { id, name };
                         }
                     }
@@ -1631,8 +1672,14 @@ impl OpenAIParser {
             // Usage info
             "response.usage" => {
                 if let Some(usage) = json.get("usage") {
-                    let prompt = usage.get("input_tokens").and_then(|t| t.as_u64()).unwrap_or(0) as usize;
-                    let completion = usage.get("output_tokens").and_then(|t| t.as_u64()).unwrap_or(0) as usize;
+                    let prompt = usage
+                        .get("input_tokens")
+                        .and_then(|t| t.as_u64())
+                        .unwrap_or(0) as usize;
+                    let completion = usage
+                        .get("output_tokens")
+                        .and_then(|t| t.as_u64())
+                        .unwrap_or(0) as usize;
                     if prompt > 0 || completion > 0 {
                         return SseEvent::Usage(Usage {
                             prompt_tokens: prompt,
@@ -1675,10 +1722,14 @@ impl SseParser for OpenAIParser {
                 // Check for finish_reason
                 if let Some(reason) = choice.get("finish_reason").and_then(|r| r.as_str()) {
                     if reason == "stop" || reason == "end_turn" {
-                        return Ok(SseEvent::Finish { reason: FinishReason::Stop });
+                        return Ok(SseEvent::Finish {
+                            reason: FinishReason::Stop,
+                        });
                     }
                     if reason == "tool_calls" {
-                        return Ok(SseEvent::Finish { reason: FinishReason::ToolCalls });
+                        return Ok(SseEvent::Finish {
+                            reason: FinishReason::ToolCalls,
+                        });
                     }
                 }
 
@@ -1692,7 +1743,8 @@ impl SseParser for OpenAIParser {
                     }
 
                     // Reasoning content (GLM-style thinking)
-                    if let Some(reasoning) = delta.get("reasoning_content").and_then(|r| r.as_str()) {
+                    if let Some(reasoning) = delta.get("reasoning_content").and_then(|r| r.as_str())
+                    {
                         if !reasoning.is_empty() {
                             // Treat reasoning as thinking delta
                             return Ok(SseEvent::ThinkingDelta {
@@ -1705,20 +1757,33 @@ impl SseParser for OpenAIParser {
                     // Tool calls
                     if let Some(tool_calls) = delta.get("tool_calls").and_then(|t| t.as_array()) {
                         for tool_call in tool_calls {
-                            let index = tool_call.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+                            let index = tool_call.get("index").and_then(|i| i.as_u64()).unwrap_or(0)
+                                as usize;
 
                             // Check for function info (start of tool call)
                             if let Some(function) = tool_call.get("function") {
-                                let id = tool_call.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
+                                let id = tool_call
+                                    .get("id")
+                                    .and_then(|i| i.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
 
                                 if let Some(name) = function.get("name").and_then(|n| n.as_str()) {
                                     // New tool call starting
                                     let mut accumulators = self.tool_accumulators.lock().unwrap();
-                                    accumulators.insert(index, ToolCallAccumulator::new(id.clone(), name.to_string()));
-                                    return Ok(SseEvent::ToolCallStart { id, name: name.to_string() });
+                                    accumulators.insert(
+                                        index,
+                                        ToolCallAccumulator::new(id.clone(), name.to_string()),
+                                    );
+                                    return Ok(SseEvent::ToolCallStart {
+                                        id,
+                                        name: name.to_string(),
+                                    });
                                 }
 
-                                if let Some(args) = function.get("arguments").and_then(|a| a.as_str()) {
+                                if let Some(args) =
+                                    function.get("arguments").and_then(|a| a.as_str())
+                                {
                                     // Arguments delta
                                     let mut accumulators = self.tool_accumulators.lock().unwrap();
                                     if let Some(acc) = accumulators.get_mut(&index) {
@@ -1738,8 +1803,14 @@ impl SseParser for OpenAIParser {
 
         // Check for usage info
         if let Some(usage) = json.get("usage") {
-            let prompt_tokens = usage.get("prompt_tokens").and_then(|t| t.as_u64()).unwrap_or(0) as usize;
-            let completion_tokens = usage.get("completion_tokens").and_then(|t| t.as_u64()).unwrap_or(0) as usize;
+            let prompt_tokens = usage
+                .get("prompt_tokens")
+                .and_then(|t| t.as_u64())
+                .unwrap_or(0) as usize;
+            let completion_tokens = usage
+                .get("completion_tokens")
+                .and_then(|t| t.as_u64())
+                .unwrap_or(0) as usize;
             if prompt_tokens > 0 || completion_tokens > 0 {
                 return Ok(SseEvent::Usage(Usage {
                     prompt_tokens,

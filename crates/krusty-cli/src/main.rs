@@ -10,7 +10,9 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 // Re-export core modules for TUI usage
-use krusty_core::{agent, ai, auth, constants, extensions, lsp, paths, plan, process, storage, tools};
+use krusty_core::{
+    agent, ai, auth, constants, extensions, lsp, paths, plan, process, storage, tools,
+};
 
 mod tui;
 
@@ -92,9 +94,9 @@ fn list_installed_extensions() -> Vec<String> {
 /// Restore terminal state - called on panic or unexpected exit
 fn restore_terminal() {
     use crossterm::{
+        event::DisableMouseCapture,
         execute,
         terminal::{disable_raw_mode, LeaveAlternateScreen},
-        event::DisableMouseCapture,
     };
     let _ = disable_raw_mode();
     let _ = execute!(std::io::stdout(), LeaveAlternateScreen, DisableMouseCapture);

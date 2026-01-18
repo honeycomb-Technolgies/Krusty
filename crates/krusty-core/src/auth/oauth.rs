@@ -73,7 +73,10 @@ impl OAuthClient {
             .append_pair("client_id", CLIENT_ID)
             .append_pair("response_type", "code")
             .append_pair("redirect_uri", REDIRECT_URI)
-            .append_pair("scope", "user:profile user:inference user:sessions:claude_code")
+            .append_pair(
+                "scope",
+                "user:profile user:inference user:sessions:claude_code",
+            )
             .append_pair("code_challenge", &challenge)
             .append_pair("code_challenge_method", "S256")
             .append_pair("state", &verifier);

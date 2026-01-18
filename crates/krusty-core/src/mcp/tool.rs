@@ -41,10 +41,7 @@ impl Tool for McpTool {
     }
 
     fn description(&self) -> &str {
-        self.definition
-            .description
-            .as_deref()
-            .unwrap_or("MCP tool")
+        self.definition.description.as_deref().unwrap_or("MCP tool")
     }
 
     fn parameters_schema(&self) -> Value {

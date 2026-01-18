@@ -10,7 +10,7 @@ fn get_title_model(provider: ProviderId) -> &'static str {
     match provider {
         ProviderId::Anthropic => "claude-haiku-4-5-20251001",
         ProviderId::OpenRouter => "anthropic/claude-3.5-haiku",
-        ProviderId::OpenCodeZen => "minimax-m2.1-free",  // Free model that works
+        ProviderId::OpenCodeZen => "minimax-m2.1-free", // Free model that works
         ProviderId::ZAi => "glm-4.5-flash",
         ProviderId::MiniMax => "MiniMax-M2.1",
         ProviderId::Kimi => "kimi-k2",

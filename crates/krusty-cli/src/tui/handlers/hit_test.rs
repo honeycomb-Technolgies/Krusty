@@ -60,13 +60,22 @@ impl App {
 
         // Cache miss - use fast estimation (should rarely happen after calculate_message_lines runs)
         let wrap_width = wrap_width.max(1);
-        let lines: usize = content.lines()
+        let lines: usize = content
+            .lines()
             .map(|line| {
                 let char_count = line.chars().count();
-                if char_count == 0 { 1 } else { char_count.div_ceil(wrap_width) }
+                if char_count == 0 {
+                    1
+                } else {
+                    char_count.div_ceil(wrap_width)
+                }
             })
             .sum();
-        if lines == 0 && !content.is_empty() { 1 } else { lines }
+        if lines == 0 && !content.is_empty() {
+            1
+        } else {
+            lines
+        }
     }
 
     /// Unified hit test for any block type - returns first block hit with type info

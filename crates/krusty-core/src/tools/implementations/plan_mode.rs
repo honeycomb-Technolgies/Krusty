@@ -43,7 +43,8 @@ impl Tool for EnterPlanModeTool {
         ToolResult {
             output: json!({
                 "note": "Plan mode switch handled by UI"
-            }).to_string(),
+            })
+            .to_string(),
             is_error: false,
         }
     }

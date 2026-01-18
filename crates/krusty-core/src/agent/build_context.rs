@@ -63,7 +63,12 @@ impl SharedBuildContext {
     // =========================================================================
 
     /// Try to acquire a lock. Returns Ok(()) or Err(holder_id)
-    pub fn acquire_lock(&self, path: PathBuf, agent_id: String, _reason: String) -> Result<(), String> {
+    pub fn acquire_lock(
+        &self,
+        path: PathBuf,
+        agent_id: String,
+        _reason: String,
+    ) -> Result<(), String> {
         if let Some(holder) = self.file_locks.get(&path) {
             if *holder != agent_id {
                 self.lock_contentions.fetch_add(1, Ordering::Relaxed);

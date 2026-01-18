@@ -190,7 +190,9 @@ impl App {
         tokio::spawn(async move {
             match downloader.ensure_available(&builtin).await {
                 Ok(bin_path) => {
-                    if let Err(e) = lsp_manager.register_builtin_with_path(&builtin, &bin_path).await
+                    if let Err(e) = lsp_manager
+                        .register_builtin_with_path(&builtin, &bin_path)
+                        .await
                     {
                         let _ = tx.send(Err(format!("Failed to register: {}", e)));
                     } else {
@@ -231,14 +233,16 @@ impl App {
             match rx.try_recv() {
                 Ok(Ok(name)) => {
                     self.popups.lsp_install.set_progress("Installed!");
-                    self.messages.push(("system".to_string(), format!("Installed LSP: {}", name)));
+                    self.messages
+                        .push(("system".to_string(), format!("Installed LSP: {}", name)));
                     self.popups.lsp_install.clear();
                     self.popup = crate::tui::app::Popup::None;
                     self.channels.builtin_lsp_install = None;
                 }
                 Ok(Err(e)) => {
                     self.popups.lsp_install.set_error(&format!("Failed: {}", e));
-                    self.messages.push(("system".to_string(), format!("LSP install failed: {}", e)));
+                    self.messages
+                        .push(("system".to_string(), format!("LSP install failed: {}", e)));
                     self.channels.builtin_lsp_install = None;
                 }
                 Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
@@ -269,8 +273,10 @@ impl App {
                         Err(e) => {
                             // Set error state so user can see message and dismiss with Esc
                             self.popups.lsp_install.set_error(&format!("Failed: {}", e));
-                            self.messages
-                                .push(("system".to_string(), format!("Extension install failed: {}", e)));
+                            self.messages.push((
+                                "system".to_string(),
+                                format!("Extension install failed: {}", e),
+                            ));
                         }
                     }
                     self.channels.extension_lsp_install = None;
@@ -305,7 +311,10 @@ impl App {
 
             // Show the install popup IMMEDIATELY - this pauses streaming
             // (process_stream_events checks for this popup and skips processing)
-            tracing::info!("LSP popup interrupting conversation for: {}", missing.extension);
+            tracing::info!(
+                "LSP popup interrupting conversation for: {}",
+                missing.extension
+            );
             self.popups.lsp_install.set(missing);
             self.popup = crate::tui::app::Popup::LspInstall;
         }

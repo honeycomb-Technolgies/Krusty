@@ -242,7 +242,9 @@ impl App {
             if let Some(area) = self.layout.input_area {
                 let relative_x = x.saturating_sub(area.x);
                 let relative_y = y.saturating_sub(area.y);
-                if let Some((_start, _end, path)) = self.input.get_file_ref_at_click(relative_x, relative_y) {
+                if let Some((_start, _end, path)) =
+                    self.input.get_file_ref_at_click(relative_x, relative_y)
+                {
                     self.popups.file_preview.open(path);
                     self.popup = Popup::FilePreview;
                     return;
@@ -790,7 +792,8 @@ impl App {
         let (_line, _col) = self.hit_test_input(x, y)?;
 
         // Check if there's a file segment at this position
-        self.input.get_file_ref_at_click(x.saturating_sub(area.x), y.saturating_sub(area.y))
+        self.input
+            .get_file_ref_at_click(x.saturating_sub(area.x), y.saturating_sub(area.y))
     }
 
     /// Detect hyperlink in messages at position

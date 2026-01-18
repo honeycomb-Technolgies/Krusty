@@ -54,8 +54,8 @@ pub fn load_skill(path: &Path, source: SkillSource) -> Result<Skill> {
         return Err(anyhow!("SKILL.md not found in {:?}", path));
     }
 
-    let content = fs::read_to_string(&skill_file)
-        .map_err(|e| anyhow!("Failed to read SKILL.md: {}", e))?;
+    let content =
+        fs::read_to_string(&skill_file).map_err(|e| anyhow!("Failed to read SKILL.md: {}", e))?;
 
     Skill::parse(&content, path.to_path_buf(), source)
 }
@@ -81,8 +81,7 @@ pub fn load_skill_file(skill_path: &Path, file_name: &str) -> Result<String> {
         return Err(anyhow!("File not found: {}", file_name));
     }
 
-    fs::read_to_string(&file_path)
-        .map_err(|e| anyhow!("Failed to read {}: {}", file_name, e))
+    fs::read_to_string(&file_path).map_err(|e| anyhow!("Failed to read {}: {}", file_name, e))
 }
 
 /// Ensure skills directory exists
@@ -126,7 +125,10 @@ version: 0.1.0
 "#,
         name,
         description,
-        name.split('-').map(capitalize_first).collect::<Vec<_>>().join(" ")
+        name.split('-')
+            .map(capitalize_first)
+            .collect::<Vec<_>>()
+            .join(" ")
     );
 
     fs::write(skill_dir.join("SKILL.md"), skill_content)?;
@@ -166,7 +168,11 @@ mod tests {
         let temp = tempdir().unwrap();
         let skill_dir = temp.path().join("skill");
         fs::create_dir_all(&skill_dir).unwrap();
-        fs::write(skill_dir.join("SKILL.md"), "---\nname: x\ndescription: x\n---").unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: x\ndescription: x\n---",
+        )
+        .unwrap();
 
         let result = load_skill_file(&skill_dir, "../../../etc/passwd");
         assert!(result.is_err());

@@ -233,7 +233,10 @@ mod tests {
         let project_dir = temp.path().join("project");
 
         // Create same skill in both directories
-        for (dir, desc) in [(&global_dir, "Global version"), (&project_dir, "Project version")] {
+        for (dir, desc) in [
+            (&global_dir, "Global version"),
+            (&project_dir, "Project version"),
+        ] {
             let skill_dir = dir.join("shared-skill");
             std::fs::create_dir_all(&skill_dir).unwrap();
             std::fs::write(

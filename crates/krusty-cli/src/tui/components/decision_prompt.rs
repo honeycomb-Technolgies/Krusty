@@ -140,9 +140,7 @@ impl DecisionPrompt {
             "Execute Plan?",
             format!("Plan: \"{}\" ({} tasks)", title, task_count),
         )
-        .add_option(
-            PromptOption::new("Execute").with_description("Switch to BUILD mode and start"),
-        )
+        .add_option(PromptOption::new("Execute").with_description("Switch to BUILD mode and start"))
         .add_option(PromptOption::new("Abandon").with_description("Discard plan"))];
 
         self.current_index = 0;

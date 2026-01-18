@@ -169,15 +169,21 @@ impl App {
         self.complete_streaming_blocks();
 
         // Check for task completion keywords in delta for real-time updates
-        const COMPLETION_KEYWORDS: &[&str] = &["complete", "Complete", "done", "Done", "finished", "Finished", "✓", "✅"];
-        let should_check_completion = self.active_plan.is_some()
-            && COMPLETION_KEYWORDS.iter().any(|kw| delta.contains(kw));
+        const COMPLETION_KEYWORDS: &[&str] = &[
+            "complete", "Complete", "done", "Done", "finished", "Finished", "✓", "✅",
+        ];
+        let should_check_completion =
+            self.active_plan.is_some() && COMPLETION_KEYWORDS.iter().any(|kw| delta.contains(kw));
 
         // Use cached streaming assistant index (O(1)) instead of O(n) scan per delta
         let should_append = if let Some(idx) = self.streaming_assistant_idx {
             // Verify cache is still valid: idx is in bounds and is the last message
             idx == self.messages.len().saturating_sub(1)
-                && self.messages.get(idx).map(|(role, _)| role == "assistant").unwrap_or(false)
+                && self
+                    .messages
+                    .get(idx)
+                    .map(|(role, _)| role == "assistant")
+                    .unwrap_or(false)
         } else {
             // Cache miss - find the last assistant message
             let last_assistant_idx = self
@@ -328,7 +334,7 @@ impl App {
                 | "build"
                 | "AskUserQuestion"
                 | "task_complete"      // Silent - updates plan sidebar
-                | "enter_plan_mode"    // Silent - updates status bar
+                | "enter_plan_mode" // Silent - updates status bar
         ) {
             self.messages
                 .push(("tool".to_string(), format!("Using tool: {} ...", name)));
@@ -517,11 +523,10 @@ impl App {
                 return;
             };
 
-            match self.plan_manager.create_plan(
-                &parsed_plan.title,
-                &session_id,
-                Some(&working_dir),
-            ) {
+            match self
+                .plan_manager
+                .create_plan(&parsed_plan.title, &session_id, Some(&working_dir))
+            {
                 Ok(mut new_plan) => {
                     // Copy phases from parsed plan
                     new_plan.phases = parsed_plan.phases;
@@ -544,7 +549,8 @@ impl App {
                         }
 
                         // Show decision prompt for plan confirmation
-                        self.decision_prompt.show_plan_confirm(&plan_title, task_count);
+                        self.decision_prompt
+                            .show_plan_confirm(&plan_title, task_count);
                     }
                 }
                 Err(e) => {
@@ -619,7 +625,10 @@ impl App {
 
                 // If plan is complete, disengage elegantly with animated collapse
                 if plan_complete {
-                    tracing::info!("Plan '{}' completed - starting graceful disengage", plan_title);
+                    tracing::info!(
+                        "Plan '{}' completed - starting graceful disengage",
+                        plan_title
+                    );
                     self.messages.push((
                         "system".to_string(),
                         format!(
@@ -689,7 +698,10 @@ impl App {
                 tracing::info!("Plan '{}' completed (real-time detection)", plan_title);
                 self.messages.push((
                     "system".to_string(),
-                    format!("🎉 Plan '{}' complete! All {} tasks finished.", plan_title, total),
+                    format!(
+                        "🎉 Plan '{}' complete! All {} tasks finished.",
+                        plan_title, total
+                    ),
                 ));
                 self.plan_sidebar.start_collapse();
             }
@@ -708,7 +720,9 @@ impl App {
             if let Some(ref mut plan) = self.active_plan {
                 plan.status = crate::plan::PlanStatus::Abandoned;
                 let title = plan.title.clone();
-                let file_path = plan.file_path.as_ref()
+                let file_path = plan
+                    .file_path
+                    .as_ref()
                     .map(|p| p.display().to_string())
                     .unwrap_or_default();
 

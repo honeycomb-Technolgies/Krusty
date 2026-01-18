@@ -99,7 +99,10 @@ impl EditBlock {
 
     /// Pre-compute side-by-side pairing (indices into diff_lines)
     fn compute_sbs_pairs(&mut self) {
-        self.sbs_pairs = self.diff_lines.iter().enumerate()
+        self.sbs_pairs = self
+            .diff_lines
+            .iter()
+            .enumerate()
             .map(|(i, line)| match line {
                 DiffLine::Context { .. } => (Some(i), Some(i)),
                 DiffLine::Removed { .. } => (Some(i), None),

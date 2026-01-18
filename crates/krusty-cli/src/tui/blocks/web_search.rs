@@ -604,7 +604,9 @@ impl StreamBlock for WebSearchBlock {
             return Some(header);
         }
 
-        let content: String = self.results.iter()
+        let content: String = self
+            .results
+            .iter()
             .map(|r| format!("{}\n  {}", r.title, r.url))
             .collect::<Vec<_>>()
             .join("\n");

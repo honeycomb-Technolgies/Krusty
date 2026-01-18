@@ -12,7 +12,9 @@ use ratatui_image::{protocol::StatefulProtocol, Resize, StatefulImage};
 use std::path::PathBuf;
 use std::process::Command;
 
-use super::common::{center_content, center_rect, popup_block, popup_title, render_popup_background};
+use super::common::{
+    center_content, center_rect, popup_block, popup_title, render_popup_background,
+};
 use crate::tui::graphics::GraphicsContext;
 use crate::tui::themes::Theme;
 

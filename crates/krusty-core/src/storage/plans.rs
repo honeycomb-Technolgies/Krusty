@@ -112,10 +112,10 @@ impl<'a> PlanStore<'a> {
 
     /// Abandon plan for a session (deletes it, allowing new plan)
     pub fn abandon_plan(&self, session_id: &str) -> Result<bool> {
-        let rows = self.db.conn().execute(
-            "DELETE FROM plans WHERE session_id = ?1",
-            [session_id],
-        )?;
+        let rows = self
+            .db
+            .conn()
+            .execute("DELETE FROM plans WHERE session_id = ?1", [session_id])?;
 
         if rows > 0 {
             tracing::info!(session_id = %session_id, "Abandoned plan for session");
@@ -174,7 +174,8 @@ impl<'a> PlanStore<'a> {
                 id: row.get(0)?,
                 session_id: row.get(1)?,
                 title: row.get(2)?,
-                status: row.get::<_, String>(3)?
+                status: row
+                    .get::<_, String>(3)?
                     .parse()
                     .unwrap_or(PlanStatus::InProgress),
                 created_at: row.get(4)?,

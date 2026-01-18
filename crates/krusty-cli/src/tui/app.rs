@@ -21,7 +21,10 @@ use std::{
 };
 use tokio::sync::RwLock;
 
-use crate::agent::{AgentCancellation, AgentConfig, AgentEventBus, AgentState, UserHookManager, UserPreToolHook, UserPostToolHook};
+use crate::agent::{
+    AgentCancellation, AgentConfig, AgentEventBus, AgentState, UserHookManager, UserPostToolHook,
+    UserPreToolHook,
+};
 use crate::ai::anthropic::AnthropicClient;
 use crate::ai::models::{create_model_registry, SharedModelRegistry};
 use crate::ai::providers::ProviderId;
@@ -32,7 +35,6 @@ use crate::lsp::LspManager;
 use crate::paths;
 use crate::plan::{PlanFile, PlanManager};
 use crate::process::ProcessRegistry;
-use krusty_core::skills::SkillsManager;
 use crate::storage::{CredentialStore, Database, Preferences, SessionManager};
 use crate::tools::{register_all_tools, register_build_tool, register_explore_tool, ToolRegistry};
 use crate::tui::animation::MenuAnimator;
@@ -48,6 +50,7 @@ use crate::tui::streaming::StreamingManager;
 use crate::tui::themes::{Theme, THEME_REGISTRY};
 use crate::tui::utils::AppWorktreeDelegate;
 use crate::tui::utils::{count_wrapped_lines, AsyncChannels, TitleEditor};
+use krusty_core::skills::SkillsManager;
 
 /// View types
 #[derive(Debug, Clone, PartialEq)]
@@ -326,8 +329,7 @@ impl App {
         };
 
         // Initialize plan manager with database path
-        let plan_manager = PlanManager::new(db_path)
-            .expect("Failed to create plan manager");
+        let plan_manager = PlanManager::new(db_path).expect("Failed to create plan manager");
 
         // Migrate legacy file-based plans to database (one-time migration)
         match plan_manager.migrate_legacy_plans() {
@@ -382,12 +384,10 @@ impl App {
             // Load cached OpenRouter models from preferences
             if let Some(ref prefs) = preferences {
                 if let Some(cached_models) = prefs.get_cached_openrouter_models() {
-                    futures::executor::block_on(
-                        model_registry.set_models(
-                            crate::ai::providers::ProviderId::OpenRouter,
-                            cached_models.clone(),
-                        ),
-                    );
+                    futures::executor::block_on(model_registry.set_models(
+                        crate::ai::providers::ProviderId::OpenRouter,
+                        cached_models.clone(),
+                    ));
                     tracing::info!(
                         "Loaded {} cached OpenRouter models from preferences",
                         cached_models.len()
@@ -398,12 +398,10 @@ impl App {
             // Load cached OpenCode Zen models from preferences
             if let Some(ref prefs) = preferences {
                 if let Some(cached_models) = prefs.get_cached_opencodezen_models() {
-                    futures::executor::block_on(
-                        model_registry.set_models(
-                            crate::ai::providers::ProviderId::OpenCodeZen,
-                            cached_models.clone(),
-                        ),
-                    );
+                    futures::executor::block_on(model_registry.set_models(
+                        crate::ai::providers::ProviderId::OpenCodeZen,
+                        cached_models.clone(),
+                    ));
                     tracing::info!(
                         "Loaded {} cached OpenCode Zen models from preferences",
                         cached_models.len()
@@ -430,9 +428,10 @@ impl App {
         // Initialize skills manager with global skills dir and project-local dir
         let global_skills_dir = paths::config_dir().join("skills");
         let project_skills_dir = Some(working_dir.join(".krusty").join("skills"));
-        let skills_manager = Arc::new(RwLock::new(
-            SkillsManager::new(global_skills_dir, project_skills_dir)
-        ));
+        let skills_manager = Arc::new(RwLock::new(SkillsManager::new(
+            global_skills_dir,
+            project_skills_dir,
+        )));
 
         // Initialize MCP manager and load config
         let mcp_manager = Arc::new(krusty_core::mcp::McpManager::new(working_dir.clone()));
@@ -1092,7 +1091,8 @@ impl App {
 
         // Translate model ID to the new provider's format
         // e.g., "claude-opus-4-5-20251101" -> "anthropic/claude-opus-4.5" for OpenRouter
-        let translated = translate_model_or_default(&self.current_model, previous_provider, provider_id);
+        let translated =
+            translate_model_or_default(&self.current_model, previous_provider, provider_id);
 
         if translated != self.current_model {
             tracing::info!(
@@ -1162,7 +1162,10 @@ impl App {
             // No stored key - user will need to authenticate
             self.ai_client = None;
             self.api_key = None;
-            tracing::info!("Switched to provider {} (requires authentication)", provider_id);
+            tracing::info!(
+                "Switched to provider {} (requires authentication)",
+                provider_id
+            );
         }
     }
 
@@ -1173,7 +1176,9 @@ impl App {
         // Also include Anthropic if OAuth token file exists (not just runtime token_manager)
         // This ensures Anthropic stays in the list even after switching providers
         if !providers.contains(&ProviderId::Anthropic) {
-            let oauth_file = paths::config_dir().join("tokens").join("anthropic_oauth.json");
+            let oauth_file = paths::config_dir()
+                .join("tokens")
+                .join("anthropic_oauth.json");
             if oauth_file.exists() {
                 providers.insert(0, ProviderId::Anthropic); // Anthropic first
             }
@@ -1378,7 +1383,10 @@ impl App {
                                 if plan.check_task(task_id) {
                                     tracing::debug!(task_id = %task_id, "Kraken auto-completed plan task");
                                     if let Err(e) = self.plan_manager.save_plan(plan) {
-                                        tracing::warn!("Failed to save plan after task completion: {}", e);
+                                        tracing::warn!(
+                                            "Failed to save plan after task completion: {}",
+                                            e
+                                        );
                                     }
                                 }
                             }
@@ -1624,7 +1632,10 @@ impl App {
         }
 
         use crate::tui::popups::pinch::PinchStage;
-        let pinch_active = matches!(self.popups.pinch.stage, PinchStage::Summarizing { .. } | PinchStage::Creating);
+        let pinch_active = matches!(
+            self.popups.pinch.stage,
+            PinchStage::Summarizing { .. } | PinchStage::Creating
+        );
 
         blocks || sidebar || pinch_active || self.view == View::StartMenu
     }
@@ -1675,7 +1686,11 @@ impl App {
         self.start_update_check();
 
         // Start background refresh of OpenRouter models if configured and cache is stale
-        if self.credential_store.get(&crate::ai::providers::ProviderId::OpenRouter).is_some() {
+        if self
+            .credential_store
+            .get(&crate::ai::providers::ProviderId::OpenRouter)
+            .is_some()
+        {
             let should_refresh = self
                 .preferences
                 .as_ref()
@@ -1689,7 +1704,11 @@ impl App {
         }
 
         // Start background refresh of OpenCode Zen models if configured and cache is stale
-        if self.credential_store.get(&crate::ai::providers::ProviderId::OpenCodeZen).is_some() {
+        if self
+            .credential_store
+            .get(&crate::ai::providers::ProviderId::OpenCodeZen)
+            .is_some()
+        {
             let should_refresh = self
                 .preferences
                 .as_ref()

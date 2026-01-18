@@ -395,8 +395,7 @@ impl ExploreBlock {
         }
         let border_style = Style::default().fg(theme.border_color);
         buf.set_string(area.x, area.y, "├", border_style);
-        let fill: String = std::iter::repeat_n('─', (area.width - 2) as usize)
-            .collect();
+        let fill: String = std::iter::repeat_n('─', (area.width - 2) as usize).collect();
         buf.set_string(area.x + 1, area.y, &fill, border_style);
         buf.set_string(area.x + area.width - 1, area.y, "┤", border_style);
     }

@@ -51,7 +51,9 @@ impl App {
                     let models_vec: Vec<_> = crate::ai::providers::ProviderId::all()
                         .iter()
                         .filter_map(|id| {
-                            models_by_provider.get(id).map(|models| (*id, models.clone()))
+                            models_by_provider
+                                .get(id)
+                                .map(|models| (*id, models.clone()))
                         })
                         .collect();
 
@@ -169,7 +171,8 @@ impl App {
         }
 
         // Add /init as user message (like a natural conversation)
-        self.messages.push(("user".to_string(), "/init".to_string()));
+        self.messages
+            .push(("user".to_string(), "/init".to_string()));
 
         // Generate unique ID for this exploration
         let explore_id = format!("init-{}", uuid::Uuid::new_v4());
@@ -182,7 +185,8 @@ impl App {
         self.blocks.explore.push(explore_block);
 
         // Add to message timeline so it renders in chat
-        self.messages.push(("explore".to_string(), explore_id.clone()));
+        self.messages
+            .push(("explore".to_string(), explore_id.clone()));
 
         // Store the explore ID for completion
         self.init_explore_id = Some(explore_id);
@@ -196,9 +200,10 @@ impl App {
         let krab_path = self.working_dir.join("KRAB.md");
         let is_regenerate = krab_path.exists();
 
-        let project_name = self.working_dir
-            .file_name()
-            .map_or_else(|| "Project".to_string(), |n| n.to_string_lossy().into_owned());
+        let project_name = self.working_dir.file_name().map_or_else(
+            || "Project".to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
 
         let languages = self.detect_project_languages();
         let structure = self.detect_project_structure();
@@ -207,7 +212,11 @@ impl App {
 
         match std::fs::write(&krab_path, &content) {
             Ok(_) => {
-                let action = if is_regenerate { "Regenerated" } else { "Created" };
+                let action = if is_regenerate {
+                    "Regenerated"
+                } else {
+                    "Created"
+                };
                 self.messages.push((
                     "system".to_string(),
                     format!(
@@ -652,8 +661,12 @@ fn generate_krab_template(
 
     content.push_str(&format!("# {}\n\n", project_name));
     content.push_str("<!-- KRAB.md - Project context for Krusty AI assistant -->\n");
-    content.push_str("<!-- This file is automatically read at the start of every AI conversation -->\n");
-    content.push_str("<!-- Edit it to help the AI understand your project's rules and conventions -->\n\n");
+    content.push_str(
+        "<!-- This file is automatically read at the start of every AI conversation -->\n",
+    );
+    content.push_str(
+        "<!-- Edit it to help the AI understand your project's rules and conventions -->\n\n",
+    );
 
     content.push_str("## Overview\n\n");
     content.push_str("<!-- Describe what this project does and its main purpose -->\n\n");

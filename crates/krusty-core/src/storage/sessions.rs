@@ -183,7 +183,11 @@ impl SessionManager {
     ///
     /// Returns true if the session exists and belongs to the specified user.
     /// Returns true for any session if user_id is None (single-tenant mode).
-    pub fn verify_session_ownership(&self, session_id: &str, user_id: Option<&str>) -> Result<bool> {
+    pub fn verify_session_ownership(
+        &self,
+        session_id: &str,
+        user_id: Option<&str>,
+    ) -> Result<bool> {
         if let Some(uid) = user_id {
             let count: i64 = self.db.conn().query_row(
                 "SELECT COUNT(*) FROM sessions WHERE id = ?1 AND user_id = ?2",
@@ -205,7 +209,9 @@ impl SessionManager {
     /// Get sessions grouped by directory
     ///
     /// Returns a map of directory -> sessions for tree display.
-    pub fn list_sessions_by_directory(&self) -> Result<std::collections::HashMap<String, Vec<SessionInfo>>> {
+    pub fn list_sessions_by_directory(
+        &self,
+    ) -> Result<std::collections::HashMap<String, Vec<SessionInfo>>> {
         use std::collections::HashMap;
 
         let mut stmt = self.db.conn().prepare(

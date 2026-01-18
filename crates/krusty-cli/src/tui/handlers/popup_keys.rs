@@ -88,8 +88,11 @@ impl App {
                                     if provider_id != self.active_provider {
                                         self.switch_provider(provider_id);
                                         // If switched to Anthropic and not authenticated, try loading OAuth
-                                        if provider_id == ProviderId::Anthropic && !self.is_authenticated() {
-                                            let _ = futures::executor::block_on(self.try_load_auth());
+                                        if provider_id == ProviderId::Anthropic
+                                            && !self.is_authenticated()
+                                        {
+                                            let _ =
+                                                futures::executor::block_on(self.try_load_auth());
                                         }
                                     }
                                     self.current_model = model_id.clone();
@@ -196,7 +199,9 @@ impl App {
                 // Connect (or reconnect if already connected)
                 if let Some(server) = self.popups.mcp.get_selected() {
                     if server.server_type == "remote" {
-                        self.popups.mcp.set_status("Remote servers handled by API".to_string());
+                        self.popups
+                            .mcp
+                            .set_status("Remote servers handled by API".to_string());
                         return;
                     }
 
@@ -205,7 +210,9 @@ impl App {
                     let registry = self.tool_registry.clone();
                     let status_tx = self.mcp_status_tx.clone();
 
-                    self.popups.mcp.set_status(format!("Connecting to {}...", name));
+                    self.popups
+                        .mcp
+                        .set_status(format!("Connecting to {}...", name));
 
                     tokio::spawn(async move {
                         // Disconnect first if already connected (makes this a reconnect)
@@ -237,7 +244,9 @@ impl App {
                 // Disconnect
                 if let Some(server) = self.popups.mcp.get_selected() {
                     if server.server_type == "remote" {
-                        self.popups.mcp.set_status("Remote servers handled by API".to_string());
+                        self.popups
+                            .mcp
+                            .set_status("Remote servers handled by API".to_string());
                         return;
                     }
 

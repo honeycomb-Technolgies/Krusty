@@ -86,7 +86,12 @@ pub fn popup_title(title: &str, theme: &Theme) -> Vec<Line<'static>> {
 /// Create scroll indicator line (centered)
 pub fn scroll_indicator(direction: &str, count: usize, theme: &Theme) -> Line<'static> {
     let arrow = if direction == "up" { "↑" } else { "↓" };
-    let text = format!("{} {} more {}", arrow, count, if direction == "up" { "above" } else { "below" });
+    let text = format!(
+        "{} {} more {}",
+        arrow,
+        count,
+        if direction == "up" { "above" } else { "below" }
+    );
 
     Line::from(Span::styled(
         text,

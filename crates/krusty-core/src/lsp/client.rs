@@ -306,5 +306,4 @@ impl LspClient {
         self.notify("textDocument/didOpen", Some(serde_json::to_value(params)?))
             .await
     }
-
 }

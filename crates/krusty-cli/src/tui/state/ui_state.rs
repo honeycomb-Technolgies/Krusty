@@ -41,15 +41,18 @@ impl BlockUiStates {
 
     /// Export state for database storage
     pub fn export(&self) -> Vec<(String, bool, u16)> {
-        self.collapsed.keys()
+        self.collapsed
+            .keys()
             .chain(self.scroll_offset.keys())
             .collect::<std::collections::HashSet<_>>()
             .into_iter()
-            .map(|id| (
-                id.clone(),
-                self.collapsed.get(id).copied().unwrap_or(true),
-                self.scroll_offset.get(id).copied().unwrap_or(0),
-            ))
+            .map(|id| {
+                (
+                    id.clone(),
+                    self.collapsed.get(id).copied().unwrap_or(true),
+                    self.scroll_offset.get(id).copied().unwrap_or(0),
+                )
+            })
             .collect()
     }
 }

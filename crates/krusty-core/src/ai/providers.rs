@@ -86,7 +86,6 @@ pub enum ReasoningFormat {
     DeepSeek,
 }
 
-
 /// Information about a model offered by a provider
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelInfo {
@@ -185,33 +184,86 @@ pub enum ModelFamily {
 }
 
 /// Model ID mapping entry: (canonical_family, provider, provider_specific_id)
-static MODEL_MAPPINGS: LazyLock<Vec<(ModelFamily, ProviderId, &'static str)>> = LazyLock::new(|| {
-    vec![
-        // Claude Opus 4.5
-        (ModelFamily::ClaudeOpus4_5, ProviderId::Anthropic, "claude-opus-4-5-20251101"),
-        (ModelFamily::ClaudeOpus4_5, ProviderId::OpenRouter, "anthropic/claude-opus-4.5"),
-        (ModelFamily::ClaudeOpus4_5, ProviderId::OpenCodeZen, "claude-opus-4-5"),
-
-        // Claude Sonnet 4.5
-        (ModelFamily::ClaudeSonnet4_5, ProviderId::Anthropic, "claude-sonnet-4-5-20250929"),
-        (ModelFamily::ClaudeSonnet4_5, ProviderId::OpenRouter, "anthropic/claude-sonnet-4.5"),
-        (ModelFamily::ClaudeSonnet4_5, ProviderId::OpenCodeZen, "claude-sonnet-4-5"),
-
-        // Claude Sonnet 4
-        (ModelFamily::ClaudeSonnet4, ProviderId::Anthropic, "claude-sonnet-4-20250514"),
-        (ModelFamily::ClaudeSonnet4, ProviderId::OpenRouter, "anthropic/claude-sonnet-4"),
-        (ModelFamily::ClaudeSonnet4, ProviderId::OpenCodeZen, "claude-sonnet-4"),
-
-        // Claude Haiku 4.5
-        (ModelFamily::ClaudeHaiku4_5, ProviderId::Anthropic, "claude-haiku-4-5-20251001"),
-        (ModelFamily::ClaudeHaiku4_5, ProviderId::OpenRouter, "anthropic/claude-haiku-4.5"),
-        (ModelFamily::ClaudeHaiku4_5, ProviderId::OpenCodeZen, "claude-haiku-4-5"),
-
-        // Claude Opus 4
-        (ModelFamily::ClaudeOpus4, ProviderId::Anthropic, "claude-opus-4-20250514"),
-        (ModelFamily::ClaudeOpus4, ProviderId::OpenRouter, "anthropic/claude-opus-4"),
-    ]
-});
+static MODEL_MAPPINGS: LazyLock<Vec<(ModelFamily, ProviderId, &'static str)>> =
+    LazyLock::new(|| {
+        vec![
+            // Claude Opus 4.5
+            (
+                ModelFamily::ClaudeOpus4_5,
+                ProviderId::Anthropic,
+                "claude-opus-4-5-20251101",
+            ),
+            (
+                ModelFamily::ClaudeOpus4_5,
+                ProviderId::OpenRouter,
+                "anthropic/claude-opus-4.5",
+            ),
+            (
+                ModelFamily::ClaudeOpus4_5,
+                ProviderId::OpenCodeZen,
+                "claude-opus-4-5",
+            ),
+            // Claude Sonnet 4.5
+            (
+                ModelFamily::ClaudeSonnet4_5,
+                ProviderId::Anthropic,
+                "claude-sonnet-4-5-20250929",
+            ),
+            (
+                ModelFamily::ClaudeSonnet4_5,
+                ProviderId::OpenRouter,
+                "anthropic/claude-sonnet-4.5",
+            ),
+            (
+                ModelFamily::ClaudeSonnet4_5,
+                ProviderId::OpenCodeZen,
+                "claude-sonnet-4-5",
+            ),
+            // Claude Sonnet 4
+            (
+                ModelFamily::ClaudeSonnet4,
+                ProviderId::Anthropic,
+                "claude-sonnet-4-20250514",
+            ),
+            (
+                ModelFamily::ClaudeSonnet4,
+                ProviderId::OpenRouter,
+                "anthropic/claude-sonnet-4",
+            ),
+            (
+                ModelFamily::ClaudeSonnet4,
+                ProviderId::OpenCodeZen,
+                "claude-sonnet-4",
+            ),
+            // Claude Haiku 4.5
+            (
+                ModelFamily::ClaudeHaiku4_5,
+                ProviderId::Anthropic,
+                "claude-haiku-4-5-20251001",
+            ),
+            (
+                ModelFamily::ClaudeHaiku4_5,
+                ProviderId::OpenRouter,
+                "anthropic/claude-haiku-4.5",
+            ),
+            (
+                ModelFamily::ClaudeHaiku4_5,
+                ProviderId::OpenCodeZen,
+                "claude-haiku-4-5",
+            ),
+            // Claude Opus 4
+            (
+                ModelFamily::ClaudeOpus4,
+                ProviderId::Anthropic,
+                "claude-opus-4-20250514",
+            ),
+            (
+                ModelFamily::ClaudeOpus4,
+                ProviderId::OpenRouter,
+                "anthropic/claude-opus-4",
+            ),
+        ]
+    });
 
 /// Find the canonical model family for a provider-specific model ID
 pub fn get_model_family(model_id: &str) -> Option<ModelFamily> {
@@ -282,18 +334,18 @@ impl ProviderCapabilities {
                 web_plugins: false,
             },
             ProviderId::OpenRouter => Self {
-                web_search: false,  // Not via server tools
+                web_search: false, // Not via server tools
                 web_fetch: false,
                 context_management: false,
                 prompt_caching: false,
                 oauth: false,
-                web_plugins: true,  // Uses plugins array
+                web_plugins: true, // Uses plugins array
             },
             ProviderId::OpenCodeZen => Self {
-                web_search: true,   // Supports Anthropic's web_search_20250305
-                web_fetch: true,    // Supports Anthropic's web_fetch tool
+                web_search: true, // Supports Anthropic's web_search_20250305
+                web_fetch: true,  // Supports Anthropic's web_fetch tool
                 context_management: false,
-                prompt_caching: false,  // Unclear if supported
+                prompt_caching: false, // Unclear if supported
                 oauth: false,
                 web_plugins: false,
             },
@@ -357,8 +409,8 @@ static BUILTIN_PROVIDERS: LazyLock<Vec<ProviderConfig>> = LazyLock::new(|| {
             name: "OpenCode Zen".to_string(),
             description: "Curated coding models (Claude, GPT-5, Gemini, Qwen)".to_string(),
             base_url: "https://opencode.ai/zen/v1/messages".to_string(),
-            auth_header: AuthHeader::XApiKey,  // Uses x-api-key, not Bearer
-            models: vec![], // Fetched dynamically from /v1/models
+            auth_header: AuthHeader::XApiKey, // Uses x-api-key, not Bearer
+            models: vec![],                   // Fetched dynamically from /v1/models
             supports_tools: true,
             dynamic_models: true,
             pricing_hint: Some("Pay-as-you-go, free tier available".to_string()),
@@ -556,11 +608,7 @@ mod tests {
     #[test]
     fn test_model_translation_unknown_model() {
         // Unknown model should return None
-        let translated = translate_model_id(
-            "gpt-4",
-            ProviderId::OpenRouter,
-            ProviderId::Anthropic,
-        );
+        let translated = translate_model_id("gpt-4", ProviderId::OpenRouter, ProviderId::Anthropic);
         assert_eq!(translated, None);
     }
 
@@ -575,11 +623,7 @@ mod tests {
         assert_eq!(result, "anthropic/claude-opus-4.5");
 
         // Unknown model: fallback to provider default
-        let result = translate_model_or_default(
-            "glm-4.7",
-            ProviderId::ZAi,
-            ProviderId::Anthropic,
-        );
+        let result = translate_model_or_default("glm-4.7", ProviderId::ZAi, ProviderId::Anthropic);
         assert_eq!(result, "claude-opus-4-5-20251101");
     }
 

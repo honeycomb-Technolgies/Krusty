@@ -218,10 +218,7 @@ impl App {
             Line::from(vec![
                 Span::raw(&padding),
                 Span::styled("  /skills ", Style::default().fg(self.theme.accent_color)),
-                Span::styled(
-                    "Browse skills",
-                    Style::default().fg(self.theme.text_color),
-                ),
+                Span::styled("Browse skills", Style::default().fg(self.theme.text_color)),
             ]),
             Line::from(vec![
                 Span::raw(&padding),
@@ -325,7 +322,8 @@ impl App {
         }
 
         // File search popup above input (mutually exclusive with autocomplete)
-        if self.file_search.visible && self.file_search.has_results() && !self.autocomplete.visible {
+        if self.file_search.visible && self.file_search.has_results() && !self.autocomplete.visible
+        {
             let fs_height = 12.min(chunks[2].height.saturating_sub(2));
             let fs_area = Rect::new(
                 input_area.x,
@@ -468,7 +466,8 @@ impl App {
         if self.decision_prompt.visible {
             let prompt_area = chunks[3];
             self.layout.prompt_area = Some(prompt_area);
-            self.decision_prompt.render(f.buffer_mut(), prompt_area, &self.theme);
+            self.decision_prompt
+                .render(f.buffer_mut(), prompt_area, &self.theme);
         } else {
             self.layout.prompt_area = None;
         }
@@ -539,7 +538,8 @@ impl App {
         }
 
         // File search popup above input (mutually exclusive with autocomplete)
-        if self.file_search.visible && self.file_search.has_results() && !self.autocomplete.visible {
+        if self.file_search.visible && self.file_search.has_results() && !self.autocomplete.visible
+        {
             let fs_height = 12.min(chunks[2].height.saturating_sub(2));
             let fs_area = Rect::new(
                 input_area.x,

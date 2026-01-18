@@ -91,7 +91,8 @@ impl App {
 
     /// Read contents of top-ranked files for summarization context
     fn read_key_file_contents(&self, ranked_files: &[RankedFile]) -> Vec<(String, String)> {
-        ranked_files.iter()
+        ranked_files
+            .iter()
             .take(10)
             .filter_map(|file| {
                 let path = if std::path::Path::new(&file.path).is_absolute() {
@@ -99,7 +100,9 @@ impl App {
                 } else {
                     self.working_dir.join(&file.path)
                 };
-                std::fs::read_to_string(&path).ok().map(|content| (file.path.clone(), content))
+                std::fs::read_to_string(&path)
+                    .ok()
+                    .map(|content| (file.path.clone(), content))
             })
             .collect()
     }

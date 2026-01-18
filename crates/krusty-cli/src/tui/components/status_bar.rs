@@ -148,10 +148,17 @@ fn build_commands_for_width<'a>(width: usize, theme: &'a Theme) -> Vec<Span<'a>>
 
 /// Shorten model name for display
 fn shorten_model_name(model: &str) -> String {
-    [("opus", "opus 4.5"), ("sonnet", "sonnet 4.5"), ("haiku", "haiku 4.5")]
-        .iter()
-        .find(|(key, _)| model.contains(key))
-        .map_or_else(|| model.chars().take(15).collect(), |(_, name)| name.to_string())
+    [
+        ("opus", "opus 4.5"),
+        ("sonnet", "sonnet 4.5"),
+        ("haiku", "haiku 4.5"),
+    ]
+    .iter()
+    .find(|(key, _)| model.contains(key))
+    .map_or_else(
+        || model.chars().take(15).collect(),
+        |(_, name)| name.to_string(),
+    )
 }
 
 /// Shorten path for display

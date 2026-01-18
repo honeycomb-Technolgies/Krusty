@@ -23,10 +23,7 @@ use crate::tui::themes::Theme;
 #[derive(Clone)]
 pub enum ModelEntry {
     /// Section header (e.g., "RECENT", "ANTHROPIC")
-    Header {
-        name: String,
-        count: Option<usize>,
-    },
+    Header { name: String, count: Option<usize> },
     /// Sub-section header for OpenRouter sub-providers
     SubHeader { name: String },
     /// Model entry with rich metadata
@@ -174,7 +171,11 @@ impl ModelSelectPopup {
 
                         let matches = metadata.id.to_lowercase().contains(&query)
                             || metadata.display_name.to_lowercase().contains(&query)
-                            || metadata.provider.to_string().to_lowercase().contains(&query)
+                            || metadata
+                                .provider
+                                .to_string()
+                                .to_lowercase()
+                                .contains(&query)
                             || sub_provider_match;
 
                         if matches {
@@ -381,7 +382,13 @@ impl ModelSelectPopup {
             .count()
     }
 
-    pub fn render(&self, f: &mut Frame, theme: &Theme, current_model: &str, context_tokens_used: usize) {
+    pub fn render(
+        &self,
+        f: &mut Frame,
+        theme: &Theme,
+        current_model: &str,
+        context_tokens_used: usize,
+    ) {
         let (w, h) = PopupSize::Large.dimensions();
         let area = center_rect(w, h, f.area());
         render_popup_background(f, area, theme);
@@ -396,10 +403,10 @@ impl ModelSelectPopup {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),              // Title
-                Constraint::Length(search_height),  // Search
-                Constraint::Min(5),                 // Content
-                Constraint::Length(2),              // Footer
+                Constraint::Length(3),             // Title
+                Constraint::Length(search_height), // Search
+                Constraint::Min(5),                // Content
+                Constraint::Length(2),             // Footer
             ])
             .split(inner);
 
@@ -528,7 +535,8 @@ impl ModelSelectPopup {
                         let name_width = 25;
                         let char_count = metadata.display_name.chars().count();
                         let display_name = if char_count > name_width {
-                            let truncated: String = metadata.display_name.chars().take(name_width - 1).collect();
+                            let truncated: String =
+                                metadata.display_name.chars().take(name_width - 1).collect();
                             format!("{}…", truncated)
                         } else {
                             format!("{:<width$}", metadata.display_name, width = name_width)
@@ -540,8 +548,16 @@ impl ModelSelectPopup {
                         ];
 
                         // Fixed-width indicators column (6 chars: 🧠👁 or spaces)
-                        let thinking = if metadata.supports_thinking { "🧠" } else { "  " };
-                        let vision = if metadata.supports_vision { "👁" } else { "  " };
+                        let thinking = if metadata.supports_thinking {
+                            "🧠"
+                        } else {
+                            "  "
+                        };
+                        let vision = if metadata.supports_vision {
+                            "👁"
+                        } else {
+                            "  "
+                        };
                         spans.push(Span::styled(
                             format!(" {}{}", thinking, vision),
                             Style::default().fg(theme.accent_color),
@@ -569,10 +585,8 @@ impl ModelSelectPopup {
 
                         // Current indicator (appended, not fixed width)
                         if is_current && !is_selected {
-                            spans.push(Span::styled(
-                                " ←",
-                                Style::default().fg(theme.success_color),
-                            ));
+                            spans
+                                .push(Span::styled(" ←", Style::default().fg(theme.success_color)));
                         }
 
                         lines.push(Line::from(spans));

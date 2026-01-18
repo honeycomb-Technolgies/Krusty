@@ -117,7 +117,9 @@ pub fn top_k_for_model(model_id: &str) -> Option<i32> {
 /// OpenAI-compatible models (GLM, MiniMax, DeepSeek) don't support effort levels
 pub fn supports_reasoning_effort(model_id: &str) -> bool {
     let id = model_id.to_lowercase();
-    !["deepseek", "minimax", "glm", "mistral"].iter().any(|pat| id.contains(pat))
+    !["deepseek", "minimax", "glm", "mistral"]
+        .iter()
+        .any(|pat| id.contains(pat))
 }
 
 /// Get chat template args for thinking models

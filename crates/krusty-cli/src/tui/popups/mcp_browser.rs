@@ -114,13 +114,19 @@ impl McpBrowserPopup {
             .split(inner);
 
         // Title
-        let connected = self.servers.iter()
+        let connected = self
+            .servers
+            .iter()
             .filter(|s| matches!(s.status, McpServerStatus::Connected))
             .count();
         let title_text = if self.servers.is_empty() {
             "MCP Servers - No servers configured".to_string()
         } else {
-            format!("MCP Servers ({} total, {} connected)", self.servers.len(), connected)
+            format!(
+                "MCP Servers ({} total, {} connected)",
+                self.servers.len(),
+                connected
+            )
         };
         let title = Paragraph::new(popup_title(&title_text, theme)).alignment(Alignment::Center);
         f.render_widget(title, chunks[0]);
@@ -183,7 +189,10 @@ impl McpBrowserPopup {
                 }
             }
 
-            let remaining = self.servers.len().saturating_sub(self.scroll_offset + visible_height);
+            let remaining = self
+                .servers
+                .len()
+                .saturating_sub(self.scroll_offset + visible_height);
             if remaining > 0 {
                 lines.push(scroll_indicator("down", remaining, theme));
             }
@@ -195,20 +204,50 @@ impl McpBrowserPopup {
         // Footer - compact
         let footer = if self.servers.is_empty() {
             Paragraph::new(Line::from(vec![
-                Span::styled("Esc", Style::default().fg(theme.accent_color).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "Esc",
+                    Style::default()
+                        .fg(theme.accent_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(" close", Style::default().fg(theme.dim_color)),
             ]))
         } else {
             Paragraph::new(Line::from(vec![
-                Span::styled("↑↓", Style::default().fg(theme.accent_color).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "↑↓",
+                    Style::default()
+                        .fg(theme.accent_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(" nav  ", Style::default().fg(theme.dim_color)),
-                Span::styled("⏎", Style::default().fg(theme.accent_color).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "⏎",
+                    Style::default()
+                        .fg(theme.accent_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(" expand  ", Style::default().fg(theme.dim_color)),
-                Span::styled("c", Style::default().fg(theme.accent_color).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "c",
+                    Style::default()
+                        .fg(theme.accent_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(" connect  ", Style::default().fg(theme.dim_color)),
-                Span::styled("d", Style::default().fg(theme.accent_color).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "d",
+                    Style::default()
+                        .fg(theme.accent_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(" disconnect  ", Style::default().fg(theme.dim_color)),
-                Span::styled("Esc", Style::default().fg(theme.accent_color).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "Esc",
+                    Style::default()
+                        .fg(theme.accent_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(" close", Style::default().fg(theme.dim_color)),
             ]))
         };
@@ -225,7 +264,9 @@ fn render_server_line<'a>(server: &McpServerInfo, is_selected: bool, theme: &The
 
     let prefix = if is_selected { " › " } else { "   " };
     let name_style = if is_selected {
-        Style::default().fg(theme.accent_color).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(theme.accent_color)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme.text_color)
     };
@@ -248,16 +289,34 @@ fn render_server_line<'a>(server: &McpServerInfo, is_selected: bool, theme: &The
         Span::styled(icon.to_string(), Style::default().fg(icon_color)),
         Span::raw(" "),
         Span::styled(server.name.clone(), name_style),
-        Span::styled(format!(" ({})", server.server_type), Style::default().fg(theme.dim_color)),
-        Span::styled(format!(" - {}", status_text), Style::default().fg(theme.dim_color)),
+        Span::styled(
+            format!(" ({})", server.server_type),
+            Style::default().fg(theme.dim_color),
+        ),
+        Span::styled(
+            format!(" - {}", status_text),
+            Style::default().fg(theme.dim_color),
+        ),
     ])
 }
 
 fn render_tool_line<'a>(tool: &McpToolDef, is_last: bool, theme: &Theme) -> Line<'a> {
-    let prefix = if is_last { "    └─ " } else { "    ├─ " };
+    let prefix = if is_last {
+        "    └─ "
+    } else {
+        "    ├─ "
+    };
 
-    let desc = tool.description.as_deref()
-        .map(|d| if d.len() > 40 { format!(" - {}...", &d[..37]) } else { format!(" - {}", d) })
+    let desc = tool
+        .description
+        .as_deref()
+        .map(|d| {
+            if d.len() > 40 {
+                format!(" - {}...", &d[..37])
+            } else {
+                format!(" - {}", d)
+            }
+        })
         .unwrap_or_default();
 
     Line::from(vec![

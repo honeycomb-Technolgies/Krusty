@@ -208,11 +208,7 @@ fn get_model_specs(id: &str) -> (usize, usize, bool) {
 fn is_free_model(id: &str) -> bool {
     matches!(
         id,
-        "big-pickle"
-            | "grok-code"
-            | "minimax-m2.1-free"
-            | "glm-4.7-free"
-            | "gpt-5-nano"
+        "big-pickle" | "grok-code" | "minimax-m2.1-free" | "glm-4.7-free" | "gpt-5-nano"
     ) || id.ends_with("-free")
 }
 

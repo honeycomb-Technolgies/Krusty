@@ -30,7 +30,17 @@ impl StdioTransport {
         for (k, v) in env {
             // Mask API keys in logs
             let masked = if k.contains("API_KEY") || k.contains("TOKEN") {
-                format!("{}...{}", &v.chars().take(8).collect::<String>(), &v.chars().rev().take(4).collect::<String>().chars().rev().collect::<String>())
+                format!(
+                    "{}...{}",
+                    &v.chars().take(8).collect::<String>(),
+                    &v.chars()
+                        .rev()
+                        .take(4)
+                        .collect::<String>()
+                        .chars()
+                        .rev()
+                        .collect::<String>()
+                )
             } else {
                 v.clone()
             };
@@ -51,7 +61,10 @@ impl StdioTransport {
 
         let mut child = cmd.spawn().map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                anyhow!("Command not found: {}. Is it installed and in PATH?", command)
+                anyhow!(
+                    "Command not found: {}. Is it installed and in PATH?",
+                    command
+                )
             } else {
                 anyhow!("Failed to spawn {}: {}", command, e)
             }

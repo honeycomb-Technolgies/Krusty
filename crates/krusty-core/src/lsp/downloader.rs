@@ -70,9 +70,7 @@ impl LspDownloader {
                 self.install_toolchain(lsp.binary, toolchain, install_cmd)
                     .await
             }
-            LspInstallMethod::Npm { package } => {
-                self.install_npm(lsp.binary, package).await
-            }
+            LspInstallMethod::Npm { package } => self.install_npm(lsp.binary, package).await,
         }
     }
 
@@ -315,9 +313,27 @@ impl LspDownloader {
     async fn install_npm(&self, binary_name: &str, package: &str) -> Result<PathBuf> {
         // Prefer bun for speed, fall back to npm
         let (runner, install_args) = if which::which("bun").is_ok() {
-            ("bun", vec!["install", "-g", "--cwd", self.bin_dir.to_str().unwrap_or("."), package])
+            (
+                "bun",
+                vec![
+                    "install",
+                    "-g",
+                    "--cwd",
+                    self.bin_dir.to_str().unwrap_or("."),
+                    package,
+                ],
+            )
         } else if which::which("npm").is_ok() {
-            ("npm", vec!["install", "-g", "--prefix", self.bin_dir.to_str().unwrap_or("."), package])
+            (
+                "npm",
+                vec![
+                    "install",
+                    "-g",
+                    "--prefix",
+                    self.bin_dir.to_str().unwrap_or("."),
+                    package,
+                ],
+            )
         } else {
             return Err(anyhow!(
                 "Neither bun nor npm found. Please install Node.js or Bun to install {}",
@@ -325,7 +341,10 @@ impl LspDownloader {
             ));
         };
 
-        info!("Installing {} via {} (package: {})", binary_name, runner, package);
+        info!(
+            "Installing {} via {} (package: {})",
+            binary_name, runner, package
+        );
 
         let output = Command::new(runner)
             .args(&install_args)

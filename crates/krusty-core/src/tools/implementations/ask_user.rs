@@ -8,8 +8,8 @@
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use crate::tools::{ToolContext, ToolResult};
 use crate::tools::registry::Tool;
+use crate::tools::{ToolContext, ToolResult};
 
 pub struct AskUserQuestionTool;
 

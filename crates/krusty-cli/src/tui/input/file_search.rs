@@ -122,12 +122,10 @@ impl FileSearchPopup {
         self.files.clear();
         self.index_dir(&self.working_dir.clone(), &PathBuf::new());
         // Sort files: directories first, then by name
-        self.files.sort_by(|a, b| {
-            match (a.is_dir, b.is_dir) {
-                (true, false) => std::cmp::Ordering::Less,
-                (false, true) => std::cmp::Ordering::Greater,
-                _ => a.path.cmp(&b.path),
-            }
+        self.files.sort_by(|a, b| match (a.is_dir, b.is_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.path.cmp(&b.path),
         });
     }
 
@@ -268,12 +266,10 @@ impl FileSearchPopup {
         }
 
         // Sort: directories first, then by name
-        items.sort_by(|a, b| {
-            match (a.2, b.2) {
-                (true, false) => std::cmp::Ordering::Less,
-                (false, true) => std::cmp::Ordering::Greater,
-                _ => a.0.cmp(&b.0),
-            }
+        items.sort_by(|a, b| match (a.2, b.2) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.0.cmp(&b.0),
         });
 
         for (name, rel, is_dir) in items {
@@ -428,17 +424,16 @@ impl FileSearchPopup {
     /// Get the selected file/folder path
     pub fn get_selected(&self) -> Option<&str> {
         match self.mode {
-            FileSearchMode::Fuzzy => {
-                self.filtered
-                    .get(self.selected)
-                    .and_then(|(idx, _)| self.files.get(*idx))
-                    .map(|f| f.path.as_str())
-            }
-            FileSearchMode::Tree => {
-                self.tree.visible
-                    .get(self.tree.selected)
-                    .map(|f| f.path.as_str())
-            }
+            FileSearchMode::Fuzzy => self
+                .filtered
+                .get(self.selected)
+                .and_then(|(idx, _)| self.files.get(*idx))
+                .map(|f| f.path.as_str()),
+            FileSearchMode::Tree => self
+                .tree
+                .visible
+                .get(self.tree.selected)
+                .map(|f| f.path.as_str()),
         }
     }
 
@@ -454,7 +449,8 @@ impl FileSearchPopup {
     fn filter(&mut self) {
         if self.query.is_empty() {
             // Show all files (limited)
-            self.filtered = self.files
+            self.filtered = self
+                .files
                 .iter()
                 .enumerate()
                 .filter(|(_, f)| !f.is_dir) // Only files in empty query
@@ -574,10 +570,13 @@ impl FileSearchPopup {
         if self.filtered.is_empty() {
             lines.push(Line::from(Span::styled(
                 "  No matches",
-                Style::default().fg(theme.dim_color).add_modifier(Modifier::ITALIC),
+                Style::default()
+                    .fg(theme.dim_color)
+                    .add_modifier(Modifier::ITALIC),
             )));
         } else {
-            for (display_idx, (file_idx, _)) in self.filtered
+            for (display_idx, (file_idx, _)) in self
+                .filtered
                 .iter()
                 .skip(self.scroll_offset)
                 .take(visible_count)
@@ -602,14 +601,22 @@ impl FileSearchPopup {
                         format!("{}/", file.path),
                         Style::default()
                             .fg(theme.accent_color)
-                            .add_modifier(if is_selected { Modifier::BOLD } else { Modifier::empty() }),
+                            .add_modifier(if is_selected {
+                                Modifier::BOLD
+                            } else {
+                                Modifier::empty()
+                            }),
                     ));
                 } else {
                     spans.push(Span::styled(
                         &file.path,
                         Style::default()
                             .fg(theme.text_color)
-                            .add_modifier(if is_selected { Modifier::BOLD } else { Modifier::empty() }),
+                            .add_modifier(if is_selected {
+                                Modifier::BOLD
+                            } else {
+                                Modifier::empty()
+                            }),
                     ));
                 }
 
@@ -629,10 +636,14 @@ impl FileSearchPopup {
         if self.tree.visible.is_empty() {
             lines.push(Line::from(Span::styled(
                 "  (empty)",
-                Style::default().fg(theme.dim_color).add_modifier(Modifier::ITALIC),
+                Style::default()
+                    .fg(theme.dim_color)
+                    .add_modifier(Modifier::ITALIC),
             )));
         } else {
-            for (display_idx, entry) in self.tree.visible
+            for (display_idx, entry) in self
+                .tree
+                .visible
                 .iter()
                 .skip(self.tree.scroll_offset)
                 .take(visible_count)
@@ -666,7 +677,11 @@ impl FileSearchPopup {
                         &entry.name,
                         Style::default()
                             .fg(theme.accent_color)
-                            .add_modifier(if is_selected { Modifier::BOLD } else { Modifier::empty() }),
+                            .add_modifier(if is_selected {
+                                Modifier::BOLD
+                            } else {
+                                Modifier::empty()
+                            }),
                     ));
                 } else {
                     // File - add spacing to align with directories
@@ -675,7 +690,11 @@ impl FileSearchPopup {
                         &entry.name,
                         Style::default()
                             .fg(theme.text_color)
-                            .add_modifier(if is_selected { Modifier::BOLD } else { Modifier::empty() }),
+                            .add_modifier(if is_selected {
+                                Modifier::BOLD
+                            } else {
+                                Modifier::empty()
+                            }),
                     ));
                 }
 
@@ -686,7 +705,6 @@ impl FileSearchPopup {
         let para = Paragraph::new(lines);
         f.render_widget(para, area);
     }
-
 }
 
 /// Simple fuzzy match scoring

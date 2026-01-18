@@ -5,8 +5,8 @@ use glob::glob as glob_match;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::tools::{parse_params, ToolContext, ToolResult};
 use crate::tools::registry::Tool;
+use crate::tools::{parse_params, ToolContext, ToolResult};
 
 pub struct GlobTool;
 
@@ -79,9 +79,10 @@ impl Tool for GlobTool {
                         }
                     }
                 }
-                entry.metadata().ok().map(|m| {
-                    (entry, m.modified().unwrap_or(std::time::UNIX_EPOCH))
-                })
+                entry
+                    .metadata()
+                    .ok()
+                    .map(|m| (entry, m.modified().unwrap_or(std::time::UNIX_EPOCH)))
             })
             .collect();
 

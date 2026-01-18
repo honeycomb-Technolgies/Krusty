@@ -73,7 +73,10 @@ impl AutocompletePopup {
 
     pub fn prev(&mut self) {
         if !self.filtered.is_empty() {
-            self.selected = self.selected.checked_sub(1).unwrap_or(self.filtered.len() - 1);
+            self.selected = self
+                .selected
+                .checked_sub(1)
+                .unwrap_or(self.filtered.len() - 1);
         }
     }
 

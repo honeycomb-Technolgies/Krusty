@@ -212,7 +212,14 @@ impl App {
         // Tab - toggle extended thinking mode (when not in autocomplete)
         if code == KeyCode::Tab && !self.autocomplete.visible {
             self.thinking_enabled = !self.thinking_enabled;
-            tracing::info!("Extended thinking {}", if self.thinking_enabled { "enabled" } else { "disabled" });
+            tracing::info!(
+                "Extended thinking {}",
+                if self.thinking_enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            );
             return;
         }
 
@@ -248,11 +255,10 @@ impl App {
     pub fn handle_chat_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
         // IMPORTANT: Handle decision prompt FIRST (before global Esc handler)
         // This ensures Esc in custom input mode cancels typing, not the whole conversation
-        if self.decision_prompt.visible
-            && self.handle_decision_prompt_key(code, modifiers) {
-                return;
-            }
-            // Fall through to input for custom response typing
+        if self.decision_prompt.visible && self.handle_decision_prompt_key(code, modifiers) {
+            return;
+        }
+        // Fall through to input for custom response typing
 
         // Esc interrupts AI processing (use /home to return to start menu)
         // Only if decision prompt is NOT visible (handled above)
@@ -282,7 +288,14 @@ impl App {
         // Can toggle during streaming - takes effect after current stream completes
         if code == KeyCode::Tab && !self.autocomplete.visible {
             self.thinking_enabled = !self.thinking_enabled;
-            tracing::info!("Extended thinking {}", if self.thinking_enabled { "enabled" } else { "disabled" });
+            tracing::info!(
+                "Extended thinking {}",
+                if self.thinking_enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            );
             return;
         }
 

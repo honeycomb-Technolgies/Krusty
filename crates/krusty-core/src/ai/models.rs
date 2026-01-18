@@ -103,11 +103,11 @@ impl ModelMetadata {
     /// Get pricing tier indicator for UI
     pub fn pricing_tier(&self) -> &'static str {
         match self.input_price {
-            Some(p) if p < 0.5 => "¢", // Cheap
-            Some(p) if p < 3.0 => "$", // Medium
+            Some(p) if p < 0.5 => "¢",   // Cheap
+            Some(p) if p < 3.0 => "$",   // Medium
             Some(p) if p < 10.0 => "$$", // Expensive
-            Some(_) => "$$$",           // Very expensive
-            None => "",                 // Unknown
+            Some(_) => "$$$",            // Very expensive
+            None => "",                  // Unknown
         }
     }
 
@@ -157,13 +157,17 @@ impl ModelRegistry {
     /// Check if we have models for a provider
     pub async fn has_models(&self, provider: ProviderId) -> bool {
         let models = self.models.read().await;
-        models.get(&provider).map(|m| !m.is_empty()).unwrap_or(false)
+        models
+            .get(&provider)
+            .map(|m| !m.is_empty())
+            .unwrap_or(false)
     }
 
     /// Get a specific model by ID (searches all providers)
     pub async fn get_model(&self, model_id: &str) -> Option<ModelMetadata> {
         let models = self.models.read().await;
-        models.values()
+        models
+            .values()
             .flat_map(|v| v.iter())
             .find(|m| m.id == model_id)
             .cloned()
@@ -274,7 +278,12 @@ impl ModelRegistry {
     /// Check if provider has models (non-blocking)
     pub fn try_has_models(&self, provider: ProviderId) -> Option<bool> {
         let models = self.models.try_read().ok()?;
-        Some(models.get(&provider).map(|m| !m.is_empty()).unwrap_or(false))
+        Some(
+            models
+                .get(&provider)
+                .map(|m| !m.is_empty())
+                .unwrap_or(false),
+        )
     }
 }
 

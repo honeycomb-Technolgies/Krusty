@@ -111,7 +111,11 @@ impl MultiLineInput {
 
     /// Get file reference at click position (relative to input area)
     /// Returns (byte_start, byte_end, path) if click is on a file reference
-    pub fn get_file_ref_at_click(&self, x: u16, y: u16) -> Option<(usize, usize, std::path::PathBuf)> {
+    pub fn get_file_ref_at_click(
+        &self,
+        x: u16,
+        y: u16,
+    ) -> Option<(usize, usize, std::path::PathBuf)> {
         use regex::Regex;
         use std::sync::LazyLock;
 

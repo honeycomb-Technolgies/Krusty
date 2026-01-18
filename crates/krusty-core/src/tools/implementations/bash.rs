@@ -9,8 +9,8 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::time::timeout;
 
-use crate::tools::{parse_params, ToolContext, ToolResult};
 use crate::tools::registry::{Tool, ToolOutputChunk};
+use crate::tools::{parse_params, ToolContext, ToolResult};
 
 pub struct BashTool;
 
@@ -70,7 +70,9 @@ impl Tool for BashTool {
         };
 
         match &params.description {
-            Some(desc) => tracing::info!(command = %params.command, description = %desc, "Executing bash command"),
+            Some(desc) => {
+                tracing::info!(command = %params.command, description = %desc, "Executing bash command")
+            }
             None => tracing::info!(command = %params.command, "Executing bash command"),
         }
 

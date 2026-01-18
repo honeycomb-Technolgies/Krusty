@@ -4,4 +4,4 @@
 
 mod checker;
 
-pub use checker::{check_for_updates, build_update, detect_repo_path, UpdateStatus, UpdateInfo};
+pub use checker::{build_update, check_for_updates, detect_repo_path, UpdateInfo, UpdateStatus};

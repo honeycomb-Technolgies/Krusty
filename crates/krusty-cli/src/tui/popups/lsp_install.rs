@@ -116,10 +116,7 @@ impl LspInstallPopup {
 
         if self.installing {
             // Show progress
-            let msg = self
-                .progress_msg
-                .as_deref()
-                .unwrap_or("Installing...");
+            let msg = self.progress_msg.as_deref().unwrap_or("Installing...");
             lines.push(Line::from(""));
             lines.push(Line::from(vec![Span::styled(
                 format!("  {} ", msg),

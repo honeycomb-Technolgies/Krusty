@@ -339,7 +339,9 @@ impl App {
                 system_insert_count,
                 ModelMessage {
                     role: Role::System,
-                    content: vec![Content::Text { text: skills_context }],
+                    content: vec![Content::Text {
+                        text: skills_context,
+                    }],
                 },
             );
         }
@@ -538,7 +540,11 @@ impl App {
             }
 
             // Check for batch task_ids array
-            if let Some(ids) = tool_call.arguments.get("task_ids").and_then(|v| v.as_array()) {
+            if let Some(ids) = tool_call
+                .arguments
+                .get("task_ids")
+                .and_then(|v| v.as_array())
+            {
                 for id in ids {
                     if let Some(s) = id.as_str() {
                         if !s.is_empty() {
@@ -552,7 +558,7 @@ impl App {
                 results.push(Content::ToolResult {
                     tool_use_id: tool_call.id.clone(),
                     output: serde_json::Value::String(
-                        "Error: task_id or task_ids required".to_string()
+                        "Error: task_id or task_ids required".to_string(),
                     ),
                     is_error: Some(true),
                 });
@@ -564,7 +570,7 @@ impl App {
                 results.push(Content::ToolResult {
                     tool_use_id: tool_call.id.clone(),
                     output: serde_json::Value::String(
-                        "Error: No active plan. Create a plan first.".to_string()
+                        "Error: No active plan. Create a plan first.".to_string(),
                     ),
                     is_error: Some(true),
                 });
@@ -596,12 +602,17 @@ impl App {
             let msg = if not_found.is_empty() {
                 format!(
                     "Marked {} task(s) complete. Progress: {}/{}",
-                    completed_ids.len(), completed, total
+                    completed_ids.len(),
+                    completed,
+                    total
                 )
             } else {
                 format!(
                     "Marked {} task(s) complete, {} not found. Progress: {}/{}",
-                    completed_ids.len(), not_found.len(), completed, total
+                    completed_ids.len(),
+                    not_found.len(),
+                    completed,
+                    total
                 )
             };
             tracing::info!("{}", msg);
@@ -609,7 +620,11 @@ impl App {
             results.push(Content::ToolResult {
                 tool_use_id: tool_call.id.clone(),
                 output: serde_json::Value::String(msg),
-                is_error: if not_found.is_empty() { None } else { Some(false) },
+                is_error: if not_found.is_empty() {
+                    None
+                } else {
+                    Some(false)
+                },
             });
         }
 

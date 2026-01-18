@@ -176,7 +176,9 @@ mod tests {
     fn test_parse_raw_absolute_path() {
         let segments = parse_input("/home/user/doc.pdf", Path::new("/work"));
         assert_eq!(segments.len(), 1);
-        assert!(matches!(&segments[0], InputSegment::ImagePath(p) if p.to_str().unwrap() == "/home/user/doc.pdf"));
+        assert!(
+            matches!(&segments[0], InputSegment::ImagePath(p) if p.to_str().unwrap() == "/home/user/doc.pdf")
+        );
     }
 
     #[test]
@@ -184,7 +186,9 @@ mod tests {
         let segments = parse_input("analyze /tmp/file.png please", Path::new("/home"));
         assert_eq!(segments.len(), 3);
         assert!(matches!(&segments[0], InputSegment::Text(t) if t == "analyze"));
-        assert!(matches!(&segments[1], InputSegment::ImagePath(p) if p.to_str().unwrap() == "/tmp/file.png"));
+        assert!(
+            matches!(&segments[1], InputSegment::ImagePath(p) if p.to_str().unwrap() == "/tmp/file.png")
+        );
         assert!(matches!(&segments[2], InputSegment::Text(t) if t == "please"));
     }
 
@@ -192,6 +196,8 @@ mod tests {
     fn test_parse_raw_relative_path() {
         let segments = parse_input("./docs/report.pdf", Path::new("/home/user"));
         assert_eq!(segments.len(), 1);
-        assert!(matches!(&segments[0], InputSegment::ImagePath(p) if p.ends_with("docs/report.pdf")));
+        assert!(
+            matches!(&segments[0], InputSegment::ImagePath(p) if p.ends_with("docs/report.pdf"))
+        );
     }
 }

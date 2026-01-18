@@ -43,7 +43,9 @@ impl Preferences {
 
     /// Delete a preference
     pub fn delete(&self, key: &str) -> Result<()> {
-        self.db.conn().execute("DELETE FROM user_preferences WHERE key = ?1", [key])?;
+        self.db
+            .conn()
+            .execute("DELETE FROM user_preferences WHERE key = ?1", [key])?;
         Ok(())
     }
 
@@ -130,7 +132,10 @@ impl Preferences {
     pub fn cache_opencodezen_models(&self, models: &[ModelMetadata]) -> Result<()> {
         let json = serde_json::to_string(models)?;
         self.set("opencodezen_models_cache", &json)?;
-        self.set("opencodezen_models_cached_at", &unix_timestamp().to_string())
+        self.set(
+            "opencodezen_models_cached_at",
+            &unix_timestamp().to_string(),
+        )
     }
 
     /// Check if OpenCode Zen cache is stale (>24 hours old)

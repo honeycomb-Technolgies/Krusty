@@ -155,7 +155,7 @@ pub fn render_toasts(buf: &mut Buffer, area: Rect, queue: &ToastQueue, theme: &T
 
     for (i, toast) in queue.visible().enumerate() {
         let y = area.y + 4 + (i as u16 * (TOAST_HEIGHT + TOAST_GAP));
-        
+
         if y + TOAST_HEIGHT > area.y + area.height {
             break; // Don't render off-screen
         }
@@ -238,7 +238,9 @@ fn render_toast(buf: &mut Buffer, area: Rect, toast: &Toast, theme: &Theme) {
     for ch in msg_display.chars() {
         if cx < area.x + area.width - 2 {
             if let Some(cell) = buf.cell_mut((cx, content_y)) {
-                cell.set_char(ch).set_fg(theme.text_color).set_bg(theme.bg_color);
+                cell.set_char(ch)
+                    .set_fg(theme.text_color)
+                    .set_bg(theme.bg_color);
             }
             cx += 1;
         }

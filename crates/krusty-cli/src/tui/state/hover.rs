@@ -47,4 +47,3 @@ pub struct HoveredLink {
     pub end_col: usize,
     pub url: String,
 }
-

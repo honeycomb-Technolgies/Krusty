@@ -69,7 +69,11 @@ pub async fn fetch_models(api_key: &str) -> Result<Vec<ModelMetadata>> {
     if !status.is_success() {
         let error_text = response.text().await.unwrap_or_default();
         error!("OpenRouter API error: {} - {}", status, error_text);
-        return Err(anyhow::anyhow!("OpenRouter API error: {} - {}", status, error_text));
+        return Err(anyhow::anyhow!(
+            "OpenRouter API error: {} - {}",
+            status,
+            error_text
+        ));
     }
 
     let data: ModelsResponse = response.json().await?;
@@ -134,13 +138,15 @@ fn parse_model(raw: OpenRouterModel) -> ModelMetadata {
         .unwrap_or(4096);
 
     // Detect capabilities
-    let supports_thinking = raw.supported_parameters.iter().any(|p| {
-        p == "reasoning" || p == "include_reasoning" || p == "reasoning_effort"
-    });
+    let supports_thinking = raw
+        .supported_parameters
+        .iter()
+        .any(|p| p == "reasoning" || p == "include_reasoning" || p == "reasoning_effort");
 
-    let supports_tools = raw.supported_parameters.iter().any(|p| {
-        p == "tools" || p == "tool_choice"
-    });
+    let supports_tools = raw
+        .supported_parameters
+        .iter()
+        .any(|p| p == "tools" || p == "tool_choice");
 
     let supports_vision = raw
         .architecture
@@ -163,12 +169,7 @@ fn parse_model(raw: OpenRouterModel) -> ModelMetadata {
         .map(|p| p * 1_000_000.0);
 
     // Clean up display name (remove "Provider: " prefix if present)
-    let display_name = raw
-        .name
-        .split(": ")
-        .last()
-        .unwrap_or(&raw.name)
-        .to_string();
+    let display_name = raw.name.split(": ").last().unwrap_or(&raw.name).to_string();
 
     // Extract sub-provider from model ID (e.g., "anthropic/claude-3" -> "anthropic")
     let sub_provider = raw.id.split('/').next().map(|s| s.to_string());

@@ -24,7 +24,10 @@ pub enum HooksStage {
     /// Select hook type (PreToolUse, PostToolUse, etc.)
     SelectType { selected_index: usize },
     /// Enter tool pattern (regex)
-    EnterMatcher { hook_type: UserHookType, input: String },
+    EnterMatcher {
+        hook_type: UserHookType,
+        input: String,
+    },
     /// Enter shell command
     EnterCommand {
         hook_type: UserHookType,
@@ -218,7 +221,11 @@ impl HooksPopup {
             command,
         } = &self.stage
         {
-            Some(UserHook::new(*hook_type, tool_pattern.clone(), command.clone()))
+            Some(UserHook::new(
+                *hook_type,
+                tool_pattern.clone(),
+                command.clone(),
+            ))
         } else {
             None
         }
@@ -693,17 +700,15 @@ impl HooksPopup {
         f.render_widget(title, chunks[0]);
 
         // Config summary
-        let summary = Paragraph::new(vec![
-            Line::from(vec![
-                Span::styled("Type: ", Style::default().fg(theme.dim_color)),
-                Span::styled(
-                    hook_type.display_name(),
-                    Style::default().fg(theme.accent_color),
-                ),
-                Span::styled("  Pattern: ", Style::default().fg(theme.dim_color)),
-                Span::styled(tool_pattern, Style::default().fg(theme.accent_color)),
-            ]),
-        ]);
+        let summary = Paragraph::new(vec![Line::from(vec![
+            Span::styled("Type: ", Style::default().fg(theme.dim_color)),
+            Span::styled(
+                hook_type.display_name(),
+                Style::default().fg(theme.accent_color),
+            ),
+            Span::styled("  Pattern: ", Style::default().fg(theme.dim_color)),
+            Span::styled(tool_pattern, Style::default().fg(theme.accent_color)),
+        ])]);
         f.render_widget(summary, chunks[1]);
 
         // Input field

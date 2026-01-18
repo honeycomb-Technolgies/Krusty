@@ -47,4 +47,4 @@ pub use manager::SkillsManager;
 pub use skill::{Skill, SkillInfo, SkillSource};
 
 // Re-export loader functions for direct use
-pub use loader::{scaffold_skill, load_skill, load_skill_file};
+pub use loader::{load_skill, load_skill_file, scaffold_skill};

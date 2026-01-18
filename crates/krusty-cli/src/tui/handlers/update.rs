@@ -3,9 +3,9 @@
 //! Background update checking and building.
 //! NOTE: Currently disabled - update infrastructure incomplete.
 
-use krusty_core::updater::UpdateStatus;
 use crate::tui::app::App;
 use crate::tui::components::Toast;
+use krusty_core::updater::UpdateStatus;
 
 impl App {
     /// Check for persisted update on startup

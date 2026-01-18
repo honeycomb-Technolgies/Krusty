@@ -6,8 +6,8 @@ use serde_json::{json, Value};
 use std::process::Stdio;
 use tokio::process::Command;
 
-use crate::tools::{parse_params, ToolContext, ToolResult};
 use crate::tools::registry::Tool;
+use crate::tools::{parse_params, ToolContext, ToolResult};
 
 pub struct GrepTool;
 

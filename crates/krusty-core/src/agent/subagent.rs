@@ -1006,7 +1006,7 @@ async fn execute_subagent_with_progress(
         name: task_name.clone(),
         status: AgentProgressStatus::Running,
         tool_count: 0,
-                tokens: 0,
+        tokens: 0,
         current_action: Some(last_action.clone()),
         ..Default::default()
     });
@@ -1018,7 +1018,7 @@ async fn execute_subagent_with_progress(
                 name: task_name.clone(),
                 status: AgentProgressStatus::Failed,
                 tool_count: total_tool_calls,
-                                tokens: estimated_tokens,
+                tokens: estimated_tokens,
                 current_action: Some("cancelled".to_string()),
                 ..Default::default()
             });
@@ -1046,7 +1046,7 @@ async fn execute_subagent_with_progress(
             name: task_name.clone(),
             status: AgentProgressStatus::Running,
             tool_count: total_tool_calls,
-                        tokens: estimated_tokens,
+            tokens: estimated_tokens,
             current_action: Some(thinking_action),
             ..Default::default()
         });
@@ -1068,7 +1068,7 @@ async fn execute_subagent_with_progress(
                     name: task_name.clone(),
                     status: AgentProgressStatus::Failed,
                     tool_count: total_tool_calls,
-                                        tokens: estimated_tokens,
+                    tokens: estimated_tokens,
                     current_action: Some("error".to_string()),
                     ..Default::default()
                 });
@@ -1107,7 +1107,7 @@ async fn execute_subagent_with_progress(
                 name: task_name.clone(),
                 status: AgentProgressStatus::Complete,
                 tool_count: total_tool_calls,
-                                tokens: estimated_tokens,
+                tokens: estimated_tokens,
                 current_action: Some("complete".to_string()),
                 ..Default::default()
             });
@@ -1189,7 +1189,7 @@ async fn execute_subagent_with_progress(
                 name: task_name.clone(),
                 status: AgentProgressStatus::Running,
                 tool_count: total_tool_calls,
-                                tokens: estimated_tokens,
+                tokens: estimated_tokens,
                 current_action: Some(last_action.clone()),
                 ..Default::default()
             });
@@ -1418,7 +1418,7 @@ async fn execute_builder_with_progress(
         name: task_name.clone(),
         status: AgentProgressStatus::Running,
         tool_count: 0,
-                tokens: 0,
+        tokens: 0,
         current_action: Some(last_action.clone()),
         ..Default::default()
     });

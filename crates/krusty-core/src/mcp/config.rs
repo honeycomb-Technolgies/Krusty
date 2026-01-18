@@ -199,10 +199,18 @@ async fn expand_env_var(s: &str) -> String {
                 Err(_) => {
                     // Fall back to credentials store
                     if let Some(cred_key) = env_to_cred.get(var_name) {
-                        tracing::debug!("Looking up {} in credential store as '{}'", var_name, cred_key);
+                        tracing::debug!(
+                            "Looking up {} in credential store as '{}'",
+                            var_name,
+                            cred_key
+                        );
                         match get_credential(cred_key).await {
                             Some(v) => {
-                                tracing::debug!("Found {} in credential store (len={})", var_name, v.len());
+                                tracing::debug!(
+                                    "Found {} in credential store (len={})",
+                                    var_name,
+                                    v.len()
+                                );
                                 v
                             }
                             None => {
@@ -217,7 +225,12 @@ async fn expand_env_var(s: &str) -> String {
                 }
             };
 
-            result = format!("{}{}{}", &result[..start], value, &result[start + end + 1..]);
+            result = format!(
+                "{}{}{}",
+                &result[..start],
+                value,
+                &result[start + end + 1..]
+            );
         } else {
             break;
         }
@@ -254,7 +267,11 @@ async fn get_credential(provider: &str) -> Option<String> {
     if result.is_some() {
         tracing::debug!("Found credential for '{}'", provider);
     } else {
-        tracing::warn!("No credential found for '{}' (available: {:?})", provider, creds.keys().collect::<Vec<_>>());
+        tracing::warn!(
+            "No credential found for '{}' (available: {:?})",
+            provider,
+            creds.keys().collect::<Vec<_>>()
+        );
     }
     result
 }
@@ -306,7 +323,10 @@ mod tests {
     #[tokio::test]
     async fn test_expand_env_var() {
         // Test that direct values pass through
-        assert_eq!(expand_env_var("https://api.example.com").await, "https://api.example.com");
+        assert_eq!(
+            expand_env_var("https://api.example.com").await,
+            "https://api.example.com"
+        );
 
         // Test env var expansion with fallback to credentials
         // This would need a real credential file to fully test

@@ -36,7 +36,7 @@ pub struct UpdateInfo {
 }
 
 /// Check for updates by comparing local HEAD with origin/main
-/// 
+///
 /// Returns UpdateInfo if updates are available, None if up to date.
 pub fn check_for_updates(repo_path: &PathBuf) -> Result<Option<UpdateInfo>> {
     // Fetch from origin (quiet)
@@ -94,7 +94,7 @@ pub fn check_for_updates(repo_path: &PathBuf) -> Result<Option<UpdateInfo>> {
 }
 
 /// Build update in background
-/// 
+///
 /// Pulls latest changes, builds release binary, and copies to temp location.
 /// Sends progress updates via the provided channel.
 pub async fn build_update(
@@ -102,8 +102,8 @@ pub async fn build_update(
     progress_tx: mpsc::UnboundedSender<UpdateStatus>,
 ) -> Result<PathBuf> {
     // Pull latest changes
-    progress_tx.send(UpdateStatus::Building { 
-        progress: "Pulling latest changes...".into() 
+    progress_tx.send(UpdateStatus::Building {
+        progress: "Pulling latest changes...".into(),
     })?;
 
     let pull = tokio::process::Command::new("git")
@@ -118,8 +118,8 @@ pub async fn build_update(
     }
 
     // Build release binary
-    progress_tx.send(UpdateStatus::Building { 
-        progress: "Building release binary...".into() 
+    progress_tx.send(UpdateStatus::Building {
+        progress: "Building release binary...".into(),
     })?;
 
     let build = tokio::process::Command::new("cargo")
@@ -134,8 +134,8 @@ pub async fn build_update(
     }
 
     // Copy binary to temp location
-    progress_tx.send(UpdateStatus::Building { 
-        progress: "Preparing update...".into() 
+    progress_tx.send(UpdateStatus::Building {
+        progress: "Preparing update...".into(),
     })?;
 
     let source = repo_path.join("target/release/krusty");
@@ -143,7 +143,7 @@ pub async fn build_update(
     let dest = temp_dir.join("krusty-update");
 
     std::fs::copy(&source, &dest)?;
-    
+
     // Make executable
     #[cfg(unix)]
     {
@@ -153,13 +153,15 @@ pub async fn build_update(
         std::fs::set_permissions(&dest, perms)?;
     }
 
-    progress_tx.send(UpdateStatus::Ready { new_binary: dest.clone() })?;
+    progress_tx.send(UpdateStatus::Ready {
+        new_binary: dest.clone(),
+    })?;
 
     Ok(dest)
 }
 
 /// Get the repo path from the current executable location
-/// 
+///
 /// Assumes binary is either in target/release/krusty or ~/.local/bin/krusty
 /// and the repo is the parent of target/.
 pub fn detect_repo_path() -> Option<PathBuf> {

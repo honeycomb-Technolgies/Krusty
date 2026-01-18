@@ -111,7 +111,10 @@ impl App {
                             }
                             // Refresh the popup with new models
                             self.refresh_model_popup();
-                            tracing::info!("OpenRouter models loaded and cached: {} models", models.len());
+                            tracing::info!(
+                                "OpenRouter models loaded and cached: {} models",
+                                models.len()
+                            );
                         }
                         Err(e) => {
                             self.popups.model.set_error(e);
@@ -121,7 +124,9 @@ impl App {
                 }
                 Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
                 Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                    self.popups.model.set_error("Fetch task closed unexpectedly".to_string());
+                    self.popups
+                        .model
+                        .set_error("Fetch task closed unexpectedly".to_string());
                     self.channels.openrouter_models = None;
                 }
             }
@@ -143,7 +148,10 @@ impl App {
                             }
                             // Refresh the popup with new models
                             self.refresh_model_popup();
-                            tracing::info!("OpenCode Zen models loaded and cached: {} models", models.len());
+                            tracing::info!(
+                                "OpenCode Zen models loaded and cached: {} models",
+                                models.len()
+                            );
                         }
                         Err(e) => {
                             self.popups.model.set_error(e);
@@ -153,7 +161,9 @@ impl App {
                 }
                 Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
                 Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                    self.popups.model.set_error("Fetch task closed unexpectedly".to_string());
+                    self.popups
+                        .model
+                        .set_error("Fetch task closed unexpectedly".to_string());
                     self.channels.opencodezen_models = None;
                 }
             }
@@ -172,7 +182,9 @@ impl App {
             let models_vec: Vec<_> = ProviderId::all()
                 .iter()
                 .filter_map(|id| {
-                    models_by_provider.get(id).map(|models| (*id, models.clone()))
+                    models_by_provider
+                        .get(id)
+                        .map(|models| (*id, models.clone()))
                 })
                 .collect();
 

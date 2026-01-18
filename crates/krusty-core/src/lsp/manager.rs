@@ -139,7 +139,10 @@ impl LspManager {
     /// Check if any LSP is registered for an extension
     pub async fn has_lsp_for_extension(&self, extension: &str) -> bool {
         let ext_map = self.extension_map.read().await;
-        ext_map.get(extension).map(|v| !v.is_empty()).unwrap_or(false)
+        ext_map
+            .get(extension)
+            .map(|v| !v.is_empty())
+            .unwrap_or(false)
     }
 
     /// Spawn a server by name

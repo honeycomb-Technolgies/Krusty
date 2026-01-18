@@ -104,8 +104,7 @@ impl ProcessRegistry {
         map: &'a mut HashMap<String, HashMap<ProcessId, ProcessEntry>>,
         user_id: &str,
     ) -> &'a mut HashMap<ProcessId, ProcessEntry> {
-        map.entry(user_id.to_string())
-            .or_default()
+        map.entry(user_id.to_string()).or_default()
     }
 
     /// Spawn a new background process and track it (single-tenant compatibility)

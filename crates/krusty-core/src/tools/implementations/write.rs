@@ -6,8 +6,8 @@ use serde_json::{json, Value};
 use tokio::fs;
 use tracing::info;
 
-use crate::tools::{parse_params, ToolContext, ToolResult};
 use crate::tools::registry::Tool;
+use crate::tools::{parse_params, ToolContext, ToolResult};
 
 pub struct WriteTool;
 
@@ -53,7 +53,10 @@ impl Tool for WriteTool {
 
         // First resolve the path normally
         let path = ctx.resolve_path(&params.file_path);
-        info!("Write tool: resolved path = {:?}, working_dir = {:?}", path, ctx.working_dir);
+        info!(
+            "Write tool: resolved path = {:?}, working_dir = {:?}",
+            path, ctx.working_dir
+        );
 
         // Validate sandbox if configured (must check before creating directories)
         if let Some(ref sandbox) = ctx.sandbox_root {
@@ -61,7 +64,9 @@ impl Tool for WriteTool {
             let check_path = if path.exists() {
                 path.clone()
             } else {
-                path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| path.clone())
+                path.parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| path.clone())
             };
 
             if let Ok(canonical) = check_path.canonicalize() {

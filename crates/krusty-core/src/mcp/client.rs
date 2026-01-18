@@ -37,20 +37,14 @@ pub struct McpClient {
 
 impl McpClient {
     /// Connect to a local MCP server
-    pub async fn connect(
-        name: &str,
-        config: &McpServerConfig,
-        working_dir: &Path,
-    ) -> Result<Self> {
+    pub async fn connect(name: &str, config: &McpServerConfig, working_dir: &Path) -> Result<Self> {
         let McpServerConfig::Local { command, args, env } = config else {
             return Err(anyhow!("McpClient only handles local servers"));
         };
 
         info!("Connecting to MCP server: {}", name);
 
-        let transport = Arc::new(
-            StdioTransport::spawn(command, args, env, working_dir).await?,
-        );
+        let transport = Arc::new(StdioTransport::spawn(command, args, env, working_dir).await?);
 
         let pending: Arc<RwLock<HashMap<i64, oneshot::Sender<Result<Value>>>>> =
             Arc::new(RwLock::new(HashMap::new()));
@@ -210,11 +204,8 @@ impl McpClient {
         self.transport.send(&json).await?;
 
         // Wait for response with timeout
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS),
-            rx,
-        )
-        .await;
+        let result =
+            tokio::time::timeout(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS), rx).await;
 
         match result {
             Ok(Ok(Ok(value))) => Ok(serde_json::from_value(value)?),

@@ -331,10 +331,7 @@ mod tests {
             .unwrap();
         drop(db);
 
-        let manager = PlanManager {
-            plans_dir,
-            db_path,
-        };
+        let manager = PlanManager { plans_dir, db_path };
         (manager, temp_dir)
     }
 
@@ -377,9 +374,7 @@ mod tests {
     fn test_save_with_changes() {
         let (manager, _temp) = setup_test_manager();
 
-        let mut plan = manager
-            .create_plan("Test", "session-123", None)
-            .unwrap();
+        let mut plan = manager.create_plan("Test", "session-123", None).unwrap();
         {
             let phase = plan.add_phase("Phase 1");
             phase.add_task("Task one");

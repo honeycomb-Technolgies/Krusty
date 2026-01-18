@@ -276,15 +276,13 @@ fn render_line_with_cursor_and_file_refs(
             sel_style
         } else if link_color.is_some() {
             // Check if in a file ref bracket range
-            let in_bracket = char_bracket_ranges
-                .iter()
-                .any(|(s, e)| i >= *s && i < *e);
+            let in_bracket = char_bracket_ranges.iter().any(|(s, e)| i >= *s && i < *e);
             if in_bracket {
                 // Check if this bracket is hovered (need to match against global file_ref_ranges)
                 let is_hovered = hover_range.is_some()
-                    && char_bracket_ranges.iter().any(|(s, e)| {
-                        i >= *s && i < *e && hover_range == Some((*s, *e))
-                    });
+                    && char_bracket_ranges
+                        .iter()
+                        .any(|(s, e)| i >= *s && i < *e && hover_range == Some((*s, *e)));
                 if is_hovered {
                     hover_style
                 } else {

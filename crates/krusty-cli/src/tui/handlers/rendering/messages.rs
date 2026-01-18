@@ -248,15 +248,23 @@ impl App {
             // Count content lines based on role and store height
             let msg_height = if role == "assistant" {
                 // Use pre-rendered markdown lines
-                rendered_markdown.get(msg_idx)
+                rendered_markdown
+                    .get(msg_idx)
                     .and_then(|r| r.as_ref())
                     .map(|r| r.lines.len())
                     .unwrap_or(0)
             } else {
                 // Plain text for user/system
-                content.lines().map(|line| {
-                    if line.is_empty() { 1 } else { wrap_line(line, wrap_width).len() }
-                }).sum()
+                content
+                    .lines()
+                    .map(|line| {
+                        if line.is_empty() {
+                            1
+                        } else {
+                            wrap_line(line, wrap_width).len()
+                        }
+                    })
+                    .sum()
             };
             message_heights.push(msg_height);
             total_lines += msg_height;
@@ -1222,7 +1230,14 @@ fn style_user_line_with_file_refs(
 
     if captures.is_empty() {
         // No file refs - use standard rendering
-        return apply_selection_to_line(text.to_string(), line_idx, selection, base_style, sel_bg, sel_fg);
+        return apply_selection_to_line(
+            text.to_string(),
+            line_idx,
+            selection,
+            base_style,
+            sel_bg,
+            sel_fg,
+        );
     }
 
     // Build spans with file refs styled

@@ -27,7 +27,10 @@ impl CredentialStore {
 
     /// Get credentials file path for a user's home directory
     pub fn path_for_home(home_dir: &std::path::Path) -> PathBuf {
-        home_dir.join(".krusty").join("tokens").join("credentials.json")
+        home_dir
+            .join(".krusty")
+            .join("tokens")
+            .join("credentials.json")
     }
 
     /// Load credentials from disk
@@ -121,7 +124,9 @@ pub struct ActiveProviderStore;
 impl ActiveProviderStore {
     /// Get the active provider file path
     fn path() -> PathBuf {
-        paths::config_dir().join("tokens").join("active_provider.json")
+        paths::config_dir()
+            .join("tokens")
+            .join("active_provider.json")
     }
 
     /// Load active provider from disk

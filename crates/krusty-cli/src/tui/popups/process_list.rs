@@ -40,14 +40,8 @@ impl ProcessListPopup {
     pub fn update(&mut self, mut processes: Vec<ProcessInfo>) {
         // Sort: running/suspended first, then by start time (newest first)
         processes.sort_by(|a, b| {
-            let a_active = matches!(
-                a.status,
-                ProcessStatus::Running | ProcessStatus::Suspended
-            );
-            let b_active = matches!(
-                b.status,
-                ProcessStatus::Running | ProcessStatus::Suspended
-            );
+            let a_active = matches!(a.status, ProcessStatus::Running | ProcessStatus::Suspended);
+            let b_active = matches!(b.status, ProcessStatus::Running | ProcessStatus::Suspended);
             match (a_active, b_active) {
                 (true, true) => b.started_at.cmp(&a.started_at),
                 (true, false) => std::cmp::Ordering::Less,

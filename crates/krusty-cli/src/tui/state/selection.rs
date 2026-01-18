@@ -77,7 +77,11 @@ impl SelectionState {
     /// Get normalized selection (start always before end)
     pub fn normalized(&self) -> Option<((usize, usize), (usize, usize))> {
         let (start, end) = (self.start?, self.end?);
-        Some(if start <= end { (start, end) } else { (end, start) })
+        Some(if start <= end {
+            (start, end)
+        } else {
+            (end, start)
+        })
     }
 
     /// Check if selection is non-empty

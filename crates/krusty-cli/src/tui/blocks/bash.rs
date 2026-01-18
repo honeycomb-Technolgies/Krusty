@@ -149,18 +149,18 @@ impl BashBlock {
     pub fn flush_pending(&mut self) {
         if !self.pending_output.is_empty() {
             self.output.push_str(&self.pending_output);
-            
+
             // Only detect progress on newlines (expensive operation)
             if self.pending_output.contains('\n') {
                 self.detect_progress();
             }
-            
+
             self.pending_output.clear();
-            
+
             // Invalidate cache dimensions (will rebuild on next get_lines call)
             self.cached_width = 0;
             self.cached_height = 0;
-            
+
             // Auto-scroll to bottom while streaming
             if self.streaming {
                 self.scroll_to_bottom();
@@ -185,8 +185,15 @@ impl BashBlock {
 
     /// Get formatted duration string
     fn duration_string(&self) -> String {
-        let secs = self.duration.unwrap_or_else(|| self.start_time.elapsed()).as_secs_f32();
-        if secs < 60.0 { format!("{:.1}s", secs) } else { format!("{:.1}m", secs / 60.0) }
+        let secs = self
+            .duration
+            .unwrap_or_else(|| self.start_time.elapsed())
+            .as_secs_f32();
+        if secs < 60.0 {
+            format!("{:.1}s", secs)
+        } else {
+            format!("{:.1}m", secs / 60.0)
+        }
     }
 
     /// Get status indicator
@@ -981,14 +988,18 @@ impl StreamBlock for BashBlock {
 
     fn get_text_content(&self) -> Option<String> {
         let base = format!("$ {}", self.command);
-        Some(if self.collapsed || self.output.is_empty() { base } else { format!("{}\n{}", base, self.output) })
+        Some(if self.collapsed || self.output.is_empty() {
+            base
+        } else {
+            format!("{}\n{}", base, self.output)
+        })
     }
 
     fn tick(&mut self) -> bool {
         // Flush any pending output before render (batched writes)
         let had_pending = !self.pending_output.is_empty();
         self.flush_pending();
-        
+
         if self.streaming {
             self.update_cursor();
             true // Need redraw for cursor blink or new output

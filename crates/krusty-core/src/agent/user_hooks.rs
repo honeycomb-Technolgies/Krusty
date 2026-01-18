@@ -372,7 +372,11 @@ impl UserHookExecutor {
     /// - 0: Continue (stdout/stderr not shown)
     /// - 2: Block tool, show stderr to model
     /// - Other: Warn user with stderr, continue
-    pub async fn execute(hook: &UserHook, tool_name: &str, params: &serde_json::Value) -> UserHookResult {
+    pub async fn execute(
+        hook: &UserHook,
+        tool_name: &str,
+        params: &serde_json::Value,
+    ) -> UserHookResult {
         use std::process::Stdio;
         use tokio::io::AsyncWriteExt;
         use tokio::process::Command;
@@ -550,9 +554,13 @@ impl PreToolHook for UserPreToolHook {
         _ctx: &ToolContext,
     ) -> HookResult {
         let mut manager = self.manager.write().await;
-        let result =
-            UserHookExecutor::execute_matching(&mut manager, UserHookType::PreToolUse, name, params)
-                .await;
+        let result = UserHookExecutor::execute_matching(
+            &mut manager,
+            UserHookType::PreToolUse,
+            name,
+            params,
+        )
+        .await;
 
         match result {
             UserHookResult::Block { reason } => HookResult::Block { reason },

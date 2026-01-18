@@ -31,7 +31,10 @@ pub struct ToolResult {
 impl ToolResult {
     /// Create a success result
     pub fn success(output: impl Into<String>) -> Self {
-        Self { output: output.into(), is_error: false }
+        Self {
+            output: output.into(),
+            is_error: false,
+        }
     }
 
     /// Create an error result with JSON-formatted error message
@@ -45,7 +48,8 @@ impl ToolResult {
 
 /// Parse tool parameters, returning a ToolResult error on failure
 pub fn parse_params<T: serde::de::DeserializeOwned>(params: Value) -> Result<T, ToolResult> {
-    serde_json::from_value(params).map_err(|e| ToolResult::error(format!("Invalid parameters: {}", e)))
+    serde_json::from_value(params)
+        .map_err(|e| ToolResult::error(format!("Invalid parameters: {}", e)))
 }
 
 /// Output chunk from a streaming tool (like bash)
@@ -160,10 +164,7 @@ impl ToolContext {
     }
 
     /// Add missing LSP notification channel to context
-    pub fn with_missing_lsp_channel(
-        mut self,
-        tx: mpsc::UnboundedSender<MissingLspInfo>,
-    ) -> Self {
+    pub fn with_missing_lsp_channel(mut self, tx: mpsc::UnboundedSender<MissingLspInfo>) -> Self {
         self.missing_lsp_tx = Some(tx);
         self
     }
@@ -200,7 +201,11 @@ impl ToolContext {
     /// Resolve a path relative to working directory (absolute paths pass through)
     pub fn resolve_path(&self, path: &str) -> std::path::PathBuf {
         let p = std::path::PathBuf::from(path);
-        if p.is_absolute() { p } else { self.working_dir.join(p) }
+        if p.is_absolute() {
+            p
+        } else {
+            self.working_dir.join(p)
+        }
     }
 
     /// Resolve a path with sandbox enforcement for multi-tenant isolation.
@@ -216,9 +221,9 @@ impl ToolContext {
         };
 
         // Canonicalize to resolve symlinks and `..`
-        let canonical = resolved.canonicalize().map_err(|e| {
-            format!("Invalid path '{}': {}", path, e)
-        })?;
+        let canonical = resolved
+            .canonicalize()
+            .map_err(|e| format!("Invalid path '{}': {}", path, e))?;
 
         // Check if the canonical path is within the sandbox
         if !canonical.starts_with(sandbox) {

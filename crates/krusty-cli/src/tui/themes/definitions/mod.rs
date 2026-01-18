@@ -27,9 +27,9 @@ mod serenity;
 mod sith_lord;
 mod solarized_dark;
 mod synthwave_84;
+mod terminal;
 mod tokyo_night;
 mod vesper;
-mod terminal;
 mod zenburn;
 
 pub use aura::aura;

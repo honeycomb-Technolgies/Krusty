@@ -2,9 +2,7 @@
 //!
 //! Extracted from app.rs for better separation of concerns.
 
-use crate::auth::{
-    finish_oauth_flow, start_oauth_flow as auth_start_oauth_flow, TokenResponse,
-};
+use crate::auth::{finish_oauth_flow, start_oauth_flow as auth_start_oauth_flow, TokenResponse};
 use crate::paths;
 
 use crate::tui::app::App;
