@@ -129,12 +129,14 @@ pub fn get_provider_options(
     reasoning_text: Option<String>,
 ) -> Option<serde_json::Value> {
     // MiniMax M2 and DeepSeek use reasoning_content field
-    if uses_reasoning_content(model_id) && reasoning_text.is_some() {
-        return Some(serde_json::json!({
-            "openaiCompatible": {
-                "reasoning_content": reasoning_text.unwrap()
-            }
-        }));
+    if uses_reasoning_content(model_id) {
+        if let Some(text) = reasoning_text {
+            return Some(serde_json::json!({
+                "openaiCompatible": {
+                    "reasoning_content": text
+                }
+            }));
+        }
     }
 
     None
