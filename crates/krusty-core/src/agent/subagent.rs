@@ -73,7 +73,7 @@ pub enum SubAgentModel {
 impl SubAgentModel {
     pub fn model_id(&self) -> &'static str {
         match self {
-            // Use Claude 4 models that work with Claude Code OAuth
+            // Use Claude 4 models
             SubAgentModel::Haiku => "claude-haiku-4-5-20251001",
             SubAgentModel::Sonnet => "claude-sonnet-4-5-20250929",
             SubAgentModel::Opus => "claude-opus-4-5-20251101",

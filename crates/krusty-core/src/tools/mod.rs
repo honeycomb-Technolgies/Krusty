@@ -4,6 +4,7 @@
 
 pub mod image;
 pub mod implementations;
+pub mod path_utils;
 pub mod registry;
 
 pub use image::{

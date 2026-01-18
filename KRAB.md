@@ -22,7 +22,7 @@ Terminal-based AI coding assistant with Claude API and Zed's WASM extension syst
 
 - **agent**: Event bus, state tracking, hooks system, sub-agents, build context coordination (Octopod swarm)
 - **ai**: Anthropic Claude API client with streaming, SSE parsing, title generation, OpenRouter support
-- **auth**: OAuth token management and credential storage for providers
+- **auth**: (deprecated - API keys now stored in storage/credentials)
 - **extensions**: Zed-compatible WASM extension host (wasmtime), manifest parsing, GitHub integration
 - **lsp**: Language server protocol client with JSON-RPC transport, diagnostics, and downloader for Zed extensions
 - **tools**: Tool registry with pre/post-execution hooks, implementations (read, write, edit, bash, grep, glob, processes, explore, build, skills, ask_user)
@@ -56,7 +56,7 @@ Terminal-based AI coding assistant with Claude API and Zed's WASM extension syst
 
 10. **Context Object Pattern** - `ToolContext` passed through tool execution with optional channels for streaming output, progress updates
 
-11. **Configuration Loading** - Multi-source config (OAuth, API keys, preferences) with fallbacks
+11. **Configuration Loading** - Multi-source config (API keys, preferences) with fallbacks
 
 12. **Middleware/Pipeline** - Axum tower-http for CORS, tracing, routing in server
 
@@ -73,7 +73,7 @@ Terminal-based AI coding assistant with Claude API and Zed's WASM extension syst
 - `crates/krusty-core/src/lib.rs` - Core library exposing agent, AI, auth, storage, tools, extensions modules
 - `crates/krusty-core/src/tools/registry.rs` - Tool registry managing execution, hooks, timeouts, and context
 - `crates/krusty-core/src/agent/mod.rs` - Agent system with event bus, state tracking, hooks, and sub-agents
-- `crates/krusty-core/src/ai/anthropic/client.rs` - Anthropic Claude API client with streaming, OAuth, and tool execution
+- `crates/krusty-core/src/ai/anthropic/client.rs` - Anthropic Claude API client with streaming and tool execution
 - `crates/krusty-core/src/storage/database.rs` - SQLite database wrapper with versioned migrations and schema management
 - `crates/krusty-core/src/extensions/mod.rs` - Zed-compatible WASM extension system for language servers
 - `crates/krusty-core/src/lsp/manager.rs` - LSP manager coordinating multiple language servers and diagnostics

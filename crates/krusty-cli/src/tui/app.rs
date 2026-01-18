@@ -29,7 +29,6 @@ use crate::ai::anthropic::AnthropicClient;
 use crate::ai::models::{create_model_registry, SharedModelRegistry};
 use crate::ai::providers::ProviderId;
 use crate::ai::types::{AiTool, AiToolCall, Content, ModelMessage};
-use crate::auth::{PkceVerifier, TokenManager};
 use crate::extensions::WasmHost;
 use crate::lsp::LspManager;
 use crate::paths;
@@ -133,7 +132,6 @@ pub struct App {
 
     // AI client
     pub ai_client: Option<AnthropicClient>,
-    pub token_manager: Option<Arc<TokenManager>>,
     pub api_key: Option<String>,
 
     // Multi-provider support
@@ -184,7 +182,7 @@ pub struct App {
     // User preferences
     pub preferences: Option<Preferences>,
 
-    // Async channel receivers (LSP, OAuth, tool results, bash output)
+    // Async channel receivers (LSP, tool results, bash output)
     pub channels: AsyncChannels,
 
     // /init exploration tracking
@@ -195,9 +193,6 @@ pub struct App {
 
     // Pending tool results waiting to be combined with queued tool results
     pub pending_tool_results: Vec<Content>,
-
-    // OAuth flow
-    pub oauth_verifier: Option<PkceVerifier>,
 
     // Popup states (grouped into component)
     pub popups: PopupState,
@@ -494,7 +489,6 @@ impl App {
             current_model,
             context_tokens_used: 0,
             ai_client: None,
-            token_manager: None,
             api_key: None,
             active_provider,
             credential_store,
@@ -522,7 +516,6 @@ impl App {
             init_explore_id: None,
             queued_tools: Vec::new(),
             pending_tool_results: Vec::new(),
-            oauth_verifier: None,
             popups: PopupState::new(),
             menu_animator: MenuAnimator::new(),
 
@@ -957,27 +950,6 @@ impl App {
 
     /// Try to load existing authentication for the active provider
     pub async fn try_load_auth(&mut self) -> Result<()> {
-        // For Anthropic, try OAuth tokens first (only Anthropic supports OAuth)
-        if self.active_provider == ProviderId::Anthropic {
-            let config_dir = paths::config_dir();
-            let tokens_dir = config_dir.join("tokens");
-            let oauth_file = tokens_dir.join("anthropic_oauth.json");
-
-            if oauth_file.exists() {
-                if let Ok(tm) = TokenManager::new(oauth_file).await {
-                    if let Ok(_token) = tm.get_valid_token().await {
-                        let config = self.create_client_config();
-                        let tm_arc = Arc::new(tm);
-                        self.ai_client =
-                            Some(AnthropicClient::with_token_manager(config, tm_arc.clone()));
-                        self.token_manager = Some(tm_arc);
-                        self.register_explore_tool_if_client().await;
-                        return Ok(());
-                    }
-                }
-            }
-        }
-
         // Try credential store for all providers (unified API key storage)
         if let Some(key) = self.credential_store.get(&self.active_provider).cloned() {
             let config = self.create_client_config();
@@ -1042,24 +1014,12 @@ impl App {
         }
     }
 
-    /// Create an AI client using the appropriate auth method for the active provider
-    ///
-    /// Uses OAuth token_manager for Anthropic, API key for other providers.
+    /// Create an AI client with the current provider configuration
     pub fn create_ai_client(&self) -> Option<AnthropicClient> {
         let config = self.create_client_config();
-        let use_oauth =
-            self.active_provider == ProviderId::Anthropic && self.token_manager.is_some();
-
-        if use_oauth {
-            Some(AnthropicClient::with_token_manager(
-                config,
-                self.token_manager.as_ref()?.clone(),
-            ))
-        } else {
-            self.api_key
-                .as_ref()
-                .map(|key| AnthropicClient::with_api_key(config, key.clone()))
-        }
+        self.api_key
+            .as_ref()
+            .map(|key| AnthropicClient::with_api_key(config, key.clone()))
     }
 
     /// Set API key for current provider and create client
@@ -1131,29 +1091,8 @@ impl App {
             }
         }
 
-        // Try to load authentication for the new provider
-        // Note: token_manager is kept across switches - it's only for Anthropic OAuth but
-        // keeping it allows instant re-auth when switching back to Anthropic
-        if provider_id == ProviderId::Anthropic {
-            // For Anthropic: check token_manager first (OAuth), then credential store (API key)
-            if let Some(ref tm) = self.token_manager {
-                let config = self.create_client_config();
-                self.ai_client = Some(AnthropicClient::with_token_manager(config, tm.clone()));
-                self.api_key = None;
-                tracing::info!("Switched to Anthropic (using existing OAuth token)");
-            } else if let Some(key) = self.credential_store.get(&provider_id).cloned() {
-                let config = self.create_client_config();
-                self.ai_client = Some(AnthropicClient::with_api_key(config, key.clone()));
-                self.api_key = Some(key);
-                tracing::info!("Switched to Anthropic (using API key)");
-            } else {
-                // No auth yet - user will need to authenticate
-                // try_load_auth() will be called and can load from OAuth file
-                self.ai_client = None;
-                self.api_key = None;
-                tracing::info!("Switched to Anthropic (requires authentication)");
-            }
-        } else if let Some(key) = self.credential_store.get(&provider_id).cloned() {
+        // Try to load credentials for the new provider
+        if let Some(key) = self.credential_store.get(&provider_id).cloned() {
             let config = self.create_client_config();
             self.ai_client = Some(AnthropicClient::with_api_key(config, key.clone()));
             self.api_key = Some(key);
@@ -1169,22 +1108,9 @@ impl App {
         }
     }
 
-    /// Get list of configured provider IDs (ones with API keys or OAuth tokens)
+    /// Get list of configured provider IDs (ones with API keys)
     pub fn configured_providers(&self) -> Vec<ProviderId> {
-        let mut providers = self.credential_store.configured_providers();
-
-        // Also include Anthropic if OAuth token file exists (not just runtime token_manager)
-        // This ensures Anthropic stays in the list even after switching providers
-        if !providers.contains(&ProviderId::Anthropic) {
-            let oauth_file = paths::config_dir()
-                .join("tokens")
-                .join("anthropic_oauth.json");
-            if oauth_file.exists() {
-                providers.insert(0, ProviderId::Anthropic); // Anthropic first
-            }
-        }
-
-        providers
+        self.credential_store.configured_providers()
     }
 
     /// Check if authenticated
@@ -1808,41 +1734,6 @@ impl App {
                         self.channels.tool_results = None;
                         self.stop_streaming();
                         self.stop_tool_execution();
-                    }
-                }
-            }
-
-            // Check for OAuth completion
-            if let Some(ref mut rx) = self.channels.oauth {
-                match rx.try_recv() {
-                    Ok(result) => {
-                        self.channels.oauth = None;
-                        match result {
-                            Ok(token_response) => {
-                                if let Err(e) = self.save_oauth_tokens(&token_response).await {
-                                    self.popups
-                                        .auth
-                                        .set_oauth_error(format!("Failed to save tokens: {}", e));
-                                } else {
-                                    self.popups.auth.set_oauth_complete();
-                                    let _ = self.try_load_auth().await;
-                                    self.messages.push((
-                                        "system".to_string(),
-                                        "OAuth authentication successful!".to_string(),
-                                    ));
-                                }
-                            }
-                            Err(e) => {
-                                self.popups.auth.set_oauth_error(e);
-                            }
-                        }
-                    }
-                    Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
-                    Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                        self.channels.oauth = None;
-                        self.popups
-                            .auth
-                            .set_oauth_error("OAuth flow cancelled".to_string());
                     }
                 }
             }

@@ -145,9 +145,6 @@ impl App {
     }
 
     /// Create AI client for summarization
-    ///
-    /// Uses same auth as main client. OAuth is supported - the call_with_thinking
-    /// method handles embedding instructions in the user message for OAuth.
     fn create_summarization_client(&self) -> Option<AnthropicClient> {
         self.create_ai_client()
     }

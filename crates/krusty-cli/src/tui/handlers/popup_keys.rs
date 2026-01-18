@@ -4,9 +4,8 @@
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
-use crate::ai::providers::ProviderId;
 use crate::tui::app::{App, Popup, View};
-use crate::tui::popups::auth::{AuthMethod, AuthState};
+use crate::tui::popups::auth::AuthState;
 use crate::tui::utils::McpStatusUpdate;
 use krusty_core::mcp::tool::register_mcp_tools;
 
@@ -87,10 +86,8 @@ impl App {
                                     // Switch provider if selecting model from different provider
                                     if provider_id != self.active_provider {
                                         self.switch_provider(provider_id);
-                                        // If switched to Anthropic and not authenticated, try loading OAuth
-                                        if provider_id == ProviderId::Anthropic
-                                            && !self.is_authenticated()
-                                        {
+                                        // Try loading auth if switched and not authenticated
+                                        if !self.is_authenticated() {
                                             let _ =
                                                 futures::executor::block_on(self.try_load_auth());
                                         }
@@ -373,18 +370,6 @@ impl App {
                 }
                 _ => {}
             },
-            AuthState::MethodSelection { selected, .. } => match code {
-                KeyCode::Esc | KeyCode::Backspace => self.popups.auth.go_back(),
-                KeyCode::Up | KeyCode::Down => self.popups.auth.toggle_method(),
-                KeyCode::Enter => {
-                    let method = *selected;
-                    self.popups.auth.confirm_method();
-                    if method == AuthMethod::OAuth {
-                        self.start_oauth_flow();
-                    }
-                }
-                _ => {}
-            },
             AuthState::ApiKeyInput { provider, .. } => {
                 let provider = *provider;
                 match code {
@@ -440,62 +425,10 @@ impl App {
                     _ => {}
                 }
             }
-            AuthState::OAuthWaitingForBrowser { .. } => {
-                if code == KeyCode::Esc || code == KeyCode::Backspace {
-                    self.oauth_verifier = None;
-                    self.popups.auth.go_back();
-                }
-            }
-            AuthState::OAuthWaitingForCode { .. } => match code {
-                KeyCode::Esc => {
-                    self.oauth_verifier = None;
-                    self.popups.auth.go_back();
-                }
-                KeyCode::Backspace
-                    if self
-                        .popups
-                        .auth
-                        .get_oauth_code()
-                        .map(|c| c.is_empty())
-                        .unwrap_or(true) =>
-                {
-                    self.oauth_verifier = None;
-                    self.popups.auth.go_back();
-                }
-                KeyCode::Backspace => self.popups.auth.backspace_oauth_code(),
-                KeyCode::Char(c) if !modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.popups.auth.add_oauth_code_char(c);
-                }
-                KeyCode::Char('v') if modifiers.contains(KeyModifiers::CONTROL) => {
-                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                        if let Ok(text) = clipboard.get_text() {
-                            for c in text.chars() {
-                                self.popups.auth.add_oauth_code_char(c);
-                            }
-                        }
-                    }
-                }
-                KeyCode::Enter => {
-                    if let Some(callback) = self.popups.auth.get_oauth_code() {
-                        if !callback.is_empty() {
-                            self.exchange_oauth_code(callback.to_string());
-                        }
-                    }
-                }
-                _ => {}
-            },
-            AuthState::OAuthExchanging { .. } => {}
-            AuthState::OAuthComplete { .. } => {
+            AuthState::Complete { .. } => {
                 if code == KeyCode::Esc || code == KeyCode::Enter {
                     self.popups.auth.reset();
-                    self.oauth_verifier = None;
                     self.popup = Popup::None;
-                }
-            }
-            AuthState::OAuthError { .. } => {
-                if code == KeyCode::Esc || code == KeyCode::Backspace || code == KeyCode::Enter {
-                    self.oauth_verifier = None;
-                    self.popups.auth.go_back();
                 }
             }
         }

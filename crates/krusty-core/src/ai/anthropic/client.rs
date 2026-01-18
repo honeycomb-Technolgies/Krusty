@@ -1,36 +1,27 @@
 //! Anthropic Claude API client
 //!
-//! Implements the Anthropic API with proper header handling for both
-//! OAuth tokens and API keys.
+//! Implements the Anthropic API with proper header handling for API keys.
 
 use anyhow::Result;
 use futures::StreamExt;
 use reqwest::Client;
 use serde_json::Value;
-use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
-use crate::ai::sse::{
-    create_streaming_channels, parse_finish_reason, spawn_buffer_processor, ServerToolAccumulator,
-    SseEvent, SseParser, SseStreamProcessor, ThinkingAccumulator, ToolCallAccumulator,
-};
+use crate::ai::parsers::{AnthropicParser, OpenAIParser};
+use crate::ai::sse::{create_streaming_channels, spawn_buffer_processor, SseStreamProcessor};
 use crate::ai::streaming::StreamPart;
 use crate::ai::transform::build_provider_params;
 use crate::ai::types::{
-    AiTool, Citation, Content, ContextEditingMetrics, ContextManagement, FinishReason,
-    ModelMessage, Role, ThinkingConfig, Usage, WebFetchConfig, WebFetchContent, WebSearchConfig,
-    WebSearchResult,
+    AiTool, Content, ContextManagement, ModelMessage, Role, ThinkingConfig, WebFetchConfig,
+    WebSearchConfig,
 };
-use crate::auth::token_manager::TokenManager;
 use crate::constants;
 
 const DEFAULT_API_URL: &str = "https://api.anthropic.com/v1/messages";
 const API_VERSION: &str = "2023-06-01";
-
-/// OAuth token prefix - tokens starting with this use Bearer auth
-const OAUTH_TOKEN_PREFIX: &str = "sk-ant-oat";
 
 /// Krusty's core philosophy and behavioral guidance
 const KRUSTY_SYSTEM_PROMPT: &str = r#"You are Krusty, an AI coding assistant. You say what needs to be said, not what people want to hear. You're hard on code because bad code hurts the people who maintain it.
@@ -150,7 +141,7 @@ impl AnthropicConfig {
         }
     }
 
-    /// Check if this config is for the native Anthropic API (for OAuth-specific logic)
+    /// Check if this config is for the native Anthropic API
     pub fn is_anthropic(&self) -> bool {
         self.provider_id == ProviderId::Anthropic
     }
@@ -219,8 +210,7 @@ impl Default for CallOptions {
 pub struct AnthropicClient {
     http: Client,
     config: AnthropicConfig,
-    token_manager: Option<Arc<TokenManager>>,
-    api_key: Option<String>,
+    api_key: String,
 }
 
 impl AnthropicClient {
@@ -238,40 +228,18 @@ impl AnthropicClient {
             })
     }
 
-    /// Create a new client with OAuth token manager
-    pub fn with_token_manager(config: AnthropicConfig, token_manager: Arc<TokenManager>) -> Self {
-        Self {
-            http: Self::create_http_client(),
-            config,
-            token_manager: Some(token_manager),
-            api_key: None,
-        }
-    }
-
     /// Create a new client with API key
     pub fn with_api_key(config: AnthropicConfig, api_key: String) -> Self {
         Self {
             http: Self::create_http_client(),
             config,
-            token_manager: None,
-            api_key: Some(api_key),
+            api_key,
         }
     }
 
-    /// Get the current auth token
-    async fn get_auth_token(&self) -> Result<String> {
-        if let Some(ref token_manager) = self.token_manager {
-            token_manager.get_valid_token().await
-        } else if let Some(ref api_key) = self.api_key {
-            Ok(api_key.clone())
-        } else {
-            Err(anyhow::anyhow!("No authentication configured"))
-        }
-    }
-
-    /// Check if a token is an OAuth token
-    fn is_oauth_token(token: &str) -> bool {
-        token.starts_with(OAUTH_TOKEN_PREFIX)
+    /// Get the API key
+    fn get_api_key(&self) -> &str {
+        &self.api_key
     }
 
     /// Get the provider ID for this client
@@ -618,32 +586,16 @@ impl AnthropicClient {
         user_message: &str,
         max_tokens: usize,
     ) -> Result<String> {
-        let token = self.get_auth_token().await?;
-        let is_oauth = Self::is_oauth_token(&token);
-
-        // For OAuth, we must use Claude Code system prompt
-        // Put our instructions in the user message instead
-        let (system, message) = if is_oauth {
-            let combined_message = format!(
-                "<instructions>\n{}\n</instructions>\n\n{}",
-                system_prompt, user_message
-            );
-            (
-                "You are Claude Code, Anthropic's official CLI for Claude.".to_string(),
-                combined_message,
-            )
-        } else {
-            (system_prompt.to_string(), user_message.to_string())
-        };
+        let api_key = self.get_api_key();
 
         let body = serde_json::json!({
             "model": model,
             "max_tokens": max_tokens,
             "messages": [{
                 "role": "user",
-                "content": message
+                "content": user_message
             }],
-            "system": system
+            "system": system_prompt
         });
 
         let mut request = self
@@ -654,24 +606,16 @@ impl AnthropicClient {
         // Add auth header based on provider config
         match self.config.auth_header {
             AuthHeader::Bearer => {
-                request = request.header("authorization", format!("Bearer {}", token));
+                request = request.header("authorization", format!("Bearer {}", api_key));
             }
             AuthHeader::XApiKey => {
-                if is_oauth {
-                    request = request.header("authorization", format!("Bearer {}", token));
-                } else {
-                    request = request.header("x-api-key", &token);
-                }
+                request = request.header("x-api-key", api_key);
             }
         }
 
         // Add Anthropic API headers (all providers use Anthropic-compatible API)
         if self.config.uses_anthropic_api() {
             request = request.header("anthropic-version", API_VERSION);
-            // OAuth beta header only for native Anthropic with OAuth token
-            if self.config.is_anthropic() && is_oauth {
-                request = request.header("anthropic-beta", "oauth-2025-04-20");
-            }
         }
 
         let response = request.json(&body).send().await?;
@@ -702,9 +646,6 @@ impl AnthropicClient {
     ///
     /// Used for complex summarization tasks where we want deep analysis.
     /// Returns the text content after thinking completes.
-    ///
-    /// Note: For OAuth tokens, system_prompt is embedded in the user message
-    /// since OAuth requires the Claude Code system prompt.
     pub async fn call_with_thinking(
         &self,
         model: &str,
@@ -712,35 +653,19 @@ impl AnthropicClient {
         user_message: &str,
         thinking_budget: u32,
     ) -> Result<String> {
-        let token = self.get_auth_token().await?;
-        let is_oauth = Self::is_oauth_token(&token);
+        let api_key = self.get_api_key();
 
         // For thinking, max_tokens must be > budget_tokens
         let max_tokens = thinking_budget + 16000;
-
-        // For OAuth, we must use Claude Code system prompt
-        // Put our instructions in the user message instead
-        let (system, message) = if is_oauth {
-            let combined_message = format!(
-                "<instructions>\n{}\n</instructions>\n\n{}",
-                system_prompt, user_message
-            );
-            (
-                "You are Claude Code, Anthropic's official CLI for Claude.".to_string(),
-                combined_message,
-            )
-        } else {
-            (system_prompt.to_string(), user_message.to_string())
-        };
 
         let mut body = serde_json::json!({
             "model": model,
             "max_tokens": max_tokens,
             "messages": [{
                 "role": "user",
-                "content": message
+                "content": user_message
             }],
-            "system": system,
+            "system": system_prompt,
             "thinking": {
                 "type": "enabled",
                 "budget_tokens": thinking_budget
@@ -762,14 +687,10 @@ impl AnthropicClient {
         // Add auth header based on provider config
         match self.config.auth_header {
             AuthHeader::Bearer => {
-                request = request.header("authorization", format!("Bearer {}", token));
+                request = request.header("authorization", format!("Bearer {}", api_key));
             }
             AuthHeader::XApiKey => {
-                if is_oauth {
-                    request = request.header("authorization", format!("Bearer {}", token));
-                } else {
-                    request = request.header("x-api-key", &token);
-                }
+                request = request.header("x-api-key", api_key);
             }
         }
 
@@ -779,10 +700,6 @@ impl AnthropicClient {
 
             // Build beta headers
             let mut beta_parts = vec!["interleaved-thinking-2025-05-14"];
-            // OAuth beta only for native Anthropic with OAuth token
-            if self.config.is_anthropic() && is_oauth {
-                beta_parts.insert(0, "oauth-2025-04-20");
-            }
             if model.contains("opus-4-5") {
                 beta_parts.push("effort-2025-11-24");
             }
@@ -823,7 +740,6 @@ impl AnthropicClient {
     /// Call the API with tools (non-streaming, for sub-agents)
     ///
     /// Used by sub-agents that need tool execution but don't need streaming.
-    /// Handles OAuth tokens correctly by using Claude Code system prompt.
     pub async fn call_with_tools(
         &self,
         model: &str,
@@ -832,55 +748,13 @@ impl AnthropicClient {
         tools: Vec<Value>,
         max_tokens: usize,
     ) -> Result<Value> {
-        let token = self.get_auth_token().await?;
-        let is_oauth = Self::is_oauth_token(&token);
-
-        // For OAuth, we must use Claude Code system prompt
-        // Inject our instructions into the first user message
-        let (system, final_messages) = if is_oauth {
-            let mut modified_messages = messages.clone();
-
-            // Find first user message and prepend instructions
-            if let Some(first_msg) = modified_messages.first_mut() {
-                if first_msg.get("role").and_then(|r| r.as_str()) == Some("user") {
-                    if let Some(content) = first_msg.get("content") {
-                        let instructions = format!(
-                            "<sub-agent-instructions>\n{}\n</sub-agent-instructions>\n\n",
-                            system_prompt
-                        );
-
-                        // Handle both string and array content
-                        if let Some(text) = content.as_str() {
-                            first_msg["content"] = serde_json::json!([{
-                                "type": "text",
-                                "text": format!("{}{}", instructions, text)
-                            }]);
-                        } else if let Some(arr) = content.as_array() {
-                            let mut new_content = vec![serde_json::json!({
-                                "type": "text",
-                                "text": instructions
-                            })];
-                            new_content.extend(arr.clone());
-                            first_msg["content"] = serde_json::json!(new_content);
-                        }
-                    }
-                }
-            }
-
-            (
-                // CRITICAL: OAuth requires EXACTLY this system prompt - no modifications!
-                "You are Claude Code, Anthropic's official CLI for Claude.".to_string(),
-                modified_messages,
-            )
-        } else {
-            (system_prompt.to_string(), messages)
-        };
+        let api_key = self.get_api_key();
 
         let body = serde_json::json!({
             "model": model,
             "max_tokens": max_tokens,
-            "messages": final_messages,
-            "system": system,
+            "messages": messages,
+            "system": system_prompt,
             "tools": tools
         });
 
@@ -892,36 +766,21 @@ impl AnthropicClient {
         // Add auth header based on provider config
         match self.config.auth_header {
             AuthHeader::Bearer => {
-                request = request.header("authorization", format!("Bearer {}", token));
+                request = request.header("authorization", format!("Bearer {}", api_key));
             }
             AuthHeader::XApiKey => {
-                if is_oauth {
-                    request = request.header("authorization", format!("Bearer {}", token));
-                } else {
-                    request = request.header("x-api-key", &token);
-                }
+                request = request.header("x-api-key", api_key);
             }
         }
 
         // Add Anthropic API headers (all providers use Anthropic-compatible API)
         if self.config.uses_anthropic_api() {
             request = request.header("anthropic-version", API_VERSION);
-
-            // Build beta headers
-            let mut beta_headers: Vec<&str> = Vec::new();
-            // OAuth beta only for native Anthropic with OAuth token
-            if self.config.is_anthropic() && is_oauth {
-                beta_headers.push("oauth-2025-04-20");
-            }
             // Thinking beta for all providers that support it
-            beta_headers.push("interleaved-thinking-2025-05-14");
-
-            if !beta_headers.is_empty() {
-                request = request.header("anthropic-beta", beta_headers.join(","));
-            }
+            request = request.header("anthropic-beta", "interleaved-thinking-2025-05-14");
         }
 
-        info!(model = model, is_oauth = is_oauth, provider = %self.config.provider_id, "Sub-agent API call starting");
+        info!(model = model, provider = %self.config.provider_id, "Sub-agent API call starting");
         let start = std::time::Instant::now();
 
         let response = match request.json(&body).send().await {
@@ -973,7 +832,7 @@ impl AnthropicClient {
                 .await;
         }
 
-        let token = self.get_auth_token().await?;
+        let api_key = self.get_api_key();
         let anthropic_messages = self.convert_messages(&messages);
 
         // Extract any system messages from conversation (e.g., pinch context)
@@ -990,77 +849,22 @@ impl AnthropicClient {
             .collect::<Vec<_>>()
             .join("\n\n");
 
-        // Determine if using OAuth - this affects system prompt handling
-        let is_oauth = Self::is_oauth_token(&token);
-
         // Build system prompt
-        // CRITICAL: OAuth MUST use exact Claude Code prompt - cannot be modified
-        let mut system = if is_oauth {
-            // OAuth requires the exact Claude Code system prompt
-            "You are Claude Code, Anthropic's official CLI for Claude.".to_string()
-        } else if let Some(custom) = &options.system_prompt {
+        let mut system = if let Some(custom) = &options.system_prompt {
             custom.clone()
         } else {
-            // Default for API keys - full Krusty philosophy
+            // Default - full Krusty philosophy
             KRUSTY_SYSTEM_PROMPT.to_string()
         };
 
-        // Handle injected context (pinch context, etc.)
-        // For OAuth: inject into first user message (system prompt must stay unchanged)
-        // For API key: append to system prompt
-        let mut anthropic_messages = anthropic_messages; // Make mutable
+        // Handle injected context (pinch context, etc.) - append to system prompt
         if !injected_context.is_empty() {
-            if is_oauth {
-                // For OAuth, prepend to first user message
-                if let Some(first_msg) = anthropic_messages.first_mut() {
-                    if first_msg.get("role").and_then(|r| r.as_str()) == Some("user") {
-                        let context_block = serde_json::json!({
-                            "type": "text",
-                            "text": format!("<pinch-context>\n{}\n</pinch-context>\n\n", injected_context)
-                        });
-
-                        if let Some(content) = first_msg.get_mut("content") {
-                            if let Some(arr) = content.as_array_mut() {
-                                // Insert at beginning of content array
-                                arr.insert(0, context_block);
-                            }
-                        }
-                        info!(
-                            "OAuth: Injected {} chars of pinch context into first user message",
-                            injected_context.len()
-                        );
-                    }
-                }
-            } else {
-                // For API key, append to system prompt
-                system.push_str("\n\n---\n\n");
-                system.push_str(&injected_context);
-                info!(
-                    "Injected {} chars of context into system prompt",
-                    injected_context.len()
-                );
-            }
-        }
-
-        // For OAuth: inject Krusty philosophy into first user message
-        // (since we can't modify the Claude Code system prompt)
-        if is_oauth {
-            if let Some(first_msg) = anthropic_messages.first_mut() {
-                if first_msg.get("role").and_then(|r| r.as_str()) == Some("user") {
-                    let philosophy_block = serde_json::json!({
-                        "type": "text",
-                        "text": format!("<krusty-philosophy>\n{}\n</krusty-philosophy>\n\n", KRUSTY_SYSTEM_PROMPT)
-                    });
-
-                    if let Some(content) = first_msg.get_mut("content") {
-                        if let Some(arr) = content.as_array_mut() {
-                            // Insert at very beginning (before pinch-context if present)
-                            arr.insert(0, philosophy_block);
-                        }
-                    }
-                    debug!("OAuth: Injected Krusty philosophy into first user message");
-                }
-            }
+            system.push_str("\n\n---\n\n");
+            system.push_str(&injected_context);
+            info!(
+                "Injected {} chars of context into system prompt",
+                injected_context.len()
+            );
         }
 
         // Determine max_tokens based on reasoning format
@@ -1324,28 +1128,22 @@ impl AnthropicClient {
 
         debug!("Calling {} API with streaming", self.config.provider_id);
 
-        // Build request with proper headers based on provider and token type
+        // Build request with proper headers based on provider
         let mut request = self.http.post(self.config.api_url());
 
-        // Add auth header based on provider config and token type
+        // Add auth header based on provider config
         match self.config.auth_header {
             AuthHeader::Bearer => {
                 // OpenRouter and similar use Bearer auth
-                request = request.header("authorization", format!("Bearer {}", token));
+                request = request.header("authorization", format!("Bearer {}", api_key));
                 info!(
                     "Using Bearer authentication for {}",
                     self.config.provider_id
                 );
             }
             AuthHeader::XApiKey => {
-                // Anthropic-style: check if OAuth or API key
-                if is_oauth {
-                    request = request.header("authorization", format!("Bearer {}", token));
-                    info!("Using OAuth authentication");
-                } else {
-                    request = request.header("x-api-key", &token);
-                    info!("Using API key authentication");
-                }
+                request = request.header("x-api-key", api_key);
+                info!("Using API key authentication");
             }
         }
 
@@ -1353,11 +1151,6 @@ impl AnthropicClient {
         if self.config.uses_anthropic_api() {
             // Collect beta headers
             let mut beta_headers: Vec<&str> = Vec::new();
-
-            // OAuth beta header - only for native Anthropic with OAuth token
-            if self.config.is_anthropic() && is_oauth {
-                beta_headers.push("oauth-2025-04-20");
-            }
 
             // Add thinking beta headers for Anthropic reasoning format
             let anthropic_thinking =
@@ -1466,7 +1259,7 @@ impl AnthropicClient {
             self.config.model
         );
 
-        let token = self.get_auth_token().await?;
+        let api_key = self.get_api_key();
         let openai_messages = self.convert_messages_openai(&messages);
 
         // Extract system prompt from messages
@@ -1543,7 +1336,7 @@ impl AnthropicClient {
         let mut request = self.http.post(self.config.api_url());
 
         // Add auth header (OpenCode Zen uses x-api-key)
-        request = request.header("x-api-key", &token);
+        request = request.header("x-api-key", api_key);
         request = request.header("content-type", "application/json");
 
         // Send request
@@ -1596,786 +1389,5 @@ impl AnthropicClient {
         });
 
         Ok(rx)
-    }
-}
-
-/// OpenAI-compatible SSE parser for chat/completions format
-pub struct OpenAIParser {
-    /// Track tool calls being accumulated
-    tool_accumulators: std::sync::Mutex<std::collections::HashMap<usize, ToolCallAccumulator>>,
-}
-
-impl OpenAIParser {
-    pub fn new() -> Self {
-        Self {
-            tool_accumulators: std::sync::Mutex::new(std::collections::HashMap::new()),
-        }
-    }
-
-    /// Parse OpenAI Responses API event format
-    /// Used by GPT-5 models via OpenCode Zen
-    fn parse_responses_api_event(&self, json: &Value, event_type: &str) -> SseEvent {
-        match event_type {
-            // Text content delta
-            "response.output_text.delta" => {
-                if let Some(delta) = json.get("delta").and_then(|d| d.as_str()) {
-                    if !delta.is_empty() {
-                        return SseEvent::TextDelta(delta.to_string());
-                    }
-                }
-            }
-
-            // Response completed
-            "response.done" | "response.completed" => {
-                return SseEvent::Finish {
-                    reason: FinishReason::Stop,
-                };
-            }
-
-            // Function/tool call start
-            "response.function_call_arguments.start" | "response.output_item.added" => {
-                if let Some(item) = json.get("item") {
-                    if item.get("type").and_then(|t| t.as_str()) == Some("function_call") {
-                        let id = item
-                            .get("call_id")
-                            .and_then(|i| i.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let name = item
-                            .get("name")
-                            .and_then(|n| n.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        if !name.is_empty() {
-                            let mut accumulators = self.tool_accumulators.lock().unwrap();
-                            let index = accumulators.len();
-                            accumulators
-                                .insert(index, ToolCallAccumulator::new(id.clone(), name.clone()));
-                            return SseEvent::ToolCallStart { id, name };
-                        }
-                    }
-                }
-            }
-
-            // Function arguments delta
-            "response.function_call_arguments.delta" => {
-                if let Some(delta) = json.get("delta").and_then(|d| d.as_str()) {
-                    let accumulators = self.tool_accumulators.lock().unwrap();
-                    if let Some((_, acc)) = accumulators.iter().last() {
-                        return SseEvent::ToolCallDelta {
-                            id: acc.id.clone(),
-                            delta: delta.to_string(),
-                        };
-                    }
-                }
-            }
-
-            // Function call done
-            "response.function_call_arguments.done" => {
-                // Tool call complete, will be handled by finish event
-            }
-
-            // Usage info
-            "response.usage" => {
-                if let Some(usage) = json.get("usage") {
-                    let prompt = usage
-                        .get("input_tokens")
-                        .and_then(|t| t.as_u64())
-                        .unwrap_or(0) as usize;
-                    let completion = usage
-                        .get("output_tokens")
-                        .and_then(|t| t.as_u64())
-                        .unwrap_or(0) as usize;
-                    if prompt > 0 || completion > 0 {
-                        return SseEvent::Usage(Usage {
-                            prompt_tokens: prompt,
-                            completion_tokens: completion,
-                            total_tokens: prompt + completion,
-                            cache_creation_input_tokens: 0,
-                            cache_read_input_tokens: 0,
-                        });
-                    }
-                }
-            }
-
-            // Other events we can skip
-            _ => {}
-        }
-
-        SseEvent::Skip
-    }
-}
-
-impl Default for OpenAIParser {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait::async_trait]
-impl SseParser for OpenAIParser {
-    async fn parse_event(&self, json: &Value) -> Result<SseEvent> {
-        // Check for Responses API format (has "type" field)
-        if let Some(event_type) = json.get("type").and_then(|t| t.as_str()) {
-            return Ok(self.parse_responses_api_event(json, event_type));
-        }
-
-        // OpenAI Chat Completions format: {"choices": [{"index": 0, "delta": {...}, "finish_reason": null}]}
-        let choices = json.get("choices").and_then(|c| c.as_array());
-
-        if let Some(choices) = choices {
-            if let Some(choice) = choices.first() {
-                // Check for finish_reason
-                if let Some(reason) = choice.get("finish_reason").and_then(|r| r.as_str()) {
-                    if reason == "stop" || reason == "end_turn" {
-                        return Ok(SseEvent::Finish {
-                            reason: FinishReason::Stop,
-                        });
-                    }
-                    if reason == "tool_calls" {
-                        return Ok(SseEvent::Finish {
-                            reason: FinishReason::ToolCalls,
-                        });
-                    }
-                }
-
-                // Check for delta content
-                if let Some(delta) = choice.get("delta") {
-                    // Regular text content
-                    if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
-                        if !content.is_empty() {
-                            return Ok(SseEvent::TextDelta(content.to_string()));
-                        }
-                    }
-
-                    // Reasoning content (GLM-style thinking)
-                    if let Some(reasoning) = delta.get("reasoning_content").and_then(|r| r.as_str())
-                    {
-                        if !reasoning.is_empty() {
-                            // Treat reasoning as thinking delta
-                            return Ok(SseEvent::ThinkingDelta {
-                                index: 0,
-                                thinking: reasoning.to_string(),
-                            });
-                        }
-                    }
-
-                    // Tool calls
-                    if let Some(tool_calls) = delta.get("tool_calls").and_then(|t| t.as_array()) {
-                        for tool_call in tool_calls {
-                            let index = tool_call.get("index").and_then(|i| i.as_u64()).unwrap_or(0)
-                                as usize;
-
-                            // Check for function info (start of tool call)
-                            if let Some(function) = tool_call.get("function") {
-                                let id = tool_call
-                                    .get("id")
-                                    .and_then(|i| i.as_str())
-                                    .unwrap_or("")
-                                    .to_string();
-
-                                if let Some(name) = function.get("name").and_then(|n| n.as_str()) {
-                                    // New tool call starting
-                                    let mut accumulators = self.tool_accumulators.lock().unwrap();
-                                    accumulators.insert(
-                                        index,
-                                        ToolCallAccumulator::new(id.clone(), name.to_string()),
-                                    );
-                                    return Ok(SseEvent::ToolCallStart {
-                                        id,
-                                        name: name.to_string(),
-                                    });
-                                }
-
-                                if let Some(args) =
-                                    function.get("arguments").and_then(|a| a.as_str())
-                                {
-                                    // Arguments delta
-                                    let mut accumulators = self.tool_accumulators.lock().unwrap();
-                                    if let Some(acc) = accumulators.get_mut(&index) {
-                                        acc.add_arguments(args);
-                                        return Ok(SseEvent::ToolCallDelta {
-                                            id: acc.id.clone(),
-                                            delta: args.to_string(),
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Check for usage info
-        if let Some(usage) = json.get("usage") {
-            let prompt_tokens = usage
-                .get("prompt_tokens")
-                .and_then(|t| t.as_u64())
-                .unwrap_or(0) as usize;
-            let completion_tokens = usage
-                .get("completion_tokens")
-                .and_then(|t| t.as_u64())
-                .unwrap_or(0) as usize;
-            if prompt_tokens > 0 || completion_tokens > 0 {
-                return Ok(SseEvent::Usage(Usage {
-                    prompt_tokens,
-                    completion_tokens,
-                    total_tokens: prompt_tokens + completion_tokens,
-                    cache_creation_input_tokens: 0,
-                    cache_read_input_tokens: 0,
-                }));
-            }
-        }
-
-        // Check for [DONE] marker (OpenAI uses this)
-        // This is handled at the SSE line level, but just in case
-        Ok(SseEvent::Skip)
-    }
-}
-
-/// Anthropic-specific SSE parser
-pub struct AnthropicParser {
-    /// Track tool calls by content block index
-    tool_accumulators: std::sync::Mutex<std::collections::HashMap<usize, ToolCallAccumulator>>,
-    /// Track thinking blocks by content block index
-    thinking_accumulators: std::sync::Mutex<std::collections::HashMap<usize, ThinkingAccumulator>>,
-    /// Track server tool uses by content block index
-    server_tool_accumulators:
-        std::sync::Mutex<std::collections::HashMap<usize, ServerToolAccumulator>>,
-}
-
-impl AnthropicParser {
-    pub fn new() -> Self {
-        Self {
-            tool_accumulators: std::sync::Mutex::new(std::collections::HashMap::new()),
-            thinking_accumulators: std::sync::Mutex::new(std::collections::HashMap::new()),
-            server_tool_accumulators: std::sync::Mutex::new(std::collections::HashMap::new()),
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl SseParser for AnthropicParser {
-    async fn parse_event(&self, json: &Value) -> Result<SseEvent> {
-        let event_type = json.get("type").and_then(|t| t.as_str()).unwrap_or("");
-
-        match event_type {
-            "content_block_start" => {
-                let index = json.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
-
-                if let Some(content_block) = json.get("content_block") {
-                    let block_type = content_block.get("type").and_then(|t| t.as_str());
-
-                    match block_type {
-                        Some("tool_use") => {
-                            let id = content_block
-                                .get("id")
-                                .and_then(|i| i.as_str())
-                                .unwrap_or("")
-                                .to_string();
-                            let name = content_block
-                                .get("name")
-                                .and_then(|n| n.as_str())
-                                .unwrap_or("")
-                                .to_string();
-
-                            // Store accumulator by index
-                            let mut accumulators = self.tool_accumulators.lock().unwrap();
-                            accumulators
-                                .insert(index, ToolCallAccumulator::new(id.clone(), name.clone()));
-
-                            return Ok(SseEvent::ToolCallStart { id, name });
-                        }
-                        Some("server_tool_use") => {
-                            // Server-executed tool (web_search, web_fetch)
-                            let id = content_block
-                                .get("id")
-                                .and_then(|i| i.as_str())
-                                .unwrap_or("")
-                                .to_string();
-                            let name = content_block
-                                .get("name")
-                                .and_then(|n| n.as_str())
-                                .unwrap_or("")
-                                .to_string();
-
-                            let mut accumulators = self.server_tool_accumulators.lock().unwrap();
-                            accumulators.insert(
-                                index,
-                                ServerToolAccumulator::new(id.clone(), name.clone()),
-                            );
-
-                            return Ok(SseEvent::ServerToolStart { id, name });
-                        }
-                        Some("web_search_tool_result") => {
-                            // Parse search results immediately
-                            let tool_use_id = content_block
-                                .get("tool_use_id")
-                                .and_then(|i| i.as_str())
-                                .unwrap_or("")
-                                .to_string();
-
-                            let results = self.parse_search_results(content_block);
-                            return Ok(SseEvent::WebSearchResults {
-                                tool_use_id,
-                                results,
-                            });
-                        }
-                        Some("web_fetch_tool_result") => {
-                            // Parse fetch result immediately
-                            let tool_use_id = content_block
-                                .get("tool_use_id")
-                                .and_then(|i| i.as_str())
-                                .unwrap_or("")
-                                .to_string();
-
-                            if let Some(content) = self.parse_fetch_result(content_block) {
-                                return Ok(SseEvent::WebFetchResult {
-                                    tool_use_id,
-                                    content,
-                                });
-                            }
-
-                            // Check for error
-                            if let Some(err_content) = content_block.get("content") {
-                                if let Some(err_type) =
-                                    err_content.get("type").and_then(|t| t.as_str())
-                                {
-                                    if err_type == "web_fetch_tool_error"
-                                        || err_type == "web_search_tool_result_error"
-                                    {
-                                        let error_code = err_content
-                                            .get("error_code")
-                                            .and_then(|e| e.as_str())
-                                            .unwrap_or("unknown")
-                                            .to_string();
-                                        return Ok(SseEvent::ServerToolError {
-                                            tool_use_id,
-                                            error_code,
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                        Some("thinking") => {
-                            // Start tracking thinking block
-                            let mut accumulators = self.thinking_accumulators.lock().unwrap();
-                            accumulators.insert(index, ThinkingAccumulator::new());
-                            return Ok(SseEvent::ThinkingStart { index });
-                        }
-                        _ => {}
-                    }
-                }
-                Ok(SseEvent::Skip)
-            }
-
-            "content_block_delta" => {
-                let index = json.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
-
-                if let Some(delta) = json.get("delta") {
-                    let delta_type = delta.get("type").and_then(|t| t.as_str());
-
-                    match delta_type {
-                        Some("text_delta") => {
-                            let text = delta
-                                .get("text")
-                                .and_then(|t| t.as_str())
-                                .unwrap_or("")
-                                .to_string();
-
-                            // Check for citations
-                            if let Some(citations_arr) =
-                                delta.get("citations").and_then(|c| c.as_array())
-                            {
-                                let citations = self.parse_citations(citations_arr);
-                                if !citations.is_empty() {
-                                    return Ok(SseEvent::TextDeltaWithCitations {
-                                        text,
-                                        citations,
-                                    });
-                                }
-                            }
-                            return Ok(SseEvent::TextDelta(text));
-                        }
-                        Some("input_json_delta") => {
-                            let partial_json = delta
-                                .get("partial_json")
-                                .and_then(|p| p.as_str())
-                                .unwrap_or("")
-                                .to_string();
-
-                            // Check server tool accumulator first
-                            {
-                                let mut accumulators =
-                                    self.server_tool_accumulators.lock().unwrap();
-                                if let Some(acc) = accumulators.get_mut(&index) {
-                                    acc.add_input(&partial_json);
-                                    return Ok(SseEvent::ServerToolDelta {
-                                        id: acc.id.clone(),
-                                        delta: partial_json,
-                                    });
-                                }
-                            }
-
-                            // Then check client tool accumulator
-                            let mut accumulators = self.tool_accumulators.lock().unwrap();
-                            if let Some(acc) = accumulators.get_mut(&index) {
-                                acc.add_arguments(&partial_json);
-                                return Ok(SseEvent::ToolCallDelta {
-                                    id: acc.id.clone(),
-                                    delta: partial_json,
-                                });
-                            }
-                        }
-                        Some("thinking_delta") => {
-                            let thinking = delta
-                                .get("thinking")
-                                .and_then(|t| t.as_str())
-                                .unwrap_or("")
-                                .to_string();
-
-                            // Update thinking accumulator
-                            let mut accumulators = self.thinking_accumulators.lock().unwrap();
-                            if let Some(acc) = accumulators.get_mut(&index) {
-                                acc.add_thinking(&thinking);
-                            }
-                            return Ok(SseEvent::ThinkingDelta { index, thinking });
-                        }
-                        Some("signature_delta") => {
-                            let signature = delta
-                                .get("signature")
-                                .and_then(|s| s.as_str())
-                                .unwrap_or("")
-                                .to_string();
-
-                            // Update thinking accumulator signature
-                            let mut accumulators = self.thinking_accumulators.lock().unwrap();
-                            if let Some(acc) = accumulators.get_mut(&index) {
-                                acc.add_signature(&signature);
-                            }
-                            return Ok(SseEvent::SignatureDelta { index, signature });
-                        }
-                        _ => {}
-                    }
-                }
-                Ok(SseEvent::Skip)
-            }
-
-            "content_block_stop" => {
-                let index = json.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
-
-                // Check for completed server tool
-                {
-                    let mut accumulators = self.server_tool_accumulators.lock().unwrap();
-                    if let Some(mut acc) = accumulators.remove(&index) {
-                        let input = acc.complete();
-                        return Ok(SseEvent::ServerToolComplete {
-                            id: acc.id,
-                            name: acc.name,
-                            input,
-                        });
-                    }
-                }
-
-                // Check for completed client tool call
-                {
-                    let mut accumulators = self.tool_accumulators.lock().unwrap();
-                    if let Some(mut acc) = accumulators.remove(&index) {
-                        if let Some(tool_call) = acc.try_complete() {
-                            return Ok(SseEvent::ToolCallComplete(tool_call));
-                        } else {
-                            // Force complete if JSON is incomplete
-                            return Ok(SseEvent::ToolCallComplete(acc.force_complete()));
-                        }
-                    }
-                }
-
-                // Check for completed thinking block
-                {
-                    let mut accumulators = self.thinking_accumulators.lock().unwrap();
-                    if let Some(mut acc) = accumulators.remove(&index) {
-                        let (thinking, signature) = acc.complete();
-                        return Ok(SseEvent::ThinkingComplete {
-                            index,
-                            thinking,
-                            signature,
-                        });
-                    }
-                }
-
-                Ok(SseEvent::Skip)
-            }
-
-            "message_delta" => {
-                // Check usage FIRST (message_delta contains final token counts)
-                // Must check before stop_reason since both can be in same event
-                if let Some(usage) = json.get("usage") {
-                    let input_tokens = usage
-                        .get("input_tokens")
-                        .and_then(|t| t.as_u64())
-                        .unwrap_or(0) as usize;
-                    let output_tokens = usage
-                        .get("output_tokens")
-                        .and_then(|t| t.as_u64())
-                        .unwrap_or(0) as usize;
-
-                    // Only emit Usage if we have actual token data
-                    if input_tokens > 0 || output_tokens > 0 {
-                        let cache_read = usage
-                            .get("cache_read_input_tokens")
-                            .and_then(|t| t.as_u64())
-                            .unwrap_or(0) as usize;
-                        let cache_creation = usage
-                            .get("cache_creation_input_tokens")
-                            .and_then(|t| t.as_u64())
-                            .unwrap_or(0) as usize;
-                        return Ok(SseEvent::Usage(Usage {
-                            prompt_tokens: input_tokens,
-                            completion_tokens: output_tokens,
-                            total_tokens: input_tokens + output_tokens,
-                            cache_creation_input_tokens: cache_creation,
-                            cache_read_input_tokens: cache_read,
-                        }));
-                    }
-                }
-
-                // Then check for stop_reason (Finish comes from message_stop anyway)
-                if let Some(delta) = json.get("delta") {
-                    if let Some(stop_reason) = delta.get("stop_reason").and_then(|s| s.as_str()) {
-                        let reason = parse_finish_reason(stop_reason);
-                        return Ok(SseEvent::Finish { reason });
-                    }
-                }
-
-                Ok(SseEvent::Skip)
-            }
-
-            "message_start" => {
-                if let Some(message) = json.get("message") {
-                    // Parse context editing metrics first
-                    if let Some(ctx_edit) = message.get("context_editing") {
-                        let metrics = ContextEditingMetrics {
-                            cleared_tool_uses: ctx_edit
-                                .get("cleared_tool_uses")
-                                .and_then(|v| v.as_u64())
-                                .unwrap_or(0)
-                                as usize,
-                            cleared_thinking_turns: ctx_edit
-                                .get("cleared_thinking_turns")
-                                .and_then(|v| v.as_u64())
-                                .unwrap_or(0)
-                                as usize,
-                            cleared_input_tokens: ctx_edit
-                                .get("cleared_input_tokens")
-                                .and_then(|v| v.as_u64())
-                                .unwrap_or(0)
-                                as usize,
-                        };
-                        if metrics.cleared_input_tokens > 0 {
-                            info!("Context edited: cleared {} tokens ({} tool uses, {} thinking turns)",
-                                metrics.cleared_input_tokens,
-                                metrics.cleared_tool_uses,
-                                metrics.cleared_thinking_turns);
-                        }
-                        return Ok(SseEvent::ContextEdited(metrics));
-                    }
-
-                    if let Some(usage) = message.get("usage") {
-                        let input_tokens = usage
-                            .get("input_tokens")
-                            .and_then(|t| t.as_u64())
-                            .unwrap_or(0) as usize;
-                        let cache_creation = usage
-                            .get("cache_creation_input_tokens")
-                            .and_then(|t| t.as_u64())
-                            .unwrap_or(0) as usize;
-                        let cache_read = usage
-                            .get("cache_read_input_tokens")
-                            .and_then(|t| t.as_u64())
-                            .unwrap_or(0) as usize;
-
-                        // Log cache metrics
-                        if cache_creation > 0 || cache_read > 0 {
-                            info!(
-                                "Cache metrics: read={}, created={}, fresh={}",
-                                cache_read, cache_creation, input_tokens
-                            );
-                        }
-
-                        let total_input = input_tokens + cache_creation + cache_read;
-                        return Ok(SseEvent::Usage(Usage {
-                            prompt_tokens: total_input,
-                            completion_tokens: 0,
-                            total_tokens: total_input,
-                            cache_creation_input_tokens: cache_creation,
-                            cache_read_input_tokens: cache_read,
-                        }));
-                    }
-                }
-                Ok(SseEvent::Skip)
-            }
-
-            "message_stop" => Ok(SseEvent::Finish {
-                reason: FinishReason::Stop,
-            }),
-
-            "error" => {
-                let error_msg = json
-                    .get("error")
-                    .and_then(|e| e.get("message"))
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("Unknown error");
-                Err(anyhow::anyhow!("API error: {}", error_msg))
-            }
-
-            _ => Ok(SseEvent::Skip),
-        }
-    }
-}
-
-impl Default for AnthropicParser {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-// Helper methods for parsing web search/fetch results
-impl AnthropicParser {
-    /// Parse web search results from content block
-    fn parse_search_results(&self, content_block: &Value) -> Vec<WebSearchResult> {
-        let mut results = Vec::new();
-
-        if let Some(content_arr) = content_block.get("content").and_then(|c| c.as_array()) {
-            for item in content_arr {
-                if item.get("type").and_then(|t| t.as_str()) == Some("web_search_result") {
-                    let url = item
-                        .get("url")
-                        .and_then(|u| u.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let title = item
-                        .get("title")
-                        .and_then(|t| t.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let encrypted_content = item
-                        .get("encrypted_content")
-                        .and_then(|e| e.as_str())
-                        .map(|s| s.to_string());
-                    let page_age = item
-                        .get("page_age")
-                        .and_then(|p| p.as_str())
-                        .map(|s| s.to_string());
-
-                    results.push(WebSearchResult {
-                        url,
-                        title,
-                        encrypted_content,
-                        page_age,
-                    });
-                }
-            }
-        }
-
-        results
-    }
-
-    /// Parse web fetch result from content block
-    fn parse_fetch_result(&self, content_block: &Value) -> Option<WebFetchContent> {
-        let content = content_block.get("content")?;
-
-        // Check if it's a web_fetch_result
-        if content.get("type").and_then(|t| t.as_str()) != Some("web_fetch_result") {
-            return None;
-        }
-
-        let url = content
-            .get("url")
-            .and_then(|u| u.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        let retrieved_at = content
-            .get("retrieved_at")
-            .and_then(|r| r.as_str())
-            .map(|s| s.to_string());
-
-        // Parse document content
-        if let Some(doc) = content.get("content") {
-            let title = doc
-                .get("title")
-                .and_then(|t| t.as_str())
-                .map(|s| s.to_string());
-
-            if let Some(source) = doc.get("source") {
-                let media_type = source
-                    .get("media_type")
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("text/plain")
-                    .to_string();
-
-                // Get content based on source type
-                let content_data = if source.get("type").and_then(|t| t.as_str()) == Some("base64")
-                {
-                    source
-                        .get("data")
-                        .and_then(|d| d.as_str())
-                        .unwrap_or("")
-                        .to_string()
-                } else {
-                    source
-                        .get("data")
-                        .and_then(|d| d.as_str())
-                        .unwrap_or("")
-                        .to_string()
-                };
-
-                return Some(WebFetchContent {
-                    url,
-                    content: content_data,
-                    media_type,
-                    title,
-                    retrieved_at,
-                });
-            }
-        }
-
-        None
-    }
-
-    /// Parse citations from a text delta
-    fn parse_citations(&self, citations_arr: &[Value]) -> Vec<Citation> {
-        citations_arr
-            .iter()
-            .filter_map(|c| {
-                // Handle web_search_result_location type
-                let url = c
-                    .get("url")
-                    .and_then(|u| u.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let title = c
-                    .get("title")
-                    .and_then(|t| t.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let cited_text = c
-                    .get("cited_text")
-                    .and_then(|t| t.as_str())
-                    .unwrap_or("")
-                    .to_string();
-
-                if url.is_empty() && title.is_empty() {
-                    None
-                } else {
-                    Some(Citation {
-                        url,
-                        title,
-                        cited_text,
-                    })
-                }
-            })
-            .collect()
     }
 }

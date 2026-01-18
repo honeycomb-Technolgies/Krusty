@@ -315,8 +315,6 @@ pub struct ProviderCapabilities {
     pub context_management: bool,
     /// Prompt caching support
     pub prompt_caching: bool,
-    /// OAuth authentication support
-    pub oauth: bool,
     /// Web search via plugins array (OpenRouter style)
     pub web_plugins: bool,
 }
@@ -330,7 +328,6 @@ impl ProviderCapabilities {
                 web_fetch: true,
                 context_management: true,
                 prompt_caching: true,
-                oauth: true,
                 web_plugins: false,
             },
             ProviderId::OpenRouter => Self {
@@ -338,7 +335,6 @@ impl ProviderCapabilities {
                 web_fetch: false,
                 context_management: false,
                 prompt_caching: false,
-                oauth: false,
                 web_plugins: true, // Uses plugins array
             },
             ProviderId::OpenCodeZen => Self {
@@ -346,7 +342,6 @@ impl ProviderCapabilities {
                 web_fetch: true,  // Supports Anthropic's web_fetch tool
                 context_management: false,
                 prompt_caching: false, // Unclear if supported
-                oauth: false,
                 web_plugins: false,
             },
             // Other providers: minimal capabilities
@@ -632,7 +627,6 @@ mod tests {
         let anthropic = ProviderCapabilities::for_provider(ProviderId::Anthropic);
         assert!(anthropic.web_search);
         assert!(anthropic.web_fetch);
-        assert!(anthropic.oauth);
         assert!(!anthropic.web_plugins);
 
         let openrouter = ProviderCapabilities::for_provider(ProviderId::OpenRouter);

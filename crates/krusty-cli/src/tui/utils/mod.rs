@@ -3,7 +3,6 @@
 //! Common helper functions and types used throughout the TUI.
 
 mod channels;
-mod oauth;
 mod syntax;
 mod text;
 mod title;

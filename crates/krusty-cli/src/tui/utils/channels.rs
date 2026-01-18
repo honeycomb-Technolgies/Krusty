@@ -9,7 +9,6 @@ use crate::agent::subagent::AgentProgress;
 use crate::agent::SummarizationResult;
 use crate::ai::models::ModelMetadata;
 use crate::ai::types::Content;
-use crate::auth::TokenResponse;
 use crate::lsp::manager::MissingLspInfo;
 use crate::tools::ToolOutputChunk;
 use crate::tui::popups::lsp_browser::ZedApiExtension;
@@ -56,8 +55,6 @@ pub struct AsyncChannels {
     pub mcp_status: Option<mpsc::UnboundedReceiver<McpStatusUpdate>>,
     /// LSP extension fetch result receiver
     pub lsp_fetch: Option<oneshot::Receiver<Result<Vec<ZedApiExtension>, String>>>,
-    /// OAuth token exchange result receiver
-    pub oauth: Option<oneshot::Receiver<Result<TokenResponse, String>>>,
     /// Streaming bash output receiver
     pub bash_output: Option<mpsc::UnboundedReceiver<ToolOutputChunk>>,
     /// Pending tool execution results receiver

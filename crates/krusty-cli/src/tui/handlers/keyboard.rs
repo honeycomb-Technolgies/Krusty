@@ -171,12 +171,6 @@ impl App {
                     }
                     return;
                 }
-                AuthState::OAuthWaitingForCode { .. } => {
-                    for c in text.chars() {
-                        self.popups.auth.add_oauth_code_char(c);
-                    }
-                    return;
-                }
                 _ => {}
             }
         }

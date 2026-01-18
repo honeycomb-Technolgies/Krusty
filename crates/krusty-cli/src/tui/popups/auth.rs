@@ -1,60 +1,30 @@
-//! Authentication popups (provider selection, API key input, OAuth)
+//! Authentication popups (provider selection, API key input)
 
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Paragraph},
     Frame,
 };
 
 use super::common::{center_rect, popup_block, popup_title, render_popup_background, PopupSize};
 use crate::ai::providers::{builtin_providers, ProviderId};
 use crate::tui::themes::Theme;
-use crate::tui::utils::truncate_ellipsis;
-
-/// Auth method selection (Anthropic only)
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum AuthMethod {
-    OAuth,
-    ApiKey,
-}
 
 /// Auth popup states
 #[derive(Debug, Clone)]
 pub enum AuthState {
     /// Select which provider to configure
-    ProviderSelection {
-        selected_index: usize,
-    },
-    /// Anthropic-specific: choose OAuth or API key
-    MethodSelection {
-        provider: ProviderId,
-        selected: AuthMethod,
-    },
+    ProviderSelection { selected_index: usize },
     /// Enter API key for any provider
     ApiKeyInput {
         provider: ProviderId,
         input: String,
         error: Option<String>,
     },
-    /// OAuth states (Anthropic only)
-    OAuthWaitingForBrowser {
-        url: String,
-    },
-    OAuthWaitingForCode {
-        url: String,
-        code_input: String,
-    },
-    OAuthExchanging {
-        status: String,
-    },
-    OAuthComplete {
-        provider: ProviderId,
-    },
-    OAuthError {
-        error: String,
-    },
+    /// API key saved successfully
+    Complete { provider: ProviderId },
 }
 
 impl Default for AuthState {
@@ -112,129 +82,27 @@ impl AuthPopup {
         }
     }
 
-    /// Confirm provider selection
+    /// Confirm provider selection - go to API key input
     pub fn confirm_provider(&mut self) {
         if let AuthState::ProviderSelection { selected_index } = &self.state {
             let providers = builtin_providers();
             if let Some(provider) = providers.get(*selected_index) {
-                if provider.id == ProviderId::Anthropic {
-                    // Anthropic gets OAuth option
-                    self.state = AuthState::MethodSelection {
-                        provider: provider.id,
-                        selected: AuthMethod::OAuth,
-                    };
-                } else {
-                    // Other providers go straight to API key input
-                    self.state = AuthState::ApiKeyInput {
-                        provider: provider.id,
-                        input: String::new(),
-                        error: None,
-                    };
-                }
-            }
-        }
-    }
-
-    pub fn toggle_method(&mut self) {
-        if let AuthState::MethodSelection { selected, .. } = &mut self.state {
-            *selected = match selected {
-                AuthMethod::OAuth => AuthMethod::ApiKey,
-                AuthMethod::ApiKey => AuthMethod::OAuth,
-            };
-        }
-    }
-
-    pub fn confirm_method(&mut self) {
-        if let AuthState::MethodSelection { provider, selected } = &self.state {
-            self.state = match selected {
-                AuthMethod::OAuth => AuthState::OAuthWaitingForBrowser { url: String::new() },
-                AuthMethod::ApiKey => AuthState::ApiKeyInput {
-                    provider: *provider,
+                self.state = AuthState::ApiKeyInput {
+                    provider: provider.id,
                     input: String::new(),
                     error: None,
-                },
-            };
+                };
+            }
         }
     }
 
     /// Go back to provider selection
     pub fn go_back(&mut self) {
         match &self.state {
-            // From method selection, go back to provider selection
-            AuthState::MethodSelection { .. } => {
+            AuthState::ApiKeyInput { .. } => {
                 self.state = AuthState::ProviderSelection { selected_index: 0 };
             }
-            // From API key input, go back appropriately
-            AuthState::ApiKeyInput { provider, .. } => {
-                if *provider == ProviderId::Anthropic {
-                    // Anthropic has method selection
-                    self.state = AuthState::MethodSelection {
-                        provider: *provider,
-                        selected: AuthMethod::ApiKey,
-                    };
-                } else {
-                    // Other providers go straight to provider selection
-                    self.state = AuthState::ProviderSelection { selected_index: 0 };
-                }
-            }
-            // OAuth states go back to method selection (OAuth is Anthropic-only)
-            AuthState::OAuthWaitingForBrowser { .. }
-            | AuthState::OAuthWaitingForCode { .. }
-            | AuthState::OAuthError { .. } => {
-                self.state = AuthState::MethodSelection {
-                    provider: ProviderId::Anthropic,
-                    selected: AuthMethod::OAuth,
-                };
-            }
             _ => {}
-        }
-    }
-
-    /// Set the OAuth URL and move to waiting for code state
-    pub fn set_oauth_url(&mut self, url: String) {
-        self.state = AuthState::OAuthWaitingForCode {
-            url,
-            code_input: String::new(),
-        };
-    }
-
-    /// Set OAuth to exchanging state
-    pub fn set_oauth_exchanging(&mut self) {
-        self.state = AuthState::OAuthExchanging {
-            status: "Exchanging code for tokens...".to_string(),
-        };
-    }
-
-    pub fn set_oauth_complete(&mut self) {
-        self.state = AuthState::OAuthComplete {
-            provider: ProviderId::Anthropic,
-        };
-    }
-
-    pub fn set_oauth_error(&mut self, error: String) {
-        self.state = AuthState::OAuthError { error };
-    }
-
-    /// Add character to OAuth code input
-    pub fn add_oauth_code_char(&mut self, c: char) {
-        if let AuthState::OAuthWaitingForCode { code_input, .. } = &mut self.state {
-            code_input.push(c);
-        }
-    }
-
-    /// Backspace in OAuth code input
-    pub fn backspace_oauth_code(&mut self) {
-        if let AuthState::OAuthWaitingForCode { code_input, .. } = &mut self.state {
-            code_input.pop();
-        }
-    }
-
-    /// Get the OAuth code/URL input
-    pub fn get_oauth_code(&self) -> Option<&str> {
-        if let AuthState::OAuthWaitingForCode { code_input, .. } = &self.state {
-            Some(code_input.as_str())
-        } else {
-            None
         }
     }
 
@@ -258,12 +126,29 @@ impl AuthPopup {
         }
     }
 
+    /// Get current provider being configured
+    pub fn get_current_provider(&self) -> Option<ProviderId> {
+        match &self.state {
+            AuthState::ApiKeyInput { provider, .. } => Some(*provider),
+            AuthState::Complete { provider } => Some(*provider),
+            _ => None,
+        }
+    }
+
     /// Mark API key as successfully saved
     pub fn set_api_key_complete(&mut self) {
         if let AuthState::ApiKeyInput { provider, .. } = &self.state {
-            self.state = AuthState::OAuthComplete {
-                provider: *provider,
-            };
+            self.state = AuthState::Complete { provider: *provider };
+        }
+    }
+
+    /// Set error message for API key input
+    pub fn set_api_key_error(&mut self, error: String) {
+        if let AuthState::ApiKeyInput {
+            error: err_field, ..
+        } = &mut self.state
+        {
+            *err_field = Some(error);
         }
     }
 
@@ -272,21 +157,12 @@ impl AuthPopup {
             AuthState::ProviderSelection { selected_index } => {
                 self.render_provider_selection(f, theme, *selected_index)
             }
-            AuthState::MethodSelection { selected, .. } => {
-                self.render_method_selection(f, theme, *selected)
-            }
             AuthState::ApiKeyInput {
                 provider,
                 input,
                 error,
             } => self.render_api_key_input(f, theme, *provider, input, error.as_deref()),
-            AuthState::OAuthWaitingForBrowser { url } => self.render_oauth_browser(f, theme, url),
-            AuthState::OAuthWaitingForCode { url, code_input } => {
-                self.render_oauth_code_input(f, theme, url, code_input)
-            }
-            AuthState::OAuthExchanging { status } => self.render_oauth_exchanging(f, theme, status),
-            AuthState::OAuthComplete { provider } => self.render_complete(f, theme, *provider),
-            AuthState::OAuthError { error } => self.render_oauth_error(f, theme, error),
+            AuthState::Complete { provider } => self.render_complete(f, theme, *provider),
         }
     }
 
@@ -386,93 +262,6 @@ impl AuthPopup {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(": cancel", Style::default().fg(theme.text_color)),
-        ]))
-        .alignment(Alignment::Center);
-        f.render_widget(footer, chunks[2]);
-    }
-
-    fn render_method_selection(&self, f: &mut Frame, theme: &Theme, selected: AuthMethod) {
-        let (w, h) = PopupSize::Small.dimensions();
-        let area = center_rect(w, h, f.area());
-        render_popup_background(f, area, theme);
-
-        let block = popup_block(theme);
-        let inner = block.inner(area);
-        f.render_widget(block, area);
-
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3), // Title
-                Constraint::Min(5),    // Content
-                Constraint::Length(2), // Footer
-            ])
-            .split(inner);
-
-        // Title
-        let title_lines = popup_title("Anthropic Auth Method", theme);
-        let title = Paragraph::new(title_lines).alignment(Alignment::Center);
-        f.render_widget(title, chunks[0]);
-
-        // Options
-        let methods = [
-            (
-                AuthMethod::OAuth,
-                "OAuth (Recommended)",
-                "Sign in via browser",
-            ),
-            (AuthMethod::ApiKey, "API Key", "Enter your API key directly"),
-        ];
-
-        let mut lines = Vec::new();
-        for (method, name, desc) in methods {
-            let is_selected = method == selected;
-            let prefix = if is_selected { "  › " } else { "    " };
-            let style = if is_selected {
-                Style::default()
-                    .fg(theme.accent_color)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme.text_color)
-            };
-
-            lines.push(Line::from(vec![
-                Span::styled(prefix.to_string(), style),
-                Span::styled(name.to_string(), style),
-            ]));
-            lines.push(Line::from(vec![
-                Span::styled("      ".to_string(), Style::default()),
-                Span::styled(desc.to_string(), Style::default().fg(theme.dim_color)),
-            ]));
-            lines.push(Line::from(""));
-        }
-
-        let content = Paragraph::new(lines);
-        f.render_widget(content, chunks[1]);
-
-        // Footer
-        let footer = Paragraph::new(Line::from(vec![
-            Span::styled(
-                "↑↓",
-                Style::default()
-                    .fg(theme.accent_color)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(": select  ", Style::default().fg(theme.text_color)),
-            Span::styled(
-                "Enter",
-                Style::default()
-                    .fg(theme.accent_color)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(": continue  ", Style::default().fg(theme.text_color)),
-            Span::styled(
-                "Backspace",
-                Style::default()
-                    .fg(theme.accent_color)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(": back", Style::default().fg(theme.text_color)),
         ]))
         .alignment(Alignment::Center);
         f.render_widget(footer, chunks[2]);
@@ -593,195 +382,6 @@ impl AuthPopup {
         f.render_widget(footer, chunks[4]);
     }
 
-    fn render_oauth_browser(&self, f: &mut Frame, theme: &Theme, _url: &str) {
-        let (w, h) = PopupSize::Medium.dimensions();
-        let area = center_rect(w, h, f.area());
-        render_popup_background(f, area, theme);
-
-        let block = popup_block(theme);
-        let inner = block.inner(area);
-        f.render_widget(block, area);
-
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .margin(1)
-            .constraints([
-                Constraint::Length(3), // Title
-                Constraint::Min(4),    // Content
-                Constraint::Length(2), // Footer
-            ])
-            .split(inner);
-
-        // Title
-        let title_lines = popup_title("OAuth Authentication", theme);
-        let title = Paragraph::new(title_lines).alignment(Alignment::Center);
-        f.render_widget(title, chunks[0]);
-
-        let content = vec![
-            Line::from(""),
-            Line::from(Span::styled(
-                "Opening browser...",
-                Style::default()
-                    .fg(theme.accent_color)
-                    .add_modifier(Modifier::BOLD),
-            )),
-        ];
-        let waiting = Paragraph::new(content).alignment(Alignment::Center);
-        f.render_widget(waiting, chunks[1]);
-
-        let footer = Paragraph::new(Line::from(vec![
-            Span::styled(
-                "Esc",
-                Style::default()
-                    .fg(theme.accent_color)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(": cancel", Style::default().fg(theme.text_color)),
-        ]))
-        .alignment(Alignment::Center);
-        f.render_widget(footer, chunks[2]);
-    }
-
-    fn render_oauth_code_input(&self, f: &mut Frame, theme: &Theme, url: &str, code_input: &str) {
-        let (w, h) = PopupSize::Large.dimensions();
-        let area = center_rect(w, h, f.area());
-        render_popup_background(f, area, theme);
-
-        let block = popup_block(theme);
-        let inner = block.inner(area);
-        f.render_widget(block, area);
-
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .margin(1)
-            .constraints([
-                Constraint::Length(3), // Title
-                Constraint::Length(5), // Instructions
-                Constraint::Length(3), // URL display
-                Constraint::Length(3), // Input
-                Constraint::Min(1),    // Spacer
-                Constraint::Length(2), // Footer
-            ])
-            .split(inner);
-
-        // Title
-        let title_lines = popup_title("OAuth Authentication", theme);
-        let title = Paragraph::new(title_lines).alignment(Alignment::Center);
-        f.render_widget(title, chunks[0]);
-
-        // Instructions
-        let instructions = vec![
-            Line::from(Span::styled(
-                "1. Complete authentication in your browser",
-                Style::default().fg(theme.text_color),
-            )),
-            Line::from(Span::styled(
-                "2. After authorizing, you'll be redirected to a page",
-                Style::default().fg(theme.text_color),
-            )),
-            Line::from(Span::styled(
-                "3. Copy the ENTIRE URL from your browser's address bar",
-                Style::default().fg(theme.text_color),
-            )),
-            Line::from(Span::styled(
-                "4. Paste it below and press Enter",
-                Style::default().fg(theme.text_color),
-            )),
-        ];
-        let instr = Paragraph::new(instructions);
-        f.render_widget(instr, chunks[1]);
-
-        // URL display
-        let url_display = truncate_ellipsis(url, 63);
-        let url_widget = Paragraph::new(vec![
-            Line::from(Span::styled(
-                "Auth URL:",
-                Style::default().fg(theme.dim_color),
-            )),
-            Line::from(Span::styled(
-                url_display,
-                Style::default().fg(theme.accent_color),
-            )),
-        ]);
-        f.render_widget(url_widget, chunks[2]);
-
-        // Input field
-        let input_block = Block::default()
-            .title("Paste callback URL here:")
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(theme.border_color));
-
-        let display_text = if code_input.is_empty() {
-            "https://console.anthropic.com/oauth/code/callback?code=..."
-        } else {
-            code_input
-        };
-        let text_style = if code_input.is_empty() {
-            Style::default().fg(theme.dim_color)
-        } else {
-            Style::default().fg(theme.text_color)
-        };
-
-        let input_widget = Paragraph::new(display_text)
-            .style(text_style)
-            .block(input_block);
-        f.render_widget(input_widget, chunks[3]);
-
-        // Footer
-        let footer = Paragraph::new(Line::from(vec![
-            Span::styled(
-                "Enter",
-                Style::default()
-                    .fg(theme.accent_color)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(": submit  ", Style::default().fg(theme.text_color)),
-            Span::styled(
-                "Esc",
-                Style::default()
-                    .fg(theme.accent_color)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(": cancel", Style::default().fg(theme.text_color)),
-        ]))
-        .alignment(Alignment::Center);
-        f.render_widget(footer, chunks[5]);
-    }
-
-    fn render_oauth_exchanging(&self, f: &mut Frame, theme: &Theme, status: &str) {
-        let (w, h) = PopupSize::Medium.dimensions();
-        let area = center_rect(w, h, f.area());
-        render_popup_background(f, area, theme);
-
-        let block = popup_block(theme);
-        let inner = block.inner(area);
-        f.render_widget(block, area);
-
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .margin(1)
-            .constraints([
-                Constraint::Length(3), // Title
-                Constraint::Min(4),    // Content
-            ])
-            .split(inner);
-
-        // Title
-        let title_lines = popup_title("OAuth Authentication", theme);
-        let title = Paragraph::new(title_lines).alignment(Alignment::Center);
-        f.render_widget(title, chunks[0]);
-
-        let content = vec![
-            Line::from(""),
-            Line::from(Span::styled("...", Style::default().fg(theme.accent_color))),
-            Line::from(""),
-            Line::from(Span::styled(status, Style::default().fg(theme.text_color))),
-        ];
-        let waiting = Paragraph::new(content).alignment(Alignment::Center);
-        f.render_widget(waiting, chunks[1]);
-    }
-
     fn render_complete(&self, f: &mut Frame, theme: &Theme, provider: ProviderId) {
         let (w, h) = PopupSize::Medium.dimensions();
         let area = center_rect(w, h, f.area());
@@ -809,7 +409,7 @@ impl AuthPopup {
         let content = vec![
             Line::from(""),
             Line::from(Span::styled(
-                "Authentication successful!",
+                "API key saved successfully!",
                 Style::default()
                     .fg(theme.success_color)
                     .add_modifier(Modifier::BOLD),
@@ -822,59 +422,6 @@ impl AuthPopup {
         ];
         let success = Paragraph::new(content).alignment(Alignment::Center);
         f.render_widget(success, chunks[1]);
-
-        let footer = Paragraph::new(Line::from(vec![
-            Span::styled(
-                "Esc",
-                Style::default()
-                    .fg(theme.accent_color)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(": close", Style::default().fg(theme.text_color)),
-        ]))
-        .alignment(Alignment::Center);
-        f.render_widget(footer, chunks[2]);
-    }
-
-    fn render_oauth_error(&self, f: &mut Frame, theme: &Theme, error: &str) {
-        let (w, h) = PopupSize::Large.dimensions();
-        let area = center_rect(w, h, f.area());
-        render_popup_background(f, area, theme);
-
-        let block = popup_block(theme);
-        let inner = block.inner(area);
-        f.render_widget(block, area);
-
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .margin(1)
-            .constraints([
-                Constraint::Length(3), // Title
-                Constraint::Min(4),    // Content
-                Constraint::Length(2), // Footer
-            ])
-            .split(inner);
-
-        // Title
-        let title_lines = popup_title("Authentication Error", theme);
-        let title = Paragraph::new(title_lines).alignment(Alignment::Center);
-        f.render_widget(title, chunks[0]);
-
-        let content = vec![
-            Line::from(""),
-            Line::from(Span::styled(
-                "Authentication failed",
-                Style::default()
-                    .fg(theme.error_color)
-                    .add_modifier(Modifier::BOLD),
-            )),
-            Line::from(""),
-            Line::from(Span::styled(error, Style::default().fg(theme.text_color))),
-        ];
-        let error_widget = Paragraph::new(content)
-            .alignment(Alignment::Center)
-            .wrap(Wrap { trim: true });
-        f.render_widget(error_widget, chunks[1]);
 
         let footer = Paragraph::new(Line::from(vec![
             Span::styled(

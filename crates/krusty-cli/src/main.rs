@@ -2,7 +2,7 @@
 //!
 //! A terminal-based AI coding assistant with:
 //! - Zed's LSP extension ecosystem for 100+ language servers
-//! - Claude Code's auth system for Anthropic OAuth/API key
+//! - Multi-provider AI with API key authentication
 //! - Single-mode Chat UI with slash commands
 //! - Clean architecture from day one
 
@@ -10,9 +10,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 // Re-export core modules for TUI usage
-use krusty_core::{
-    agent, ai, auth, constants, extensions, lsp, paths, plan, process, storage, tools,
-};
+use krusty_core::{agent, ai, constants, extensions, lsp, paths, plan, process, storage, tools};
 
 mod tui;
 
@@ -49,7 +47,7 @@ enum Commands {
         action: Option<LspCommands>,
     },
 
-    /// Authenticate with providers (Anthropic OAuth)
+    /// Authenticate with providers
     Auth,
 }
 
@@ -307,11 +305,12 @@ async fn main() -> Result<()> {
         Some(Commands::Auth) => {
             println!("Authentication");
             println!();
-            println!("Use /auth in the TUI to authenticate with Anthropic.");
+            println!("Use /auth in the TUI to configure API keys for AI providers.");
             println!();
-            println!("Supported methods:");
-            println!("  - OAuth (recommended): Browser-based authentication");
-            println!("  - API Key: Enter your Anthropic API key directly");
+            println!("Supported providers:");
+            println!("  - Anthropic: https://console.anthropic.com/");
+            println!("  - OpenRouter: https://openrouter.ai/keys");
+            println!("  - OpenCode Zen: https://opencode.ai/zen");
         }
         Some(Commands::Chat) | None => {
             // Start TUI chat
