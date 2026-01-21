@@ -62,14 +62,14 @@ Default model: `claude-opus-4-5-20251101` (200K context, 16K output)
 
 Krusty supports multiple AI providers. Add API keys via `/auth` in the TUI.
 
-| Provider | Models | Notes |
-|----------|--------|-------|
-| **Anthropic** | Claude Opus 4.5, Sonnet 4.5, Haiku 4.5 | Extended thinking, web search/fetch |
-| **OpenRouter** | 100+ models (GPT, Gemini, Llama, Claude, etc.) | Pay-per-use aggregator |
-| **OpenCode Zen** | Claude, GPT-4, Gemini | Curated for coding, web search |
-| **Z.ai** | GLM-4 | Budget-friendly |
-| **MiniMax** | MiniMax-01 | Fast, interleaved thinking |
-| **Kimi** | K2, K2.5 | 256K context |
+| Provider | Models |
+|----------|--------|
+| **Anthropic** | Claude Opus 4.5, Claude Sonnet 4.5, Claude Haiku 4.5 |
+| **OpenRouter** | Claude (Opus/Sonnet/Haiku), GPT-4.1, GPT-4.5, o3, o4-mini, Gemini 2.5/2.0, DeepSeek R1/V3, Llama 4, Qwen 3, + 100 more |
+| **OpenCode Zen** | Claude Opus 4.5, Claude Sonnet 4.5/4, Claude Haiku 4.5, GPT-4.1, GPT-4.5, Gemini 2.5, Qwen Coder/Max |
+| **Z.ai** | GLM-4.7, GLM-4.5-Air |
+| **MiniMax** | MiniMax M2.1 Lightning, MiniMax M2.1, MiniMax M2 |
+| **Kimi** | Kimi K2, Kimi K2 Thinking |
 
 Switch providers and models anytime with `/model` or `Ctrl+M`.
 
