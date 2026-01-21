@@ -1701,6 +1701,28 @@ impl App {
         result
     }
 
+    /// Process a single terminal event
+    fn process_event(&mut self, event: Event) {
+        match event {
+            Event::Key(key) => {
+                self.handle_key(key.code, key.modifiers);
+                self.needs_redraw = true;
+            }
+            Event::Mouse(mouse) => {
+                self.handle_mouse_event(mouse);
+                self.needs_redraw = true;
+            }
+            Event::Paste(text) => {
+                self.handle_paste(text);
+                self.needs_redraw = true;
+            }
+            Event::Resize(_, _) => {
+                self.needs_redraw = true;
+            }
+            _ => {}
+        }
+    }
+
     /// Main event loop
     async fn main_loop(
         &mut self,
@@ -1852,23 +1874,18 @@ impl App {
 
                 maybe_event = event_stream.next() => {
                     if let Some(Ok(event)) = maybe_event {
-                        match event {
-                            Event::Key(key) => {
-                                self.handle_key(key.code, key.modifiers);
-                                self.needs_redraw = true;
+                        self.process_event(event);
+
+                        // Drain all pending events for snappy scrollbar dragging
+                        // This prevents event queue buildup during rapid mouse movements
+                        loop {
+                            match tokio::time::timeout(
+                                Duration::ZERO,
+                                event_stream.next()
+                            ).await {
+                                Ok(Some(Ok(event))) => self.process_event(event),
+                                _ => break, // No more events or error
                             }
-                            Event::Mouse(mouse) => {
-                                self.handle_mouse_event(mouse);
-                                self.needs_redraw = true;
-                            }
-                            Event::Paste(text) => {
-                                self.handle_paste(text);
-                                self.needs_redraw = true;
-                            }
-                            Event::Resize(_, _) => {
-                                self.needs_redraw = true;
-                            }
-                            _ => {}
                         }
                     }
                 }
