@@ -424,8 +424,18 @@ static BUILTIN_PROVIDERS: LazyLock<Vec<ProviderConfig>> = LazyLock::new(|| {
                 ModelInfo::new("anthropic/claude-opus-4", "Claude Opus 4", 200_000, 16_384),
                 // OpenAI models
                 ModelInfo::new("openai/gpt-5.2", "GPT-5.2", 400_000, 128_000),
-                ModelInfo::new("openai/gpt-5.2-instant", "GPT-5.2 Instant", 400_000, 128_000),
-                ModelInfo::new("openai/gpt-5.2-thinking", "GPT-5.2 Thinking", 400_000, 128_000),
+                ModelInfo::new(
+                    "openai/gpt-5.2-instant",
+                    "GPT-5.2 Instant",
+                    400_000,
+                    128_000,
+                ),
+                ModelInfo::new(
+                    "openai/gpt-5.2-thinking",
+                    "GPT-5.2 Thinking",
+                    400_000,
+                    128_000,
+                ),
                 ModelInfo::new("openai/gpt-5.2-pro", "GPT-5.2 Pro", 400_000, 128_000),
                 ModelInfo::new("openai/gpt-5.2-codex", "GPT-5.2 Codex", 400_000, 128_000),
                 ModelInfo::new("openai/o3", "OpenAI o3", 200_000, 100_000),
