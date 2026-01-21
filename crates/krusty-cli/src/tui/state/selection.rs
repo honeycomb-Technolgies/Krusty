@@ -4,6 +4,51 @@
 //! as well as scrollbar drag tracking for various block types.
 
 use crate::tui::blocks::BlockType;
+use ratatui::layout::Rect;
+
+/// Scrollbar drag state for messages/input - tracks initial position for relative dragging
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScrollbarDrag {
+    /// Y position where drag started
+    pub start_y: u16,
+    /// Scroll offset when drag started
+    pub start_offset: usize,
+    /// Scrollbar area for calculations
+    pub area: Rect,
+    /// Maximum scroll offset
+    pub max_scroll: usize,
+}
+
+impl ScrollbarDrag {
+    /// Create new drag state
+    pub fn new(start_y: u16, start_offset: usize, area: Rect, max_scroll: usize) -> Self {
+        Self {
+            start_y,
+            start_offset,
+            area,
+            max_scroll,
+        }
+    }
+
+    /// Calculate new scroll offset based on current y position (relative to start)
+    pub fn calculate_offset(&self, current_y: u16) -> usize {
+        if self.area.height <= 1 || self.max_scroll == 0 {
+            return self.start_offset;
+        }
+
+        // Calculate delta in pixels
+        let delta_y = current_y as i32 - self.start_y as i32;
+
+        // Convert pixel delta to scroll offset delta
+        // ratio: how much of max_scroll per pixel of scrollbar height
+        let scroll_per_pixel = self.max_scroll as f32 / (self.area.height.saturating_sub(1)) as f32;
+        let offset_delta = (delta_y as f32 * scroll_per_pixel).round() as i32;
+
+        // Apply delta to start offset, clamping to valid range
+        let new_offset = self.start_offset as i32 + offset_delta;
+        new_offset.clamp(0, self.max_scroll as i32) as usize
+    }
+}
 
 /// Scrollbar drag state for block scrollbars
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -32,8 +77,10 @@ impl BlockScrollbarDrag {
 /// Which scrollbar is being dragged
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DragTarget {
-    Input,
-    Messages,
+    /// Input scrollbar with drag state
+    Input(ScrollbarDrag),
+    /// Messages scrollbar with drag state
+    Messages(ScrollbarDrag),
     /// Plan sidebar scrollbar
     PlanSidebar,
     /// Block scrollbar (consolidated for all block types)

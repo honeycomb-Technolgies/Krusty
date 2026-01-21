@@ -8,7 +8,7 @@ use ratatui::layout::Position;
 
 use crate::tui::app::{App, Popup};
 use crate::tui::blocks::{BlockType, ClipContext, StreamBlock};
-use crate::tui::state::{BlockScrollbarDrag, DragTarget, SelectionArea};
+use crate::tui::state::{BlockScrollbarDrag, DragTarget, ScrollbarDrag, SelectionArea};
 
 /// Extract clip values from optional ClipContext
 fn extract_clip(clip: Option<ClipContext>) -> (u16, u16) {
@@ -182,26 +182,46 @@ impl App {
             }
         }
 
-        // Check scrollbar clicks
+        // Check scrollbar clicks - jump to position and start drag for continued movement
         if let Some(area) = self.layout.messages_scrollbar_area {
             if area.contains(Position::new(x, y)) {
-                self.handle_messages_scrollbar_click(y, area);
-                self.layout.dragging_scrollbar = Some(DragTarget::Messages);
+                // Jump to clicked position
+                let clamped_y = y.clamp(area.y, area.y + area.height.saturating_sub(1));
+                let relative_y = clamped_y.saturating_sub(area.y) as f32;
+                let height = (area.height.saturating_sub(1)).max(1) as f32;
+                let new_offset =
+                    ((relative_y / height) * self.scroll.max_scroll as f32).round() as usize;
+                self.scroll.scroll_to_line(new_offset);
+
+                // Start drag from new position for continued movement
+                let drag = ScrollbarDrag::new(y, new_offset, area, self.scroll.max_scroll);
+                self.layout.dragging_scrollbar = Some(DragTarget::Messages(drag));
                 return;
             }
         }
 
         if let Some(area) = self.layout.input_scrollbar_area {
             if area.contains(Position::new(x, y)) {
-                self.handle_input_scrollbar_click(y, area);
-                self.layout.dragging_scrollbar = Some(DragTarget::Input);
+                let total_lines = self.input.get_wrapped_lines_count();
+                let visible_lines = self.input.get_max_visible_lines() as usize;
+                let max_offset = total_lines.saturating_sub(visible_lines);
+
+                // Jump to clicked position
+                let clamped_y = y.clamp(area.y, area.y + area.height.saturating_sub(1));
+                let relative_y = clamped_y.saturating_sub(area.y) as f32;
+                let height = (area.height.saturating_sub(1)).max(1) as f32;
+                let new_offset = ((relative_y / height) * max_offset as f32).round() as usize;
+                self.input.set_viewport_offset(new_offset.min(max_offset));
+
+                // Start drag from new position for continued movement
+                let drag = ScrollbarDrag::new(y, new_offset, area, max_offset);
+                self.layout.dragging_scrollbar = Some(DragTarget::Input(drag));
                 return;
             }
         }
 
         if let Some(area) = self.layout.plan_sidebar_scrollbar_area {
             if area.contains(Position::new(x, y)) {
-                self.handle_plan_sidebar_scrollbar_click(y, area);
                 self.layout.dragging_scrollbar = Some(DragTarget::PlanSidebar);
                 return;
             }

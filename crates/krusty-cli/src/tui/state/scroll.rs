@@ -113,6 +113,8 @@ impl ScrollState {
     }
 
     /// Check if scrollbar is needed (content exceeds viewport)
+    /// Note: Most blocks implement their own needs_scrollbar for block-specific logic
+    #[allow(dead_code)]
     pub fn needs_scrollbar(&self) -> bool {
         self.max_scroll > 0
     }

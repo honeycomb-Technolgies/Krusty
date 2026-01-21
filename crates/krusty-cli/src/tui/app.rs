@@ -1878,14 +1878,11 @@ impl App {
 
                         // Drain all pending events for snappy scrollbar dragging
                         // This prevents event queue buildup during rapid mouse movements
-                        loop {
-                            match tokio::time::timeout(
-                                Duration::ZERO,
-                                event_stream.next()
-                            ).await {
-                                Ok(Some(Ok(event))) => self.process_event(event),
-                                _ => break, // No more events or error
-                            }
+                        while let Ok(Some(Ok(event))) = tokio::time::timeout(
+                            Duration::ZERO,
+                            event_stream.next()
+                        ).await {
+                            self.process_event(event);
                         }
                     }
                 }

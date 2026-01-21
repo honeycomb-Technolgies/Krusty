@@ -35,7 +35,6 @@ pub const PROTOCOL_VERSION_NUM: u16 = 10;
 pub struct ModelConfig {
     pub provider: ProviderId,
     pub model_id: String,
-    pub api_key: String,
 }
 
 /// Krusty's ACP Agent implementation
@@ -108,11 +107,17 @@ impl KrustyAgent {
             }
         };
 
-        // Get all configured providers
-        let configured = store.configured_providers();
+        // Get configured providers as a set for quick lookup
+        let configured: std::collections::HashSet<_> = store.configured_providers().into_iter().collect();
         info!("Found {} configured providers", configured.len());
 
-        for provider in configured {
+        // Iterate in the canonical order: Anthropic first, OpenRouter last
+        // This matches the TUI model selection order
+        for &provider in ProviderId::all() {
+            if !configured.contains(&provider) {
+                continue;
+            }
+
             if let Some(api_key) = store.get(&provider) {
                 // Get provider config for models
                 if let Some(provider_config) = get_provider(provider) {
@@ -125,25 +130,13 @@ impl KrustyAgent {
                             model_info.id.clone(),
                             api_key.clone(),
                         ));
-                        info!("Added model: {} from {:?}", model_info.display_name, provider);
-                    }
-
-                    // If provider has no static models but is dynamic (like OpenRouter), add a default
-                    if provider_config.models.is_empty() && provider_config.dynamic_models {
-                        let default_model = provider_config.default_model();
-                        let model_id = format!("{}:{}", provider.storage_key(), default_model);
-                        models.push((
-                            model_id,
-                            provider,
-                            default_model.to_string(),
-                            api_key.clone(),
-                        ));
-                        info!("Added dynamic provider {:?} with default model {}", provider, default_model);
+                        debug!("Added model: {} from {:?}", model_info.display_name, provider);
                     }
                 }
             }
         }
 
+        info!("Total models available: {}", models.len());
         models
     }
 
@@ -165,7 +158,6 @@ impl KrustyAgent {
         *self.current_model.write().await = Some(ModelConfig {
             provider,
             model_id: actual_model_id.clone(),
-            api_key: api_key.clone(),
         });
 
         // Reinitialize the processor with the new model
@@ -342,11 +334,19 @@ impl Agent for KrustyAgent {
                 *available = detected_models.iter().map(|(id, p, m, k)| (id.clone(), *p, m.clone(), k.clone())).collect();
             }
 
-            // Convert to ACP ModelInfo format
+            // Convert to ACP ModelInfo format with provider categories
+            // Group by provider for better UI organization
             let model_infos: Vec<AcpModelInfo> = detected_models
                 .iter()
                 .map(|(model_id, provider, actual_model, _)| {
-                    let name = format!("{} ({})", actual_model, provider.storage_key());
+                    // Get display name from provider config if available
+                    let display_name = get_provider(*provider)
+                        .and_then(|pc| pc.models.iter().find(|m| m.id == *actual_model))
+                        .map(|m| m.display_name.clone())
+                        .unwrap_or_else(|| actual_model.clone());
+
+                    // Format: [Provider] Model Name
+                    let name = format!("[{}] {}", provider, display_name);
                     AcpModelInfo::new(ModelId::new(model_id.clone()), name)
                 })
                 .collect();
@@ -366,7 +366,6 @@ impl Agent for KrustyAgent {
             *self.current_model.write().await = Some(ModelConfig {
                 provider: *provider,
                 model_id: actual_model.clone(),
-                api_key: api_key.clone(),
             });
 
             let model_state = SessionModelState::new(

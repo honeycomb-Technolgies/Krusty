@@ -393,7 +393,35 @@ static BUILTIN_PROVIDERS: LazyLock<Vec<ProviderConfig>> = LazyLock::new(|| {
             description: "100+ models (GPT, Gemini, Llama, Claude)".to_string(),
             base_url: "https://openrouter.ai/api/v1/messages".to_string(),
             auth_header: AuthHeader::Bearer,
-            models: vec![], // Fetched dynamically
+            models: vec![
+                // Claude models
+                ModelInfo::new("anthropic/claude-opus-4.5", "Claude Opus 4.5", 200_000, 16_384)
+                    .with_anthropic_thinking(),
+                ModelInfo::new("anthropic/claude-sonnet-4.5", "Claude Sonnet 4.5", 1_000_000, 16_384)
+                    .with_anthropic_thinking(),
+                ModelInfo::new("anthropic/claude-sonnet-4", "Claude Sonnet 4", 200_000, 8_192),
+                ModelInfo::new("anthropic/claude-haiku-4.5", "Claude Haiku 4.5", 200_000, 16_384),
+                ModelInfo::new("anthropic/claude-opus-4", "Claude Opus 4", 200_000, 16_384),
+                // OpenAI models
+                ModelInfo::new("openai/gpt-4.1", "GPT-4.1", 1_000_000, 32_768),
+                ModelInfo::new("openai/gpt-4.1-mini", "GPT-4.1 Mini", 1_000_000, 16_384),
+                ModelInfo::new("openai/gpt-4.5-preview", "GPT-4.5 Preview", 128_000, 16_384),
+                ModelInfo::new("openai/o3", "OpenAI o3", 200_000, 100_000),
+                ModelInfo::new("openai/o4-mini", "OpenAI o4-mini", 200_000, 100_000),
+                // Google models
+                ModelInfo::new("google/gemini-2.5-pro-preview", "Gemini 2.5 Pro", 1_000_000, 65_536),
+                ModelInfo::new("google/gemini-2.5-flash-preview", "Gemini 2.5 Flash", 1_000_000, 65_536),
+                ModelInfo::new("google/gemini-2.0-flash-001", "Gemini 2.0 Flash", 1_000_000, 8_192),
+                // DeepSeek models
+                ModelInfo::new("deepseek/deepseek-r1", "DeepSeek R1", 64_000, 8_192),
+                ModelInfo::new("deepseek/deepseek-chat-v3-0324", "DeepSeek V3", 64_000, 8_192),
+                // Meta Llama models
+                ModelInfo::new("meta-llama/llama-4-maverick", "Llama 4 Maverick", 1_000_000, 256_000),
+                ModelInfo::new("meta-llama/llama-4-scout", "Llama 4 Scout", 512_000, 128_000),
+                // Qwen models
+                ModelInfo::new("qwen/qwen3-235b-a22b", "Qwen 3 235B", 128_000, 8_192),
+                ModelInfo::new("qwen/qwq-32b", "QwQ 32B", 128_000, 16_384),
+            ],
             supports_tools: true,
             dynamic_models: true,
             pricing_hint: None,
@@ -405,7 +433,25 @@ static BUILTIN_PROVIDERS: LazyLock<Vec<ProviderConfig>> = LazyLock::new(|| {
             description: "Curated coding models (Claude, GPT-5, Gemini, Qwen)".to_string(),
             base_url: "https://opencode.ai/zen/v1/messages".to_string(),
             auth_header: AuthHeader::XApiKey, // Uses x-api-key, not Bearer
-            models: vec![],                   // Fetched dynamically from /v1/models
+            models: vec![
+                // Claude models
+                ModelInfo::new("claude-opus-4-5", "Claude Opus 4.5", 200_000, 16_384)
+                    .with_anthropic_thinking(),
+                ModelInfo::new("claude-sonnet-4-5", "Claude Sonnet 4.5", 1_000_000, 16_384)
+                    .with_anthropic_thinking(),
+                ModelInfo::new("claude-sonnet-4", "Claude Sonnet 4", 200_000, 8_192),
+                ModelInfo::new("claude-haiku-4-5", "Claude Haiku 4.5", 200_000, 16_384),
+                // GPT models
+                ModelInfo::new("gpt-4.1", "GPT-4.1", 1_000_000, 32_768),
+                ModelInfo::new("gpt-4.1-mini", "GPT-4.1 Mini", 1_000_000, 16_384),
+                ModelInfo::new("gpt-4.5-preview", "GPT-4.5 Preview", 128_000, 16_384),
+                // Gemini models
+                ModelInfo::new("gemini-2.5-pro", "Gemini 2.5 Pro", 1_000_000, 65_536),
+                ModelInfo::new("gemini-2.5-flash", "Gemini 2.5 Flash", 1_000_000, 65_536),
+                // Qwen models
+                ModelInfo::new("qwen-coder-plus", "Qwen Coder Plus", 128_000, 8_192),
+                ModelInfo::new("qwen-max", "Qwen Max", 128_000, 8_192),
+            ],
             supports_tools: true,
             dynamic_models: true,
             pricing_hint: None,

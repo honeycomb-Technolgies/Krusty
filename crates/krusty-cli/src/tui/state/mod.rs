@@ -19,7 +19,7 @@ pub use layout::LayoutState;
 pub use popups::PopupState;
 pub use scroll::ScrollState;
 pub use selection::{
-    BlockScrollbarDrag, DragTarget, EdgeScrollDirection, EdgeScrollState, SelectionArea,
-    SelectionState,
+    BlockScrollbarDrag, DragTarget, EdgeScrollDirection, EdgeScrollState, ScrollbarDrag,
+    SelectionArea, SelectionState,
 };
 pub use ui_state::{hash_content, BlockUiStates, ToolResultCache};
