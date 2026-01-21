@@ -6,7 +6,9 @@
 //! - LSP integration via Zed's WASM extension system
 //! - Session and preference storage
 //! - MCP (Model Context Protocol) support
+//! - ACP (Agent Client Protocol) server for editor integration
 
+pub mod acp;
 pub mod agent;
 pub mod ai;
 pub mod auth;

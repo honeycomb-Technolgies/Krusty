@@ -1,5 +1,8 @@
 # Krusty Dev .gitignore
 
+# Internal documentation and plans
+docs/
+
 # Build outputs
 target/
 

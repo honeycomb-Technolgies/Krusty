@@ -25,7 +25,7 @@ tracing = "0.1"
 async-trait = "0.1"
 futures = "0.3"
 tokio-stream = "0.1"
-tokio-util = "0.7"
+tokio-util = { version = "0.7", features = ["compat"] }
 
 # HTTP (rustls for cross-platform TLS without OpenSSL)
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
@@ -93,6 +93,9 @@ moka = { version = "0.12", features = ["sync"] }
 
 # File System
 ignore = "0.4"
+
+# Agent Client Protocol (ACP)
+agent-client-protocol = "0.9"
 
 # Version Control (vendored for cross-compilation)
 git2 = { version = "0.19", features = ["vendored-libgit2", "vendored-openssl"] }

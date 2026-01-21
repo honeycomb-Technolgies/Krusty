@@ -10,7 +10,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 // Re-export core modules for TUI usage
-use krusty_core::{agent, ai, constants, extensions, lsp, paths, plan, process, storage, tools};
+use krusty_core::{acp, agent, ai, constants, extensions, lsp, paths, plan, process, storage, tools};
 
 mod tui;
 
@@ -31,6 +31,14 @@ struct Cli {
     /// Theme name
     #[arg(short, long, default_value = "krusty")]
     theme: String,
+
+    /// Run as ACP (Agent Client Protocol) server
+    ///
+    /// When enabled, Krusty runs as an ACP-compatible agent that communicates
+    /// via JSON-RPC over stdin/stdout. This mode is used when Krusty is
+    /// spawned by an ACP-compatible editor (Zed, Neovim, etc.).
+    #[arg(long)]
+    acp: bool,
 }
 
 #[derive(Subcommand)]
@@ -132,6 +140,16 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
+
+    // If --acp flag is set, run in ACP server mode
+    if cli.acp {
+        tracing::info!("Starting Krusty in ACP server mode");
+
+        // ACP mode: run as Agent Client Protocol server
+        // All communication happens via stdin/stdout JSON-RPC
+        let server = acp::AcpServer::new()?;
+        return server.run().await;
+    }
 
     // Verify theme exists
     let theme = tui::THEME_REGISTRY.get_or_default(&cli.theme);
