@@ -130,7 +130,7 @@ impl KrustyAgent {
                     // Dynamic providers - fetch models from API
                     ProviderId::OpenRouter => {
                         info!("Fetching models from OpenRouter...");
-                        match openrouter::fetch_models(&api_key).await {
+                        match openrouter::fetch_models(api_key).await {
                             Ok(fetched) => {
                                 for model in fetched {
                                     let model_id =
@@ -172,7 +172,7 @@ impl KrustyAgent {
                     }
                     ProviderId::OpenCodeZen => {
                         info!("Fetching models from OpenCode Zen...");
-                        match opencodezen::fetch_models(&api_key).await {
+                        match opencodezen::fetch_models(api_key).await {
                             Ok(fetched) => {
                                 for model in fetched {
                                     let model_id =
