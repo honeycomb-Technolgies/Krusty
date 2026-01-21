@@ -6,12 +6,13 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use agent_client_protocol::AgentSideConnection;
+use agent_client_protocol::{AgentSideConnection, Client};
 use anyhow::Result;
 use tokio::io::{stdin, stdout};
+use tokio::sync::mpsc;
 use tokio::task::LocalSet;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use super::agent::KrustyAgent;
 use crate::tools::ToolRegistry;
@@ -68,6 +69,12 @@ impl AcpServer {
 
         local
             .run_until(async move {
+                // Create notification channel
+                let (tx, mut rx) = mpsc::unbounded_channel();
+
+                // Give the sender to the agent
+                self.agent.set_notification_channel(tx).await;
+
                 // Get stdin/stdout for transport, wrapped for futures compatibility
                 let stdin = stdin().compat();
                 let stdout = stdout().compat_write();
@@ -87,14 +94,20 @@ impl AcpServer {
 
                 info!("ACP connection established, waiting for requests...");
 
+                // Spawn task to forward notifications to the connection
+                tokio::task::spawn_local(async move {
+                    while let Some(notification) = rx.recv().await {
+                        if let Err(e) = connection.session_notification(notification).await {
+                            warn!("Failed to forward notification: {}", e);
+                        }
+                    }
+                });
+
                 // Run the IO task
                 if let Err(e) = io_task.await {
                     error!("ACP connection error: {}", e);
                     return Err(anyhow::anyhow!("ACP connection error: {}", e));
                 }
-
-                // Connection is available for making client requests
-                drop(connection);
 
                 info!("ACP connection closed");
                 Ok(())
@@ -118,6 +131,7 @@ impl Default for AcpServer {
 ///
 /// Returns true if stdin is not a TTY (likely being spawned by an editor)
 /// and the `--acp` flag is present.
+#[allow(dead_code)]
 pub fn should_run_acp_mode(force_acp: bool) -> bool {
     if force_acp {
         return true;

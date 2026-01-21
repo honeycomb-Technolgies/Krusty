@@ -66,6 +66,7 @@ pub fn text_to_tool_content(text: &str) -> ToolCallContent {
 
 /// Convert a file diff to ACP diff content
 /// Note: ACP Diff only stores the new text, not old text (unified diff is computed by client)
+#[allow(dead_code)]
 pub fn diff_to_tool_content(path: &Path, _old_text: &str, new_text: &str) -> ToolCallContent {
     ToolCallContent::Diff(Diff::new(
         path.to_string_lossy().to_string(),
@@ -74,6 +75,7 @@ pub fn diff_to_tool_content(path: &Path, _old_text: &str, new_text: &str) -> Too
 }
 
 /// Read a file via the ACP client (if supported)
+#[allow(dead_code)]
 pub async fn read_file_via_client<C: Client>(
     client: &C,
     session_id: &SessionId,
@@ -95,6 +97,7 @@ pub async fn read_file_via_client<C: Client>(
 }
 
 /// Write a file via the ACP client (if supported)
+#[allow(dead_code)]
 pub async fn write_file_via_client<C: Client>(
     client: &C,
     session_id: &SessionId,
@@ -118,6 +121,7 @@ pub async fn write_file_via_client<C: Client>(
 }
 
 /// Create a terminal via the ACP client
+#[allow(dead_code)]
 pub async fn create_terminal_via_client<C: Client>(
     client: &C,
     session_id: &SessionId,
@@ -137,6 +141,7 @@ pub async fn create_terminal_via_client<C: Client>(
 }
 
 /// Get terminal output via the ACP client
+#[allow(dead_code)]
 pub async fn get_terminal_output_via_client<C: Client>(
     client: &C,
     session_id: &SessionId,
@@ -157,6 +162,7 @@ pub async fn get_terminal_output_via_client<C: Client>(
 }
 
 /// Release a terminal via the ACP client
+#[allow(dead_code)]
 pub async fn release_terminal_via_client<C: Client>(
     client: &C,
     session_id: &SessionId,

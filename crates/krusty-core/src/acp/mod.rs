@@ -30,6 +30,7 @@
 //! ```
 
 mod agent;
+mod bridge;
 mod error;
 mod processor;
 mod server;
@@ -38,6 +39,8 @@ mod tools;
 mod updates;
 
 pub use agent::KrustyAgent;
+pub use bridge::{create_notification_channel, NotificationBridge};
 pub use error::AcpError;
+pub use processor::PromptProcessor;
 pub use server::AcpServer;
 pub use session::{SessionManager, SessionState};

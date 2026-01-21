@@ -10,11 +10,13 @@ use tokio::sync::mpsc;
 use tracing::error;
 
 /// Update sender for streaming session updates
+#[allow(dead_code)]
 pub struct UpdateSender {
     session_id: SessionId,
     tx: mpsc::UnboundedSender<SessionUpdate>,
 }
 
+#[allow(dead_code)]
 impl UpdateSender {
     /// Create a new update sender
     pub fn new(session_id: SessionId, tx: mpsc::UnboundedSender<SessionUpdate>) -> Self {
@@ -74,6 +76,7 @@ fn update_type(update: &SessionUpdate) -> &'static str {
 }
 
 /// Convert Krusty plan items to ACP plan entries
+#[allow(dead_code)]
 pub fn plan_items_to_entries(items: &[(String, bool)]) -> Vec<PlanEntry> {
     items
         .iter()
@@ -92,6 +95,7 @@ pub fn plan_items_to_entries(items: &[(String, bool)]) -> Vec<PlanEntry> {
 }
 
 /// Create a plan entry
+#[allow(dead_code)]
 pub fn create_plan_entry(content: &str, status: PlanEntryStatus) -> PlanEntry {
     PlanEntry::new(content.to_string(), PlanEntryPriority::Medium, status)
 }

@@ -198,9 +198,7 @@ impl PromptProcessor {
         let content: Vec<Content> = prompt
             .into_iter()
             .filter_map(|block| match block {
-                AcpContent::Text(text) => Some(Content::Text {
-                    text: text.text.clone(),
-                }),
+                AcpContent::Text(text) => Some(Content::Text { text: text.text }),
                 _ => {
                     // TODO: Handle images, resources, etc.
                     None
@@ -225,8 +223,10 @@ impl PromptProcessor {
         tool_calls: Vec<AiToolCall>,
         connection: &C,
     ) -> Result<StopReason, AcpError> {
-        let mut ctx = ToolContext::default();
-        ctx.working_dir = self.cwd.clone();
+        let ctx = ToolContext {
+            working_dir: self.cwd.clone(),
+            ..Default::default()
+        };
 
         for tool_call in tool_calls {
             if session.is_cancelled() {

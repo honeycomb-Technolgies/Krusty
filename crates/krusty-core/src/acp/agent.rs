@@ -2,6 +2,7 @@
 //!
 //! This is the core ACP agent that handles all protocol methods.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use agent_client_protocol::{
@@ -10,16 +11,20 @@ use agent_client_protocol::{
     ExtResponse, Implementation, InitializeRequest, InitializeResponse, LoadSessionRequest,
     LoadSessionResponse, McpCapabilities, NewSessionRequest, NewSessionResponse,
     PromptCapabilities, PromptRequest, PromptResponse, Result as AcpResult, SessionCapabilities,
-    SessionId, SetSessionModeRequest, SetSessionModeResponse, StopReason,
+    SessionId, SessionNotification, SetSessionModeRequest, SetSessionModeResponse,
 };
-use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tokio::sync::{mpsc, RwLock};
+use tracing::{debug, error, info, warn};
 
+use super::bridge::NotificationBridge;
 use super::error::AcpError;
+use super::processor::PromptProcessor;
 use super::session::{SessionManager, SessionState};
+use crate::ai::providers::ProviderId;
 use crate::tools::ToolRegistry;
 
 /// ACP protocol version supported by this agent (10 is current)
+#[allow(dead_code)]
 pub const PROTOCOL_VERSION_NUM: u16 = 10;
 
 /// Krusty's ACP Agent implementation
@@ -32,27 +37,53 @@ pub struct KrustyAgent {
     client_capabilities: RwLock<Option<ClientCapabilities>>,
     /// Authenticated API key
     api_key: RwLock<Option<String>>,
+    /// Prompt processor for AI integration
+    processor: RwLock<PromptProcessor>,
+    /// Channel for sending notifications to the connection
+    notification_tx: RwLock<Option<mpsc::UnboundedSender<SessionNotification>>>,
+    /// Working directory (reserved for future use)
+    #[allow(dead_code)]
+    cwd: PathBuf,
 }
 
 impl KrustyAgent {
     /// Create a new Krusty ACP agent
     pub fn new() -> Self {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let tools = Arc::new(ToolRegistry::new());
         Self {
             sessions: Arc::new(SessionManager::new()),
-            tools: Arc::new(ToolRegistry::new()),
+            tools: tools.clone(),
             client_capabilities: RwLock::new(None),
             api_key: RwLock::new(None),
+            processor: RwLock::new(PromptProcessor::new(tools, cwd.clone())),
+            notification_tx: RwLock::new(None),
+            cwd,
         }
     }
 
     /// Create with custom tool registry
     pub fn with_tools(tools: Arc<ToolRegistry>) -> Self {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         Self {
             sessions: Arc::new(SessionManager::new()),
-            tools,
+            tools: tools.clone(),
             client_capabilities: RwLock::new(None),
             api_key: RwLock::new(None),
+            processor: RwLock::new(PromptProcessor::new(tools, cwd.clone())),
+            notification_tx: RwLock::new(None),
+            cwd,
         }
+    }
+
+    /// Set the notification channel sender
+    pub async fn set_notification_channel(&self, tx: mpsc::UnboundedSender<SessionNotification>) {
+        *self.notification_tx.write().await = Some(tx);
+    }
+
+    /// Initialize the AI client with an API key
+    pub async fn init_ai_client(&self, api_key: String, provider: ProviderId) {
+        self.processor.write().await.init_ai_client(api_key, provider);
     }
 
     /// Get agent capabilities to advertise
@@ -204,7 +235,6 @@ impl Agent for KrustyAgent {
 
     /// Handle prompt request
     async fn prompt(&self, request: PromptRequest) -> AcpResult<PromptResponse> {
-        // PromptRequest uses `prompt` field, not `content`
         info!(
             "ACP prompt: session={}, content_blocks={}",
             request.session_id,
@@ -220,41 +250,36 @@ impl Agent for KrustyAgent {
         // Reset cancellation state
         session.reset_cancellation();
 
-        // Extract text content from the prompt
+        // Validate prompt has content
         let prompt_text = extract_prompt_text(&request.prompt);
-
         if prompt_text.is_empty() {
             return Err(AcpSchemaError::invalid_params());
         }
 
-        // Check if we're authenticated (have API key)
-        let api_key = self.api_key.read().await.clone();
-
-        // For now, return a simple response indicating the prompt was received
-        // In the full implementation, this would:
-        // 1. Call the AI client with the prompt
-        // 2. Stream responses via session/update notifications
-        // 3. Execute tool calls as needed
-        // 4. Return final response
-
-        // In ACP, content is streamed via session/update notifications, not returned in response
-        // For now, just acknowledge the prompt - full AI integration will stream responses
-        let _response_text = if api_key.is_some() {
-            format!(
-                "Received prompt in session {}: \"{}\" (AI processing not yet implemented)",
-                session.id, prompt_text
-            )
-        } else {
-            "Authentication required. Please authenticate with an API key first.".to_string()
+        // Get the notification channel
+        let notification_tx = self.notification_tx.read().await;
+        let Some(tx) = notification_tx.as_ref() else {
+            error!("No notification channel available");
+            return Err(AcpSchemaError::internal_error());
         };
 
-        // TODO: In full implementation:
-        // 1. Stream AI response via session/update notifications
-        // 2. Execute tool calls and stream their updates
-        // 3. Return final stop reason
+        // Create a bridge for this request
+        let bridge = NotificationBridge::new(tx.clone());
 
-        // PromptResponse only contains stop_reason (content is streamed separately)
-        Ok(PromptResponse::new(StopReason::EndTurn))
+        // Process the prompt with the PromptProcessor
+        let processor = self.processor.read().await;
+        let stop_reason = processor
+            .process_prompt(&session, request.prompt, &bridge)
+            .await
+            .map_err(|e| {
+                error!("Prompt processing error: {}", e);
+                match e {
+                    AcpError::NotAuthenticated(_) => AcpSchemaError::invalid_params(),
+                    _ => AcpSchemaError::internal_error(),
+                }
+            })?;
+
+        Ok(PromptResponse::new(stop_reason))
     }
 
     /// Handle cancel notification
