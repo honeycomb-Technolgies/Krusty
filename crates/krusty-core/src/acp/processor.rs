@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use agent_client_protocol::{
-    Client as AcpClient, ContentBlock as AcpContent, ContentChunk, SessionId, SessionNotification,
+    Client as AcpClient, ContentBlock as AcpContent, ContentChunk, SessionNotification,
     SessionUpdate, StopReason, TextContent, ToolCall, ToolCallId,
 };
 use anyhow::Result;
@@ -21,7 +21,7 @@ use crate::ai::client::{AiClient, AiClientConfig, CallOptions};
 use crate::ai::models::ApiFormat;
 use crate::ai::providers::{get_provider, AuthHeader, ProviderId};
 use crate::ai::streaming::StreamPart;
-use crate::ai::types::{AiToolCall, Content, FinishReason, ModelMessage, Role};
+use crate::ai::types::{AiToolCall, Content, FinishReason};
 use crate::tools::{ToolContext, ToolRegistry, ToolResult};
 
 use super::error::AcpError;
@@ -103,6 +103,9 @@ impl PromptProcessor {
 
     /// Process a prompt and stream results via the connection
     ///
+    /// Implements an agentic loop: after tool execution, continues calling the AI
+    /// with tool results until the AI responds without requesting more tools.
+    ///
     /// Returns the stop reason when processing completes
     pub async fn process_prompt<C: AcpClient>(
         &self,
@@ -114,149 +117,153 @@ impl PromptProcessor {
             AcpError::NotAuthenticated("AI client not initialized - authenticate first".into())
         })?;
 
-        // Convert ACP content to Krusty messages
-        let messages =
-            self.convert_prompt_to_messages(&session.id, prompt, &session.history().await);
+        // Convert initial ACP content to Krusty messages and add to history
+        let initial_content: Vec<Content> = prompt
+            .into_iter()
+            .filter_map(|block| match block {
+                AcpContent::Text(text) => Some(Content::Text { text: text.text }),
+                _ => None,
+            })
+            .collect();
+
+        if !initial_content.is_empty() {
+            session
+                .add_user_message_content(initial_content.clone())
+                .await;
+        }
 
         // Get tool definitions for the AI
         let tool_defs = self.tools.get_ai_tools().await;
 
-        // Set up call options
-        let options = CallOptions {
-            tools: if tool_defs.is_empty() {
-                None
-            } else {
-                Some(tool_defs)
-            },
-            enable_caching: true,
-            ..Default::default()
-        };
-
-        // Call AI with streaming
-        let mut rx = ai_client
-            .call_streaming(messages, &options)
-            .await
-            .map_err(|e| AcpError::AiClientError(e.to_string()))?;
-
-        // Process stream and send updates
-        let mut accumulated_text = String::new();
-        let mut pending_tool_calls: Vec<AiToolCall> = Vec::new();
-        let mut stop_reason = StopReason::EndTurn;
-
-        while let Some(part) = rx.recv().await {
+        // Agentic loop - continue until AI stops requesting tools
+        const MAX_ITERATIONS: usize = 50; // Safety limit
+        for iteration in 0..MAX_ITERATIONS {
             if session.is_cancelled() {
-                info!("Session cancelled, stopping stream processing");
+                info!("Session cancelled");
                 return Ok(StopReason::Cancelled);
             }
 
-            match part {
-                StreamPart::Start { model, provider } => {
-                    debug!("Stream started: model={}, provider={}", model, provider);
+            info!("Agentic loop iteration {}", iteration + 1);
+
+            // Get current conversation history
+            let messages = session.history().await;
+
+            // Set up call options
+            let options = CallOptions {
+                tools: if tool_defs.is_empty() {
+                    None
+                } else {
+                    Some(tool_defs.clone())
+                },
+                enable_caching: true,
+                ..Default::default()
+            };
+
+            // Call AI with streaming
+            let mut rx = ai_client
+                .call_streaming(messages, &options)
+                .await
+                .map_err(|e| AcpError::AiClientError(e.to_string()))?;
+
+            // Process stream and send updates
+            let mut accumulated_text = String::new();
+            let mut pending_tool_calls: Vec<AiToolCall> = Vec::new();
+            let mut stop_reason = StopReason::EndTurn;
+
+            while let Some(part) = rx.recv().await {
+                if session.is_cancelled() {
+                    info!("Session cancelled, stopping stream processing");
+                    return Ok(StopReason::Cancelled);
                 }
 
-                StreamPart::TextDelta { delta } => {
-                    accumulated_text.push_str(&delta);
-                    // Stream text chunk to client
-                    let chunk = ContentChunk::new(AcpContent::Text(TextContent::new(&delta)));
-                    let notification = SessionNotification::new(
-                        session.id.clone(),
-                        SessionUpdate::AgentMessageChunk(chunk),
-                    );
-                    if let Err(e) = connection.session_notification(notification).await {
-                        warn!("Failed to send text chunk: {}", e);
+                match part {
+                    StreamPart::Start { model, provider } => {
+                        debug!("Stream started: model={}, provider={}", model, provider);
                     }
-                }
 
-                StreamPart::ThinkingDelta { thinking, .. } => {
-                    // Stream thinking as thought chunk
-                    let chunk = ContentChunk::new(AcpContent::Text(TextContent::new(&thinking)));
-                    let notification = SessionNotification::new(
-                        session.id.clone(),
-                        SessionUpdate::AgentThoughtChunk(chunk),
-                    );
-                    if let Err(e) = connection.session_notification(notification).await {
-                        warn!("Failed to send thought chunk: {}", e);
+                    StreamPart::TextDelta { delta } => {
+                        accumulated_text.push_str(&delta);
+                        // Stream text chunk to client
+                        let chunk = ContentChunk::new(AcpContent::Text(TextContent::new(&delta)));
+                        let notification = SessionNotification::new(
+                            session.id.clone(),
+                            SessionUpdate::AgentMessageChunk(chunk),
+                        );
+                        if let Err(e) = connection.session_notification(notification).await {
+                            warn!("Failed to send text chunk: {}", e);
+                        }
                     }
-                }
 
-                StreamPart::ToolCallStart { id, name } => {
-                    debug!("Tool call starting: {} ({})", name, id);
-                    // Send initial tool call notification
-                    let tool_call = ToolCall::new(ToolCallId::from(id.clone()), name.clone());
-                    let notification = SessionNotification::new(
-                        session.id.clone(),
-                        SessionUpdate::ToolCall(tool_call),
-                    );
-                    if let Err(e) = connection.session_notification(notification).await {
-                        warn!("Failed to send tool call start: {}", e);
+                    StreamPart::ThinkingDelta { thinking, .. } => {
+                        // Stream thinking as thought chunk
+                        let chunk =
+                            ContentChunk::new(AcpContent::Text(TextContent::new(&thinking)));
+                        let notification = SessionNotification::new(
+                            session.id.clone(),
+                            SessionUpdate::AgentThoughtChunk(chunk),
+                        );
+                        if let Err(e) = connection.session_notification(notification).await {
+                            warn!("Failed to send thought chunk: {}", e);
+                        }
                     }
-                }
 
-                StreamPart::ToolCallComplete { tool_call } => {
-                    info!("Tool call complete: {} ({})", tool_call.name, tool_call.id);
-                    pending_tool_calls.push(tool_call);
-                }
+                    StreamPart::ToolCallStart { id, name } => {
+                        debug!("Tool call starting: {} ({})", name, id);
+                        // Send initial tool call notification
+                        let tool_call = ToolCall::new(ToolCallId::from(id.clone()), name.clone());
+                        let notification = SessionNotification::new(
+                            session.id.clone(),
+                            SessionUpdate::ToolCall(tool_call),
+                        );
+                        if let Err(e) = connection.session_notification(notification).await {
+                            warn!("Failed to send tool call start: {}", e);
+                        }
+                    }
 
-                StreamPart::Finish { reason } => {
-                    debug!("Stream finished: {:?}", reason);
-                    stop_reason = convert_finish_reason(reason);
-                }
+                    StreamPart::ToolCallComplete { tool_call } => {
+                        info!("Tool call complete: {} ({})", tool_call.name, tool_call.id);
+                        pending_tool_calls.push(tool_call);
+                    }
 
-                StreamPart::Error { error } => {
-                    error!("Stream error: {}", error);
-                    return Err(AcpError::AiClientError(error));
-                }
+                    StreamPart::Finish { reason } => {
+                        debug!("Stream finished: {:?}", reason);
+                        stop_reason = convert_finish_reason(reason);
+                    }
 
-                _ => {
-                    // Handle other stream parts as needed
+                    StreamPart::Error { error } => {
+                        error!("Stream error: {}", error);
+                        return Err(AcpError::AiClientError(error));
+                    }
+
+                    _ => {
+                        // Handle other stream parts as needed
+                    }
                 }
             }
-        }
 
-        // Execute any pending tool calls
-        if !pending_tool_calls.is_empty() {
-            stop_reason = self
-                .execute_tool_calls(session, pending_tool_calls, connection)
+            // Add the assistant's text response to conversation history
+            if !accumulated_text.is_empty() {
+                session
+                    .add_assistant_message(accumulated_text.clone())
+                    .await;
+            }
+
+            // If no tool calls, we're done
+            if pending_tool_calls.is_empty() {
+                info!("Agentic loop complete after {} iterations", iteration + 1);
+                return Ok(stop_reason);
+            }
+
+            // Execute tool calls and add results to history
+            // This will continue the loop with the tool results
+            self.execute_tool_calls(session, pending_tool_calls, connection)
                 .await?;
+
+            // Loop continues - AI will be called again with tool results in history
         }
 
-        // Add the response to conversation history
-        if !accumulated_text.is_empty() {
-            session.add_assistant_message(accumulated_text).await;
-        }
-
-        Ok(stop_reason)
-    }
-
-    /// Convert ACP prompt content to Krusty ModelMessage format
-    fn convert_prompt_to_messages(
-        &self,
-        _session_id: &SessionId,
-        prompt: Vec<AcpContent>,
-        history: &[ModelMessage],
-    ) -> Vec<ModelMessage> {
-        let mut messages = history.to_vec();
-
-        // Convert new prompt content
-        let content: Vec<Content> = prompt
-            .into_iter()
-            .filter_map(|block| match block {
-                AcpContent::Text(text) => Some(Content::Text { text: text.text }),
-                _ => {
-                    // TODO: Handle images, resources, etc.
-                    None
-                }
-            })
-            .collect();
-
-        if !content.is_empty() {
-            messages.push(ModelMessage {
-                role: Role::User,
-                content,
-            });
-        }
-
-        messages
+        warn!("Agentic loop hit maximum iterations ({})", MAX_ITERATIONS);
+        Ok(StopReason::EndTurn)
     }
 
     /// Execute tool calls and stream their results

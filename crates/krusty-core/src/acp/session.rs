@@ -112,6 +112,16 @@ impl SessionState {
         .await;
     }
 
+    /// Add a user message with multiple content blocks
+    pub async fn add_user_message_content(&self, content: Vec<crate::ai::types::Content>) {
+        use crate::ai::types::Role;
+        self.add_message(ModelMessage {
+            role: Role::User,
+            content,
+        })
+        .await;
+    }
+
     /// Add an assistant message to the conversation
     pub async fn add_assistant_message(&self, text: String) {
         use crate::ai::types::{Content, Role};
