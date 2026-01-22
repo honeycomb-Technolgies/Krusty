@@ -454,6 +454,10 @@ impl Agent for KrustyAgent {
             mcp_servers.len()
         );
 
+        // Update the processor's working directory to match the session's cwd
+        // This ensures tools execute in the correct directory (the project open in Zed)
+        self.processor.write().await.set_cwd(cwd.clone());
+
         // Pass as Option to our session manager which handles defaults
         let session = self.sessions.create_session(
             Some(cwd),

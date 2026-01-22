@@ -281,6 +281,28 @@ impl SseStreamProcessor {
                     self.stream_buffer.flush().await;
                     let _ = self.tx.send(StreamPart::Finish { reason });
                 }
+                SseEvent::FinishWithToolCalls { tool_calls } => {
+                    info!(
+                        "SSE FinishWithToolCalls: {} tool calls at {:?} ({} events, {} bytes)",
+                        tool_calls.len(),
+                        elapsed,
+                        self.event_count,
+                        self.bytes_received
+                    );
+                    self.stream_buffer.flush().await;
+                    // Emit ToolCallComplete for each accumulated tool call
+                    for tool_call in tool_calls {
+                        info!(
+                            "  -> Completing tool call: id={}, name={}",
+                            tool_call.id, tool_call.name
+                        );
+                        let _ = self.tx.send(StreamPart::ToolCallComplete { tool_call });
+                    }
+                    // Then send the finish signal
+                    let _ = self.tx.send(StreamPart::Finish {
+                        reason: FinishReason::ToolCalls,
+                    });
+                }
                 SseEvent::Usage(usage) => {
                     info!("SSE Usage: prompt={}, completion={}, total={}, cache_read={}, cache_created={}",
                         usage.prompt_tokens, usage.completion_tokens, usage.total_tokens,
@@ -383,6 +405,11 @@ pub enum SseEvent {
     },
     Finish {
         reason: FinishReason,
+    },
+    /// Finish with accumulated tool calls (OpenAI format)
+    /// Used when finish_reason is "tool_calls" and we have accumulated tool call data
+    FinishWithToolCalls {
+        tool_calls: Vec<AiToolCall>,
     },
     Usage(Usage),
     ContextEdited(ContextEditingMetrics),

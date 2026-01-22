@@ -51,6 +51,11 @@ impl PromptProcessor {
         }
     }
 
+    /// Update the working directory (called when session cwd changes)
+    pub fn set_cwd(&mut self, cwd: PathBuf) {
+        self.cwd = cwd;
+    }
+
     /// Initialize the AI client with an API key and optional model override
     pub fn init_ai_client(
         &mut self,

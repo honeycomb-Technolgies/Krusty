@@ -122,8 +122,35 @@ impl Default for OpenAIParser {
 #[async_trait::async_trait]
 impl SseParser for OpenAIParser {
     async fn parse_event(&self, json: &Value) -> Result<SseEvent> {
+        // Check for error response first
+        // OpenAI format: {"error": {"message": "...", "type": "...", "code": "..."}}
+        if let Some(error) = json.get("error") {
+            let message = error
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("Unknown error");
+            let error_type = error
+                .get("type")
+                .and_then(|t| t.as_str())
+                .unwrap_or("unknown");
+            return Err(anyhow::anyhow!(
+                "OpenAI API error ({}): {}",
+                error_type,
+                message
+            ));
+        }
+
         // Check for Responses API format (has "type" field)
         if let Some(event_type) = json.get("type").and_then(|t| t.as_str()) {
+            // Check for error events in Responses API
+            if event_type == "error" || event_type.contains("error") {
+                let message = json
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .or_else(|| json.get("error").and_then(|e| e.as_str()))
+                    .unwrap_or("Unknown error");
+                return Err(anyhow::anyhow!("OpenAI Responses API error: {}", message));
+            }
             return Ok(self.parse_responses_api_event(json, event_type));
         }
 
@@ -140,9 +167,19 @@ impl SseParser for OpenAIParser {
                         });
                     }
                     if reason == "tool_calls" {
-                        return Ok(SseEvent::Finish {
-                            reason: FinishReason::ToolCalls,
-                        });
+                        // Complete all accumulated tool calls
+                        let mut accumulators = self.tool_accumulators.lock().unwrap();
+                        let tool_calls: Vec<_> = accumulators
+                            .drain()
+                            .map(|(_, mut acc)| acc.force_complete())
+                            .collect();
+
+                        if tool_calls.is_empty() {
+                            return Ok(SseEvent::Finish {
+                                reason: FinishReason::ToolCalls,
+                            });
+                        }
+                        return Ok(SseEvent::FinishWithToolCalls { tool_calls });
                     }
                 }
 

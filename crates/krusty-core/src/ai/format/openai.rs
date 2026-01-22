@@ -1,8 +1,11 @@
 //! OpenAI API format handler
 //!
 //! Handles conversion to OpenAI chat/completions and responses API formats.
+//! Includes message alternation validation and thinking block preservation
+//! for parity with Anthropic format handling.
 
 use serde_json::Value;
+use tracing::debug;
 
 use super::{FormatHandler, RequestOptions};
 use crate::ai::models::ApiFormat;
@@ -35,14 +38,21 @@ impl OpenAIFormat {
 impl FormatHandler for OpenAIFormat {
     /// Convert domain messages to OpenAI chat/completions format
     ///
-    /// OpenAI format is simpler: role + content (string or array of content parts)
-    /// Note: provider_id is unused for OpenAI format (no thinking block handling needed)
+    /// OpenAI format: role + content (string or array of content parts)
+    ///
+    /// CRITICAL: This function ensures proper message alternation required by many providers.
+    /// Some providers (like Kimi) require user/assistant messages to strictly alternate.
+    /// If there are consecutive same-role messages, we insert filler messages.
+    ///
+    /// THINKING BLOCKS: Preserved as text content prefixed with "[Thinking]" for
+    /// providers that support reasoning/thinking models via OpenAI format.
     fn convert_messages(
         &self,
         messages: &[ModelMessage],
         _provider_id: Option<ProviderId>,
     ) -> Vec<Value> {
         let mut result: Vec<Value> = Vec::new();
+        let mut last_role: Option<&str> = None;
 
         for msg in messages.iter().filter(|m| m.role != Role::System) {
             let role = match msg.role {
@@ -53,6 +63,7 @@ impl FormatHandler for OpenAIFormat {
             };
 
             // For tool results, use special format
+            // Tool messages don't need alternation check - they follow assistant tool_calls
             if msg.role == Role::Tool {
                 for content in &msg.content {
                     if let Content::ToolResult {
@@ -68,7 +79,26 @@ impl FormatHandler for OpenAIFormat {
                         }));
                     }
                 }
+                // Tool messages are special - they must follow assistant with tool_calls
+                // Don't update last_role since they're part of the tool call flow
                 continue;
+            }
+
+            // Check for consecutive same-role messages (excluding tool role)
+            // Many OpenAI-compatible APIs require strict user/assistant alternation
+            if let Some(prev_role) = last_role {
+                if prev_role == role && role != "tool" {
+                    // Insert minimal message of opposite role to maintain alternation
+                    let filler_role = if role == "user" { "assistant" } else { "user" };
+                    debug!(
+                        "Inserting filler {} message to maintain alternation",
+                        filler_role
+                    );
+                    result.push(serde_json::json!({
+                        "role": filler_role,
+                        "content": "."
+                    }));
+                }
             }
 
             // For assistant messages with tool calls
@@ -94,6 +124,17 @@ impl FormatHandler for OpenAIFormat {
                                 }
                             }));
                         }
+                        // Preserve thinking in tool call messages too
+                        Content::Thinking { thinking, .. } => {
+                            if !thinking.is_empty() {
+                                if !text_content.is_empty() {
+                                    text_content.push_str("\n\n");
+                                }
+                                text_content.push_str("[Thinking]\n");
+                                text_content.push_str(thinking);
+                                text_content.push_str("\n[/Thinking]\n\n");
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -106,25 +147,39 @@ impl FormatHandler for OpenAIFormat {
                     msg_obj["content"] = serde_json::json!(text_content);
                 }
                 result.push(msg_obj);
+                last_role = Some(role);
                 continue;
             }
 
-            // Regular messages - extract text content
-            let text: String = msg
-                .content
-                .iter()
-                .filter_map(|c| match c {
-                    Content::Text { text } => Some(text.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("");
+            // Regular messages - extract text content and thinking blocks
+            let mut text_parts: Vec<String> = Vec::new();
+
+            for content in &msg.content {
+                match content {
+                    Content::Text { text } => {
+                        if !text.is_empty() {
+                            text_parts.push(text.clone());
+                        }
+                    }
+                    // Preserve thinking blocks as formatted text
+                    // This maintains context for reasoning models
+                    Content::Thinking { thinking, .. } => {
+                        if !thinking.is_empty() {
+                            text_parts.push(format!("[Thinking]\n{}\n[/Thinking]", thinking));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            let text = text_parts.join("\n\n");
 
             if !text.is_empty() {
                 result.push(serde_json::json!({
                     "role": role,
                     "content": text
                 }));
+                last_role = Some(role);
             }
         }
 
