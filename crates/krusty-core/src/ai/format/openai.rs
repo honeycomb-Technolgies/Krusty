@@ -62,9 +62,16 @@ impl FormatHandler for OpenAIFormat {
                 Role::System => continue,
             };
 
-            // For tool results, use special format
-            // Tool messages must follow assistant messages with tool_calls
-            if msg.role == Role::Tool {
+            // Check if this message contains tool results
+            // Tool results can come in Role::Tool OR Role::User messages (Anthropic style)
+            let has_tool_results = msg
+                .content
+                .iter()
+                .any(|c| matches!(c, Content::ToolResult { .. }));
+
+            // For messages with tool results, convert to OpenAI tool format
+            // This handles both Role::Tool and Role::User with ToolResult content
+            if has_tool_results {
                 for content in &msg.content {
                     if let Content::ToolResult {
                         tool_use_id,
@@ -72,10 +79,15 @@ impl FormatHandler for OpenAIFormat {
                         ..
                     } = content
                     {
+                        // Format output as string for OpenAI
+                        let output_str = match output {
+                            Value::String(s) => s.clone(),
+                            other => other.to_string(),
+                        };
                         result.push(serde_json::json!({
                             "role": "tool",
                             "tool_call_id": tool_use_id,
-                            "content": output
+                            "content": output_str
                         }));
                     }
                 }
