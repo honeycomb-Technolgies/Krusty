@@ -591,6 +591,26 @@ impl AiClient {
                                     stop_reason = "tool_use".to_string();
                                 }
                             }
+                            "response.usage" => {
+                                // Log usage for sub-agents (handle both naming conventions)
+                                let usage_obj = json.get("usage").unwrap_or(&json);
+                                let input_tokens = usage_obj
+                                    .get("input_tokens")
+                                    .or_else(|| usage_obj.get("input"))
+                                    .and_then(|t| t.as_u64())
+                                    .unwrap_or(0);
+                                let output_tokens = usage_obj
+                                    .get("output_tokens")
+                                    .or_else(|| usage_obj.get("output"))
+                                    .and_then(|t| t.as_u64())
+                                    .unwrap_or(0);
+                                if input_tokens > 0 || output_tokens > 0 {
+                                    debug!(
+                                        "Sub-agent Codex usage: input={}, output={}",
+                                        input_tokens, output_tokens
+                                    );
+                                }
+                            }
                             _ => {}
                         }
                     }

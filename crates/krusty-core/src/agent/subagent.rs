@@ -20,9 +20,79 @@ use crate::agent::cache::SharedExploreCache;
 use crate::agent::AgentCancellation;
 use crate::ai::client::AiClient;
 use crate::ai::providers::ProviderId;
+use crate::ai::retry::{is_retryable_status, with_retry, IsRetryable, RetryConfig};
 use crate::ai::types::{AiTool, Content, ModelMessage, Role};
 use crate::tools::implementations::{BashTool, EditTool, GlobTool, GrepTool, ReadTool, WriteTool};
 use crate::tools::registry::{Tool, ToolContext, ToolResult};
+
+/// Error type for subagent API calls that supports retry logic
+#[derive(Debug)]
+pub struct SubAgentApiError {
+    pub message: String,
+    pub status: Option<u16>,
+    pub retry_after: Option<Duration>,
+}
+
+impl std::fmt::Display for SubAgentApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(status) = self.status {
+            write!(f, "HTTP {}: {}", status, self.message)
+        } else {
+            write!(f, "{}", self.message)
+        }
+    }
+}
+
+impl std::error::Error for SubAgentApiError {}
+
+impl IsRetryable for SubAgentApiError {
+    fn is_retryable(&self) -> bool {
+        match self.status {
+            Some(status) => is_retryable_status(status),
+            // Network errors without status codes are typically retryable
+            None => {
+                self.message.contains("timeout")
+                    || self.message.contains("connection")
+                    || self.message.contains("network")
+            }
+        }
+    }
+
+    fn retry_after(&self) -> Option<Duration> {
+        self.retry_after
+    }
+}
+
+impl From<anyhow::Error> for SubAgentApiError {
+    fn from(err: anyhow::Error) -> Self {
+        let message = err.to_string();
+        // Try to extract HTTP status from error message
+        let status = extract_status_from_error(&message);
+        Self {
+            message,
+            status,
+            retry_after: None,
+        }
+    }
+}
+
+/// Try to extract HTTP status code from error message
+fn extract_status_from_error(message: &str) -> Option<u16> {
+    // Common patterns: "HTTP 429", "status: 429", "status code: 429"
+    for pattern in &["HTTP ", "status: ", "status code: "] {
+        if let Some(pos) = message.find(pattern) {
+            let start = pos + pattern.len();
+            let code_str: String = message[start..]
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            if let Ok(code) = code_str.parse() {
+                return Some(code);
+            }
+        }
+    }
+    None
+}
 
 /// Real-time progress update from a sub-agent
 #[derive(Debug, Clone, Default)]
@@ -623,6 +693,8 @@ impl BuilderTools {
     /// Try to acquire a file lock with exponential backoff (fast for brief locks)
     async fn acquire_lock_with_retry(&self, path: &std::path::Path) -> Result<(), String> {
         let path_buf = path.to_path_buf();
+        let start = Instant::now();
+
         // Fast exponential backoff: 50ms, 100ms, 200ms, 400ms, 800ms, 1s, 1s, 1s, 1s, 1s = ~6s total
         let delays_ms = [50, 100, 200, 400, 800, 1000, 1000, 1000, 1000, 1000];
 
@@ -632,7 +704,14 @@ impl BuilderTools {
                 self.builder_id.clone(),
                 "write/edit".to_string(),
             ) {
-                Ok(()) => return Ok(()),
+                Ok(()) => {
+                    // Record wait time if we had to wait (significant wait > 100ms)
+                    let wait_time = start.elapsed();
+                    if wait_time > Duration::from_millis(100) {
+                        self.context.record_lock_wait(path_buf, wait_time);
+                    }
+                    return Ok(());
+                }
                 Err(holder) => {
                     if attempt < delays_ms.len() - 1 {
                         tracing::debug!(
@@ -643,13 +722,17 @@ impl BuilderTools {
                             "File locked, backoff {}ms",
                             delay
                         );
-                        tokio::time::sleep(tokio::time::Duration::from_millis(*delay)).await;
+                        tokio::time::sleep(Duration::from_millis(*delay)).await;
                     } else {
+                        // Record the failed wait time too
+                        let wait_time = start.elapsed();
+                        self.context.record_lock_wait(path_buf, wait_time);
                         return Err(format!(
-                            "File {} locked by {} (tried {}x)",
+                            "File {} locked by {} (tried {}x, waited {:.1}s)",
                             path.display(),
                             holder,
-                            delays_ms.len()
+                            delays_ms.len(),
+                            wait_time.as_secs_f64()
                         ));
                     }
                 }
@@ -1248,7 +1331,7 @@ struct ToolCall {
     input: Value,
 }
 
-/// Make a non-streaming API call for sub-agent with timeout
+/// Make a non-streaming API call for sub-agent with retry logic
 async fn call_subagent_api(
     client: &AiClient,
     model: &str,
@@ -1256,14 +1339,15 @@ async fn call_subagent_api(
     messages: &[ModelMessage],
     tools: &[AiTool],
     max_tokens: usize,
-) -> Result<Value> {
+) -> Result<Value, SubAgentApiError> {
     info!(
         model = model,
         msg_count = messages.len(),
         "SubAgent API call starting"
     );
     let start = Instant::now();
-    // Build messages JSON
+
+    // Build messages JSON (outside retry loop since it's deterministic)
     let messages_json: Vec<Value> = messages
         .iter()
         .map(|m| {
@@ -1312,11 +1396,23 @@ async fn call_subagent_api(
         })
         .collect();
 
-    // Use standard HTTP timeout (configured in client) - no additional timeout wrapper
-    // The HTTP client already has a 10-minute timeout for streaming responses
-    let result = client
-        .call_with_tools(model, system, messages_json, tools_json, max_tokens)
-        .await;
+    // Use retry with exponential backoff for transient errors
+    let config = RetryConfig::default(); // 5 retries, 1s-32s backoff
+
+    let result = with_retry(&config, || async {
+        client
+            .call_with_tools(
+                model,
+                system,
+                messages_json.clone(),
+                tools_json.clone(),
+                max_tokens,
+            )
+            .await
+            .map_err(SubAgentApiError::from)
+    })
+    .await;
+
     let elapsed = start.elapsed();
     info!(
         elapsed_ms = elapsed.as_millis() as u64,

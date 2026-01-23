@@ -5,11 +5,27 @@
 //! - File locks (prevent concurrent edits)
 //! - Line diffs (UI feedback)
 //! - Modified files tracking (summary)
+//! - Lock contention tracking (observability)
+//! - Interface registry (inter-builder communication)
 
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::time::Duration;
+
+/// Exported interface from a builder for inter-builder communication
+#[derive(Clone, Debug)]
+pub struct BuilderInterface {
+    /// The builder that registered this interface
+    pub builder_id: String,
+    /// Path to the file containing the interface
+    pub file_path: PathBuf,
+    /// Exported function/class/type names
+    pub exports: Vec<String>,
+    /// Brief description of what this interface provides
+    pub description: String,
+}
 
 /// Shared context for builder swarm coordination
 pub struct SharedBuildContext {
@@ -29,6 +45,15 @@ pub struct SharedBuildContext {
     /// Stats for debugging
     locks_acquired: AtomicUsize,
     lock_contentions: AtomicUsize,
+
+    /// Track lock wait times per file for contention analysis
+    lock_wait_times: DashMap<PathBuf, Vec<Duration>>,
+
+    /// Total time spent waiting for locks (milliseconds)
+    total_lock_wait_ms: AtomicU64,
+
+    /// Interfaces registered by builders for inter-builder communication
+    interfaces: DashMap<String, BuilderInterface>,
 }
 
 impl SharedBuildContext {
@@ -41,6 +66,9 @@ impl SharedBuildContext {
             lines_removed: AtomicUsize::new(0),
             locks_acquired: AtomicUsize::new(0),
             lock_contentions: AtomicUsize::new(0),
+            lock_wait_times: DashMap::new(),
+            total_lock_wait_ms: AtomicU64::new(0),
+            interfaces: DashMap::new(),
         }
     }
 
@@ -107,6 +135,60 @@ impl SharedBuildContext {
     }
 
     // =========================================================================
+    // Lock Contention Tracking
+    // =========================================================================
+
+    /// Record a lock wait event for contention analysis
+    pub fn record_lock_wait(&self, path: PathBuf, wait_time: Duration) {
+        self.lock_wait_times
+            .entry(path)
+            .or_default()
+            .push(wait_time);
+        self.total_lock_wait_ms
+            .fetch_add(wait_time.as_millis() as u64, Ordering::Relaxed);
+    }
+
+    /// Get files with high contention (waited > 1s total)
+    pub fn high_contention_files(&self) -> Vec<(PathBuf, Duration)> {
+        self.lock_wait_times
+            .iter()
+            .filter_map(|entry| {
+                let total: Duration = entry.value().iter().sum();
+                if total > Duration::from_secs(1) {
+                    Some((entry.key().clone(), total))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Get total lock wait time
+    pub fn total_lock_wait(&self) -> Duration {
+        Duration::from_millis(self.total_lock_wait_ms.load(Ordering::Relaxed))
+    }
+
+    // =========================================================================
+    // Interface Registry (inter-builder communication)
+    // =========================================================================
+
+    /// Register an interface (builder publishes what it created)
+    pub fn register_interface(&self, interface: BuilderInterface) {
+        self.interfaces
+            .insert(interface.builder_id.clone(), interface);
+    }
+
+    /// Get all registered interfaces
+    pub fn get_interfaces(&self) -> Vec<BuilderInterface> {
+        self.interfaces.iter().map(|e| e.value().clone()).collect()
+    }
+
+    /// Get interface by builder name
+    pub fn get_interface(&self, builder_id: &str) -> Option<BuilderInterface> {
+        self.interfaces.get(builder_id).map(|e| e.value().clone())
+    }
+
+    // =========================================================================
     // Modified Files
     // =========================================================================
 
@@ -165,6 +247,24 @@ impl SharedBuildContext {
             lines.push(String::new());
         }
 
+        // Registered interfaces from other builders
+        let interfaces = self.get_interfaces();
+        if !interfaces.is_empty() {
+            lines.push("[AVAILABLE INTERFACES]".to_string());
+            for iface in interfaces {
+                lines.push(format!(
+                    "- {} ({}): {}",
+                    iface.builder_id,
+                    iface.file_path.display(),
+                    iface.description
+                ));
+                if !iface.exports.is_empty() {
+                    lines.push(format!("  Exports: {}", iface.exports.join(", ")));
+                }
+            }
+            lines.push(String::new());
+        }
+
         lines.join("\n")
     }
 
@@ -178,6 +278,8 @@ impl SharedBuildContext {
             lines_added: self.lines_added.load(Ordering::Relaxed),
             lines_removed: self.lines_removed.load(Ordering::Relaxed),
             lock_contentions: self.lock_contentions.load(Ordering::Relaxed),
+            high_contention_files: self.high_contention_files(),
+            total_lock_wait_ms: self.total_lock_wait_ms.load(Ordering::Relaxed),
         }
     }
 }
@@ -195,6 +297,8 @@ pub struct BuildContextStats {
     pub lines_added: usize,
     pub lines_removed: usize,
     pub lock_contentions: usize,
+    pub high_contention_files: Vec<(PathBuf, Duration)>,
+    pub total_lock_wait_ms: u64,
 }
 
 impl std::fmt::Display for BuildContextStats {
@@ -203,6 +307,14 @@ impl std::fmt::Display for BuildContextStats {
             f,
             "+{} -{} lines, {} files, {} contentions",
             self.lines_added, self.lines_removed, self.files_modified, self.lock_contentions
-        )
+        )?;
+        if self.total_lock_wait_ms > 0 {
+            write!(
+                f,
+                ", {:.1}s lock wait",
+                self.total_lock_wait_ms as f64 / 1000.0
+            )?;
+        }
+        Ok(())
     }
 }

@@ -42,18 +42,14 @@ struct Params {
     #[serde(default)]
     conventions: Option<Vec<String>>,
 
-    /// Maximum concurrent builders (default: 3 for Opus)
-    #[serde(default = "default_concurrency")]
-    max_concurrency: usize,
+    /// Maximum concurrent builders (agent-controlled, defaults to component count)
+    #[serde(default)]
+    max_concurrency: Option<usize>,
 
     /// Plan task IDs corresponding to each component (for auto-marking)
     /// Index i maps to components[i]
     #[serde(default)]
     task_ids: Option<Vec<String>>,
-}
-
-fn default_concurrency() -> usize {
-    3 // Opus is expensive, keep concurrency lower
 }
 
 #[async_trait]
@@ -63,14 +59,16 @@ impl Tool for BuildTool {
     }
 
     fn description(&self) -> &str {
-        "Launch a team of parallel Opus builder agents to implement code together. \
-         IMPORTANT: Builders share type signatures, module paths, and file locks to coordinate. \
+        "Launch parallel builder agents to implement code. \
          USE THIS TOOL ONLY when the user explicitly asks for: \
          'unleash the kraken', 'release the kraken', 'team of agents', 'squad of builders', \
          'agent swarm', 'parallel agents', 'builder swarm', or 'multiple agents working together'. \
-         Do NOT use for normal coding tasks - only when user wants parallel agent coordination. \
          Pass 'components' array to assign work (e.g., ['auth module', 'api endpoints', 'database layer']). \
-         Returns aggregated implementation results with line diff stats."
+         Use 'max_concurrency' to control parallelism: \
+         2-3 for tightly coupled components (shared files), \
+         5-10 for independent components (separate files). \
+         Default: matches component count (natural parallelism). \
+         Builders coordinate via file locking - more concurrency is fine if components don't share files."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -84,12 +82,18 @@ impl Tool for BuildTool {
                 "components": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Components to build in parallel. Each gets its own Opus builder agent. Example: ['auth module', 'api endpoints', 'database models']"
+                    "description": "Components to build in parallel. Each gets its own builder agent. Example: ['auth module', 'api endpoints', 'database models']"
                 },
                 "conventions": {
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "Coding conventions all builders must follow. Example: ['Use anyhow for errors', 'Add tracing logs']"
+                },
+                "max_concurrency": {
+                    "type": "integer",
+                    "description": "Max parallel builders. Default: component count. Use 2-3 for tightly coupled code (shared files), 5-10 for independent modules.",
+                    "minimum": 1,
+                    "maximum": 20
                 }
             },
             "required": ["prompt"],
@@ -121,6 +125,13 @@ impl Tool for BuildTool {
         if let Some(conventions) = &params.conventions {
             context.set_conventions(conventions.clone());
         }
+
+        // Smart concurrency default: match component count, clamped to reasonable range
+        let num_components = params.components.as_ref().map(|c| c.len()).unwrap_or(1);
+        let concurrency = params.max_concurrency.unwrap_or_else(|| {
+            // Default: match component count, capped at reasonable limit
+            num_components.clamp(2, 10)
+        });
 
         // Build tasks - all use Opus for high-quality code generation
         let mut tasks: Vec<SubAgentTask> = Vec::new();
@@ -197,12 +208,12 @@ impl Tool for BuildTool {
 
         // Create pool and execute with build context
         let pool = SubAgentPool::new(self.client.clone(), self.cancellation.clone())
-            .with_concurrency(params.max_concurrency)
+            .with_concurrency(concurrency)
             .with_override_model(ctx.current_model.clone());
 
         info!(
-            "Build tool: Starting Kraken with max_concurrency={}",
-            params.max_concurrency
+            "Build tool: Starting Kraken with max_concurrency={} (components={})",
+            concurrency, num_components
         );
 
         // Execute builders with progress channel if available
@@ -242,7 +253,7 @@ impl Tool for BuildTool {
         }
 
         // Add summary with build stats
-        let summary = format!(
+        let mut summary = format!(
             "\n---\n**Build Complete**: {} builders, {} turns, {}ms\n\
              **Changes**: +{} -{} lines, {} files\n\
              **Locks**: {} contentions",
@@ -254,6 +265,23 @@ impl Tool for BuildTool {
             stats.files_modified,
             stats.lock_contentions,
         );
+
+        // Add lock wait time info if significant
+        if stats.total_lock_wait_ms > 0 {
+            summary.push_str(&format!(", {:.1}s total wait", stats.total_lock_wait_ms as f64 / 1000.0));
+        }
+
+        // Report high contention files
+        if !stats.high_contention_files.is_empty() {
+            summary.push_str("\n**High Contention Files**:");
+            for (path, duration) in &stats.high_contention_files {
+                let filename = path.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path.display().to_string());
+                summary.push_str(&format!(" {} ({:.1}s)", filename, duration.as_secs_f64()));
+            }
+        }
+
         output.push_str(&summary);
 
         if !errors.is_empty() {

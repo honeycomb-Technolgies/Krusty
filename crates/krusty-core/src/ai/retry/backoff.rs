@@ -127,6 +127,7 @@ where
 /// The header can be either:
 /// - A number of seconds (e.g., "120")
 /// - An HTTP date (e.g., "Wed, 21 Oct 2015 07:28:00 GMT")
+#[allow(dead_code)]
 pub fn parse_retry_after(header_value: &str) -> Option<Duration> {
     // Try parsing as seconds first
     if let Ok(seconds) = header_value.parse::<u64>() {
@@ -146,6 +147,7 @@ pub fn parse_retry_after(header_value: &str) -> Option<Duration> {
 
 /// A simple retryable error wrapper for HTTP errors
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct HttpError {
     pub status: u16,
     pub message: String,

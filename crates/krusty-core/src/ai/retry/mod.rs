@@ -2,11 +2,9 @@
 //!
 //! Provides exponential backoff with jitter for handling API rate limits and transient errors.
 //!
-//! NOTE: This is infrastructure for future use. The retry logic is implemented but not yet
-//! wired into the streaming calls.
-
-#![allow(dead_code)]
+//! Used by subagent API calls to handle transient errors like rate limiting (429)
+//! and server errors (500, 502, 503, 504).
 
 mod backoff;
 
-pub use backoff::{with_retry, IsRetryable, RetryConfig};
+pub use backoff::{is_retryable_status, with_retry, IsRetryable, RetryConfig};

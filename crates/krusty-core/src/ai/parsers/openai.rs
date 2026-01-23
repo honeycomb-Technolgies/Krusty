@@ -117,26 +117,46 @@ impl OpenAIParser {
                 }
             }
 
-            // Usage info
+            // Usage info - handle both standard Responses API and Codex field names
             "response.usage" => {
-                if let Some(usage) = json.get("usage") {
-                    let prompt = usage
-                        .get("input_tokens")
-                        .and_then(|t| t.as_u64())
-                        .unwrap_or(0) as usize;
-                    let completion = usage
-                        .get("output_tokens")
-                        .and_then(|t| t.as_u64())
-                        .unwrap_or(0) as usize;
-                    if prompt > 0 || completion > 0 {
-                        return SseEvent::Usage(Usage {
-                            prompt_tokens: prompt,
-                            completion_tokens: completion,
-                            total_tokens: prompt + completion,
-                            cache_creation_input_tokens: 0,
-                            cache_read_input_tokens: 0,
-                        });
-                    }
+                // Try nested "usage" object first, then top-level fields
+                let usage_obj = json.get("usage").unwrap_or(json);
+
+                // Try both naming conventions:
+                // Standard: input_tokens, output_tokens
+                // Codex: input, output (and total, cached_input, reasoning_output)
+                let prompt = usage_obj
+                    .get("input_tokens")
+                    .or_else(|| usage_obj.get("input"))
+                    .and_then(|t| t.as_u64())
+                    .unwrap_or(0) as usize;
+
+                let completion = usage_obj
+                    .get("output_tokens")
+                    .or_else(|| usage_obj.get("output"))
+                    .and_then(|t| t.as_u64())
+                    .unwrap_or(0) as usize;
+
+                let cached = usage_obj
+                    .get("cached_input")
+                    .or_else(|| usage_obj.get("cache_read_input_tokens"))
+                    .and_then(|t| t.as_u64())
+                    .unwrap_or(0) as usize;
+
+                if prompt > 0 || completion > 0 {
+                    tracing::info!(
+                        "Responses API usage: input={}, output={}, cached={}",
+                        prompt,
+                        completion,
+                        cached
+                    );
+                    return SseEvent::Usage(Usage {
+                        prompt_tokens: prompt,
+                        completion_tokens: completion,
+                        total_tokens: prompt + completion,
+                        cache_creation_input_tokens: 0,
+                        cache_read_input_tokens: cached,
+                    });
                 }
             }
 
