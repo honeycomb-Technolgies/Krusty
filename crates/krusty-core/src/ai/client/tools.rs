@@ -3,14 +3,14 @@
 //! Non-streaming calls with tool support, used by sub-agents.
 
 use anyhow::Result;
+use futures::StreamExt;
 use serde_json::Value;
 use std::time::Instant;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use super::core::AiClient;
 use crate::ai::format::response::{
-    extract_text_from_content, normalize_codex_response, normalize_google_response,
-    normalize_openai_response,
+    extract_text_from_content, normalize_google_response, normalize_openai_response,
 };
 
 impl AiClient {
@@ -275,7 +275,7 @@ impl AiClient {
         Ok(anthropic_response)
     }
 
-    /// Call with tools using ChatGPT Codex format (non-streaming)
+    /// Call with tools using ChatGPT Codex format (streaming required)
     ///
     /// ChatGPT Codex API has a completely different format than standard OpenAI:
     /// - Uses "instructions" field instead of system message
@@ -283,6 +283,9 @@ impl AiClient {
     /// - Messages wrapped in {"type": "message", ...}
     /// - No max_tokens parameter
     /// - Requires store=false
+    /// - REQUIRES stream=true (even for "non-streaming" calls)
+    ///
+    /// We collect the streaming response and return the final result.
     async fn call_with_tools_chatgpt_codex(
         &self,
         model: &str,
@@ -290,7 +293,7 @@ impl AiClient {
         messages: Vec<Value>,
         tools: Vec<Value>,
     ) -> Result<Value> {
-        info!(model = model, provider = %self.provider_id(), "Sub-agent ChatGPT Codex API call starting");
+        info!(model = model, provider = %self.provider_id(), "Sub-agent ChatGPT Codex API call starting (streaming)");
         let start = Instant::now();
 
         // Convert messages from Anthropic to Codex format
@@ -422,7 +425,7 @@ impl AiClient {
         // Generate cache key
         let cache_key = uuid::Uuid::new_v4().to_string();
 
-        // Build Codex request body
+        // Build Codex request body - MUST use stream=true (Codex API requirement)
         let mut body = serde_json::json!({
             "model": model,
             "instructions": system_prompt,
@@ -434,7 +437,7 @@ impl AiClient {
                 "summary": "auto"
             },
             "store": false,
-            "stream": false,
+            "stream": true,  // Codex API REQUIRES streaming
             "include": ["reasoning.encrypted_content"],
             "prompt_cache_key": cache_key
         });
@@ -455,19 +458,163 @@ impl AiClient {
         };
 
         let status = response.status();
-        info!(status = %status, elapsed_ms = start.elapsed().as_millis() as u64, "Sub-agent Codex API response received");
+        info!(status = %status, elapsed_ms = start.elapsed().as_millis() as u64, "Sub-agent Codex API streaming response started");
 
-        let response = self.handle_error_response(response).await?;
-        let json: Value = response.json().await?;
+        if !status.is_success() {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            error!("API error response: {} - {}", status, error_text);
+            return Err(anyhow::anyhow!("API error: {} - {}", status, error_text));
+        }
 
-        // Convert Codex response to Anthropic format for consistent parsing
-        let anthropic_response = normalize_codex_response(&json);
+        // Collect the streaming response
+        let collected_response = self
+            .collect_codex_streaming_response(response, model)
+            .await?;
 
         info!(
             elapsed_ms = start.elapsed().as_millis() as u64,
             "Sub-agent Codex API call complete"
         );
-        Ok(anthropic_response)
+        Ok(collected_response)
+    }
+
+    /// Collect a streaming Codex response into a single Anthropic-format response
+    async fn collect_codex_streaming_response(
+        &self,
+        response: reqwest::Response,
+        model: &str,
+    ) -> Result<Value> {
+        let mut text_content = String::new();
+        let mut tool_calls: Vec<Value> = vec![];
+        let mut current_tool_id = String::new();
+        let mut current_tool_name = String::new();
+        let mut current_tool_args = String::new();
+        let mut stop_reason = "end_turn".to_string();
+
+        let mut stream = response.bytes_stream();
+        let mut buffer = String::new();
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            let chunk_str = String::from_utf8_lossy(&chunk);
+            buffer.push_str(&chunk_str);
+
+            // Process complete SSE lines
+            while let Some(newline_pos) = buffer.find('\n') {
+                let line = buffer[..newline_pos].trim().to_string();
+                buffer = buffer[newline_pos + 1..].to_string();
+
+                if line.is_empty() || line == "data: [DONE]" {
+                    continue;
+                }
+
+                if let Some(data) = line.strip_prefix("data: ") {
+                    if let Ok(json) = serde_json::from_str::<Value>(data) {
+                        let event_type = json.get("type").and_then(|t| t.as_str()).unwrap_or("");
+
+                        match event_type {
+                            "response.output_text.delta" => {
+                                if let Some(delta) = json.get("delta").and_then(|d| d.as_str()) {
+                                    text_content.push_str(delta);
+                                }
+                            }
+                            "response.output_item.added" => {
+                                if let Some(item) = json.get("item") {
+                                    if item.get("type").and_then(|t| t.as_str())
+                                        == Some("function_call")
+                                    {
+                                        current_tool_id = item
+                                            .get("call_id")
+                                            .and_then(|i| i.as_str())
+                                            .unwrap_or("")
+                                            .to_string();
+                                        current_tool_name = item
+                                            .get("name")
+                                            .and_then(|n| n.as_str())
+                                            .unwrap_or("")
+                                            .to_string();
+                                        current_tool_args.clear();
+                                        debug!(
+                                            "Codex tool call start: {} ({})",
+                                            current_tool_name, current_tool_id
+                                        );
+                                    }
+                                }
+                            }
+                            "response.function_call_arguments.delta" => {
+                                if let Some(delta) = json.get("delta").and_then(|d| d.as_str()) {
+                                    current_tool_args.push_str(delta);
+                                }
+                            }
+                            "response.function_call_arguments.done" => {
+                                // Get final arguments if provided
+                                if let Some(args) = json.get("arguments").and_then(|a| a.as_str()) {
+                                    if current_tool_args.is_empty() {
+                                        current_tool_args = args.to_string();
+                                    }
+                                }
+                                // Complete the tool call
+                                if !current_tool_name.is_empty() {
+                                    let input: Value = serde_json::from_str(&current_tool_args)
+                                        .unwrap_or(Value::Null);
+                                    tool_calls.push(serde_json::json!({
+                                        "type": "tool_use",
+                                        "id": current_tool_id,
+                                        "name": current_tool_name,
+                                        "input": input
+                                    }));
+                                    debug!(
+                                        "Codex tool call complete: {} args_len={}",
+                                        current_tool_name,
+                                        current_tool_args.len()
+                                    );
+                                    stop_reason = "tool_use".to_string();
+                                    current_tool_name.clear();
+                                    current_tool_id.clear();
+                                    current_tool_args.clear();
+                                }
+                            }
+                            "response.done" | "response.completed" => {
+                                // Finalize any pending tool call
+                                if !current_tool_name.is_empty() {
+                                    let input: Value = serde_json::from_str(&current_tool_args)
+                                        .unwrap_or(Value::Null);
+                                    tool_calls.push(serde_json::json!({
+                                        "type": "tool_use",
+                                        "id": current_tool_id,
+                                        "name": current_tool_name,
+                                        "input": input
+                                    }));
+                                    stop_reason = "tool_use".to_string();
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        // Build Anthropic-format response
+        let mut content: Vec<Value> = vec![];
+
+        if !text_content.is_empty() {
+            content.push(serde_json::json!({
+                "type": "text",
+                "text": text_content
+            }));
+        }
+
+        content.extend(tool_calls);
+
+        Ok(serde_json::json!({
+            "content": content,
+            "stop_reason": stop_reason,
+            "model": model
+        }))
     }
 
     /// Call with tools using Google format (non-streaming)
