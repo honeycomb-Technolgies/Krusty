@@ -850,6 +850,7 @@ impl AiClient {
         let mut body = serde_json::json!({
             "model": self.config().model,
             "stream": true,
+            "store": false,  // Required by ChatGPT Codex API
             "max_output_tokens": max_tokens,
             "input": input_messages,
             "tools": [],
