@@ -18,9 +18,3 @@ pub mod tools;
 pub use config::{AiClientConfig, CallOptions};
 pub use core::AiClient;
 pub use core::KRUSTY_SYSTEM_PROMPT;
-
-// Backwards compatibility aliases (deprecated)
-#[allow(deprecated)]
-pub use config::AnthropicConfig;
-#[allow(deprecated)]
-pub use core::AnthropicClient;

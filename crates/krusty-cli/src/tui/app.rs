@@ -602,7 +602,11 @@ impl App {
             }
 
             // Process streaming events (extracted to handlers/stream_events.rs)
-            self.process_stream_events();
+            // Trigger redraw when events were processed - ensures buffered text renders
+            // even after is_streaming becomes false (fixes GLM/Z.ai streaming freeze)
+            if self.process_stream_events() {
+                self.needs_redraw = true;
+            }
 
             // Execute tools when ready
             self.check_and_execute_tools();

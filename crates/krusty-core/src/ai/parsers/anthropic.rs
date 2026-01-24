@@ -31,6 +31,36 @@ impl AnthropicParser {
             server_tool_accumulators: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
+
+    /// Lock tool accumulators with proper error handling
+    fn lock_tool_accumulators(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, std::collections::HashMap<usize, ToolCallAccumulator>>>
+    {
+        self.tool_accumulators
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Tool accumulators lock poisoned: {}", e))
+    }
+
+    /// Lock thinking accumulators with proper error handling
+    fn lock_thinking_accumulators(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, std::collections::HashMap<usize, ThinkingAccumulator>>>
+    {
+        self.thinking_accumulators
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Thinking accumulators lock poisoned: {}", e))
+    }
+
+    /// Lock server tool accumulators with proper error handling
+    fn lock_server_tool_accumulators(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, std::collections::HashMap<usize, ServerToolAccumulator>>>
+    {
+        self.server_tool_accumulators
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Server tool accumulators lock poisoned: {}", e))
+    }
 }
 
 #[async_trait::async_trait]
@@ -59,7 +89,7 @@ impl SseParser for AnthropicParser {
                                 .to_string();
 
                             // Store accumulator by index
-                            let mut accumulators = self.tool_accumulators.lock().unwrap();
+                            let mut accumulators = self.lock_tool_accumulators()?;
                             accumulators
                                 .insert(index, ToolCallAccumulator::new(id.clone(), name.clone()));
 
@@ -78,7 +108,7 @@ impl SseParser for AnthropicParser {
                                 .unwrap_or("")
                                 .to_string();
 
-                            let mut accumulators = self.server_tool_accumulators.lock().unwrap();
+                            let mut accumulators = self.lock_server_tool_accumulators()?;
                             accumulators.insert(
                                 index,
                                 ServerToolAccumulator::new(id.clone(), name.clone()),
@@ -138,7 +168,7 @@ impl SseParser for AnthropicParser {
                         }
                         Some("thinking") => {
                             // Start tracking thinking block
-                            let mut accumulators = self.thinking_accumulators.lock().unwrap();
+                            let mut accumulators = self.lock_thinking_accumulators()?;
                             accumulators.insert(index, ThinkingAccumulator::new());
                             return Ok(SseEvent::ThinkingStart { index });
                         }
@@ -185,8 +215,7 @@ impl SseParser for AnthropicParser {
 
                             // Check server tool accumulator first
                             {
-                                let mut accumulators =
-                                    self.server_tool_accumulators.lock().unwrap();
+                                let mut accumulators = self.lock_server_tool_accumulators()?;
                                 if let Some(acc) = accumulators.get_mut(&index) {
                                     acc.add_input(&partial_json);
                                     return Ok(SseEvent::ServerToolDelta {
@@ -197,7 +226,7 @@ impl SseParser for AnthropicParser {
                             }
 
                             // Then check client tool accumulator
-                            let mut accumulators = self.tool_accumulators.lock().unwrap();
+                            let mut accumulators = self.lock_tool_accumulators()?;
                             if let Some(acc) = accumulators.get_mut(&index) {
                                 acc.add_arguments(&partial_json);
                                 return Ok(SseEvent::ToolCallDelta {
@@ -214,7 +243,7 @@ impl SseParser for AnthropicParser {
                                 .to_string();
 
                             // Update thinking accumulator
-                            let mut accumulators = self.thinking_accumulators.lock().unwrap();
+                            let mut accumulators = self.lock_thinking_accumulators()?;
                             if let Some(acc) = accumulators.get_mut(&index) {
                                 acc.add_thinking(&thinking);
                             }
@@ -228,7 +257,7 @@ impl SseParser for AnthropicParser {
                                 .to_string();
 
                             // Update thinking accumulator signature
-                            let mut accumulators = self.thinking_accumulators.lock().unwrap();
+                            let mut accumulators = self.lock_thinking_accumulators()?;
                             if let Some(acc) = accumulators.get_mut(&index) {
                                 acc.add_signature(&signature);
                             }
@@ -245,7 +274,7 @@ impl SseParser for AnthropicParser {
 
                 // Check for completed server tool
                 {
-                    let mut accumulators = self.server_tool_accumulators.lock().unwrap();
+                    let mut accumulators = self.lock_server_tool_accumulators()?;
                     if let Some(mut acc) = accumulators.remove(&index) {
                         let input = acc.complete();
                         return Ok(SseEvent::ServerToolComplete {
@@ -258,7 +287,7 @@ impl SseParser for AnthropicParser {
 
                 // Check for completed client tool call
                 {
-                    let mut accumulators = self.tool_accumulators.lock().unwrap();
+                    let mut accumulators = self.lock_tool_accumulators()?;
                     if let Some(mut acc) = accumulators.remove(&index) {
                         if let Some(tool_call) = acc.try_complete() {
                             return Ok(SseEvent::ToolCallComplete(tool_call));
@@ -271,7 +300,7 @@ impl SseParser for AnthropicParser {
 
                 // Check for completed thinking block
                 {
-                    let mut accumulators = self.thinking_accumulators.lock().unwrap();
+                    let mut accumulators = self.lock_thinking_accumulators()?;
                     if let Some(mut acc) = accumulators.remove(&index) {
                         let (thinking, signature) = acc.complete();
                         return Ok(SseEvent::ThinkingComplete {

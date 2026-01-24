@@ -196,7 +196,3 @@ impl AiClient {
         Err(anyhow::anyhow!("API error: {} - {}", status, error_text))
     }
 }
-
-// Type alias for backwards compatibility during migration
-#[deprecated(note = "Use AiClient instead")]
-pub type AnthropicClient = AiClient;

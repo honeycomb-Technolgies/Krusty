@@ -11,7 +11,7 @@ use ratatui::{
 };
 use std::time::{Duration, Instant};
 
-use super::{BlockEvent, ClipContext, EventResult, StreamBlock};
+use super::{BlockEvent, ClipContext, EventResult, StreamBlock, WidthScrollable};
 use crate::tui::components::scrollbars::render_scrollbar;
 use crate::tui::themes::Theme;
 use crate::tui::utils::wrap_text;
@@ -121,22 +121,9 @@ impl ThinkingBlock {
         }
     }
 
-    /// Get wrapped lines for current width
-    fn get_lines(&mut self, width: u16) -> &[String] {
-        let content_width = 76usize.min(width.saturating_sub(4) as usize);
-        if self.cached_width != width || self.cached_lines.is_empty() {
-            self.cached_lines = wrap_text(&self.content, content_width);
-            self.cached_width = width;
-            // Also update cached height
-            let content_lines = (self.cached_lines.len() as u16).min(MAX_VISIBLE_LINES);
-            self.cached_height = (content_lines + 2).max(3);
-        }
-        &self.cached_lines
-    }
-
     /// Total content lines
     fn total_lines(&mut self, width: u16) -> u16 {
-        self.get_lines(width).len() as u16
+        WidthScrollable::get_lines(self, width).len() as u16
     }
 
     /// Visible lines (capped at MAX_VISIBLE_LINES)
@@ -144,48 +131,16 @@ impl ThinkingBlock {
         self.total_lines(width).min(MAX_VISIBLE_LINES)
     }
 
-    /// Max scroll offset
-    fn max_scroll(&mut self, width: u16) -> u16 {
-        self.total_lines(width).saturating_sub(MAX_VISIBLE_LINES)
-    }
-
-    /// Needs scrollbar?
-    fn needs_scrollbar(&mut self, width: u16) -> bool {
-        self.total_lines(width) > MAX_VISIBLE_LINES
-    }
-
-    /// Scroll up
-    fn scroll_up(&mut self) {
-        self.scroll_offset = self.scroll_offset.saturating_sub(1);
-    }
-
-    /// Scroll down
-    fn scroll_down(&mut self, width: u16) {
-        let max = self.max_scroll(width);
-        if self.scroll_offset < max {
-            self.scroll_offset += 1;
-        }
-    }
-
-    /// Get scroll info for drag handling: (total_lines, visible_lines, scrollbar_height)
-    /// Optimized to compute all values in a single pass
+    /// Get scroll info for drag handling
+    /// Note: delegates to WidthScrollable::get_width_scroll_info
     pub fn get_scroll_info(&mut self, width: u16) -> (u16, u16, u16) {
-        let total = self.get_lines(width).len() as u16;
-        let visible = total.min(MAX_VISIBLE_LINES);
-        (total, visible, visible)
+        self.get_width_scroll_info(width)
     }
 
     /// Check if block has enough content to need a scrollbar
+    /// Note: delegates to WidthScrollable::needs_scrollbar
     pub fn has_scrollbar(&mut self, width: u16) -> bool {
-        self.get_lines(width).len() as u16 > MAX_VISIBLE_LINES
-    }
-
-    /// Set scroll offset directly (for drag handling)
-    pub fn set_scroll_offset(&mut self, offset: u16) {
-        let max = self
-            .total_lines(self.cached_width)
-            .saturating_sub(MAX_VISIBLE_LINES);
-        self.scroll_offset = offset.min(max);
+        WidthScrollable::needs_scrollbar(self, width)
     }
 
     /// Calculate actual rendered box width for hit testing
@@ -200,6 +155,34 @@ impl ThinkingBlock {
 impl Default for ThinkingBlock {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl WidthScrollable for ThinkingBlock {
+    fn get_lines(&mut self, width: u16) -> &[String] {
+        let content_width = 76usize.min(width.saturating_sub(4) as usize);
+        if self.cached_width != width || self.cached_lines.is_empty() {
+            self.cached_lines = wrap_text(&self.content, content_width);
+            self.cached_width = width;
+            let content_lines = (self.cached_lines.len() as u16).min(MAX_VISIBLE_LINES);
+            self.cached_height = (content_lines + 2).max(3);
+        }
+        &self.cached_lines
+    }
+
+    fn scroll_offset(&self) -> u16 {
+        self.scroll_offset
+    }
+
+    fn set_scroll_offset(&mut self, offset: u16) {
+        let max = self
+            .total_lines(self.cached_width)
+            .saturating_sub(MAX_VISIBLE_LINES);
+        self.scroll_offset = offset.min(max);
+    }
+
+    fn max_visible_lines(&self) -> u16 {
+        MAX_VISIBLE_LINES
     }
 }
 

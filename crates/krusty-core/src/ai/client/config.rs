@@ -191,7 +191,3 @@ impl Default for CallOptions {
         }
     }
 }
-
-// Type alias for backwards compatibility during migration
-#[deprecated(note = "Use AiClientConfig instead")]
-pub type AnthropicConfig = AiClientConfig;

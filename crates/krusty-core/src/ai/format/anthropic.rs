@@ -6,7 +6,7 @@
 use serde_json::Value;
 use tracing::{debug, info};
 
-use super::{FormatHandler, RequestOptions};
+use super::{needs_role_alternation_filler, FormatHandler, RequestOptions};
 use crate::ai::providers::ProviderId;
 use crate::ai::types::{AiTool, Content, ModelMessage, Role};
 
@@ -97,22 +97,18 @@ impl FormatHandler for AnthropicFormat {
 
             // Check for consecutive same-role messages
             // API requires strict user/assistant alternation
-            if let Some(prev_role) = last_role {
-                if prev_role == role {
-                    // Insert minimal message of opposite role to maintain alternation
-                    let filler_role = if role == "user" { "assistant" } else { "user" };
-                    debug!(
-                        "Inserting filler {} message to maintain alternation",
-                        filler_role
-                    );
-                    result.push(serde_json::json!({
-                        "role": filler_role,
-                        "content": [{
-                            "type": "text",
-                            "text": "."
-                        }]
-                    }));
-                }
+            if let Some(filler_role) = needs_role_alternation_filler(last_role, role, &[]) {
+                debug!(
+                    "Inserting filler {} message to maintain alternation",
+                    filler_role
+                );
+                result.push(serde_json::json!({
+                    "role": filler_role,
+                    "content": [{
+                        "type": "text",
+                        "text": "."
+                    }]
+                }));
             }
 
             // Determine if this message should include thinking blocks

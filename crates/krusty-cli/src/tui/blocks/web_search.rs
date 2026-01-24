@@ -12,7 +12,7 @@ use ratatui::{
 };
 use std::time::{Duration, Instant};
 
-use super::{BlockEvent, ClipContext, EventResult, StreamBlock};
+use super::{BlockEvent, ClipContext, EventResult, SimpleScrollable, StreamBlock};
 use crate::ai::types::WebSearchResult;
 use crate::tui::components::scrollbars::render_scrollbar;
 use crate::tui::themes::Theme;
@@ -107,48 +107,15 @@ impl WebSearchBlock {
         SPINNER[self.spinner_idx % SPINNER.len()]
     }
 
-    /// Total result lines (each result = 2 lines: title + url)
-    fn total_lines(&self) -> u16 {
-        (self.results.len() * 2) as u16
-    }
-
     /// Visible lines (capped)
     fn visible_lines(&self) -> u16 {
         self.total_lines().min(MAX_VISIBLE_LINES)
     }
 
-    /// Max scroll offset
-    fn max_scroll(&self) -> u16 {
-        self.total_lines().saturating_sub(MAX_VISIBLE_LINES)
-    }
-
-    /// Needs scrollbar?
-    fn needs_scrollbar(&self) -> bool {
-        self.total_lines() > MAX_VISIBLE_LINES
-    }
-
-    fn scroll_up(&mut self) {
-        self.scroll_offset = self.scroll_offset.saturating_sub(1);
-    }
-
-    fn scroll_down(&mut self) {
-        let max = self.max_scroll();
-        if self.scroll_offset < max {
-            self.scroll_offset += 1;
-        }
-    }
-
     /// Get scroll info for drag handling
+    /// Note: delegates to SimpleScrollable::simple_scroll_info
     pub fn get_scroll_info(&self) -> (u16, u16, u16) {
-        let total = self.total_lines();
-        let visible = self.visible_lines();
-        (total, visible, visible)
-    }
-
-    /// Set scroll offset directly
-    pub fn set_scroll_offset(&mut self, offset: u16) {
-        let max = self.max_scroll();
-        self.scroll_offset = offset.min(max);
+        self.simple_scroll_info()
     }
 
     /// Calculate box width
@@ -442,6 +409,26 @@ impl WebSearchBlock {
     fn expanded_height(&self) -> u16 {
         let result_lines = self.visible_lines();
         (result_lines + 2).max(4)
+    }
+}
+
+impl SimpleScrollable for WebSearchBlock {
+    fn total_lines(&self) -> u16 {
+        // Each result has 2 lines: title + url
+        (self.results.len() * 2) as u16
+    }
+
+    fn scroll_offset(&self) -> u16 {
+        self.scroll_offset
+    }
+
+    fn set_scroll_offset(&mut self, offset: u16) {
+        let max = self.max_scroll();
+        self.scroll_offset = offset.min(max);
+    }
+
+    fn max_visible_lines(&self) -> u16 {
+        MAX_VISIBLE_LINES
     }
 }
 

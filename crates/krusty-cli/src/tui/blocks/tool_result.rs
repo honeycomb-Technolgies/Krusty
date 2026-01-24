@@ -12,7 +12,7 @@ use ratatui::{
 };
 use std::time::{Duration, Instant};
 
-use super::{BlockEvent, ClipContext, EventResult, StreamBlock};
+use super::{BlockEvent, ClipContext, EventResult, SimpleScrollable, StreamBlock};
 use crate::tui::components::scrollbars::render_scrollbar;
 use crate::tui::themes::Theme;
 
@@ -160,55 +160,21 @@ impl ToolResultBlock {
         SPINNER[self.spinner_idx % SPINNER.len()]
     }
 
-    /// Total result lines
-    fn total_lines(&self) -> u16 {
-        self.results.len() as u16
-    }
-
     /// Visible lines (capped at MAX_VISIBLE_LINES)
     fn visible_lines(&self) -> u16 {
         self.total_lines().min(MAX_VISIBLE_LINES)
     }
 
-    /// Max scroll offset
-    fn max_scroll(&self) -> u16 {
-        self.total_lines().saturating_sub(MAX_VISIBLE_LINES)
-    }
-
-    /// Needs scrollbar?
-    fn needs_scrollbar(&self) -> bool {
-        self.total_lines() > MAX_VISIBLE_LINES
-    }
-
-    /// Scroll up
-    fn scroll_up(&mut self) {
-        self.scroll_offset = self.scroll_offset.saturating_sub(1);
-    }
-
-    /// Scroll down
-    fn scroll_down(&mut self) {
-        let max = self.max_scroll();
-        if self.scroll_offset < max {
-            self.scroll_offset += 1;
-        }
-    }
-
     /// Get scroll info for drag handling: (total_lines, visible_lines, scrollbar_height)
+    /// Note: delegates to SimpleScrollable::simple_scroll_info
     pub fn get_scroll_info(&self) -> (u16, u16, u16) {
-        let total = self.total_lines();
-        let visible = self.visible_lines();
-        (total, visible, visible)
+        self.simple_scroll_info()
     }
 
     /// Check if block has enough content to need a scrollbar
+    /// Note: delegates to SimpleScrollable::needs_scrollbar
     pub fn has_scrollbar(&self) -> bool {
-        self.needs_scrollbar()
-    }
-
-    /// Set scroll offset directly (for drag handling and session restoration)
-    pub fn set_scroll_offset(&mut self, offset: u16) {
-        let max = self.max_scroll();
-        self.scroll_offset = offset.min(max);
+        SimpleScrollable::needs_scrollbar(self)
     }
 
     /// Calculate actual rendered box width for hit testing
@@ -495,6 +461,25 @@ impl ToolResultBlock {
         // Header + visible results + bottom border
         let result_lines = self.visible_lines();
         (result_lines + 2).max(4)
+    }
+}
+
+impl SimpleScrollable for ToolResultBlock {
+    fn total_lines(&self) -> u16 {
+        self.results.len() as u16
+    }
+
+    fn scroll_offset(&self) -> u16 {
+        self.scroll_offset
+    }
+
+    fn set_scroll_offset(&mut self, offset: u16) {
+        let max = self.max_scroll();
+        self.scroll_offset = offset.min(max);
+    }
+
+    fn max_visible_lines(&self) -> u16 {
+        MAX_VISIBLE_LINES
     }
 }
 

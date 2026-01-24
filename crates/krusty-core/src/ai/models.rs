@@ -135,6 +135,9 @@ pub struct ModelRegistry {
     /// All models indexed by provider
     models: RwLock<HashMap<ProviderId, Vec<ModelMetadata>>>,
 
+    /// Index for O(1) model lookup by ID -> (provider, index in provider's vec)
+    model_index: RwLock<HashMap<String, (ProviderId, usize)>>,
+
     /// Recently used model IDs (most recent first)
     recent_ids: RwLock<Vec<String>>,
 
@@ -147,6 +150,7 @@ impl ModelRegistry {
     pub fn new() -> Self {
         Self {
             models: RwLock::new(HashMap::new()),
+            model_index: RwLock::new(HashMap::new()),
             recent_ids: RwLock::new(Vec::new()),
             max_recent: 10,
         }
@@ -155,6 +159,16 @@ impl ModelRegistry {
     /// Set models for a provider (replaces existing)
     pub async fn set_models(&self, provider: ProviderId, models: Vec<ModelMetadata>) {
         let mut all_models = self.models.write().await;
+        let mut index = self.model_index.write().await;
+
+        // Remove old index entries for this provider
+        index.retain(|_, (p, _)| *p != provider);
+
+        // Add new index entries
+        for (idx, model) in models.iter().enumerate() {
+            index.insert(model.id.clone(), (provider, idx));
+        }
+
         all_models.insert(provider, models);
     }
 
@@ -167,26 +181,23 @@ impl ModelRegistry {
             .unwrap_or(false)
     }
 
-    /// Get a specific model by ID (searches all providers)
+    /// Get a specific model by ID - O(1) lookup via index
     pub async fn get_model(&self, model_id: &str) -> Option<ModelMetadata> {
+        let index = self.model_index.read().await;
+        let (provider, idx) = index.get(model_id)?;
+
         let models = self.models.read().await;
-        models
-            .values()
-            .flat_map(|v| v.iter())
-            .find(|m| m.id == model_id)
-            .cloned()
+        models.get(provider).and_then(|v| v.get(*idx)).cloned()
     }
 
     /// Get a specific model by ID (non-blocking, for use in sync contexts like rendering)
-    /// Returns None if lock is contended or model not found
+    /// Returns None if lock is contended or model not found - O(1) lookup via index
     pub fn try_get_model(&self, model_id: &str) -> Option<ModelMetadata> {
+        let index = self.model_index.try_read().ok()?;
+        let (provider, idx) = index.get(model_id)?;
+
         let models = self.models.try_read().ok()?;
-        for provider_models in models.values() {
-            if let Some(model) = provider_models.iter().find(|m| m.id == model_id) {
-                return Some(model.clone());
-            }
-        }
-        None
+        models.get(provider).and_then(|v| v.get(*idx)).cloned()
     }
 
     /// Record a model as recently used
@@ -210,28 +221,30 @@ impl ModelRegistry {
         recent.truncate(self.max_recent);
     }
 
-    /// Get models organized for display
+    /// Get models organized for display - O(n) for recent models via index
     /// Returns: (recent_models, models_by_provider)
     pub async fn get_organized_models(
         &self,
         configured_providers: &[ProviderId],
     ) -> (Vec<ModelMetadata>, HashMap<ProviderId, Vec<ModelMetadata>>) {
         let models = self.models.read().await;
+        let index = self.model_index.read().await;
         let recent_ids = self.recent_ids.read().await;
 
-        // Collect recent models
-        let mut recent_models = Vec::new();
-        for id in recent_ids.iter() {
-            for provider_models in models.values() {
-                if let Some(model) = provider_models.iter().find(|m| &m.id == id) {
-                    // Only include if provider is configured
-                    if configured_providers.contains(&model.provider) {
-                        recent_models.push(model.clone());
-                    }
-                    break;
+        // Collect recent models using index for O(1) lookup per ID
+        let recent_models: Vec<ModelMetadata> = recent_ids
+            .iter()
+            .filter_map(|id| {
+                let (provider, idx) = index.get(id)?;
+                let model = models.get(provider)?.get(*idx)?;
+                // Only include if provider is configured
+                if configured_providers.contains(&model.provider) {
+                    Some(model.clone())
+                } else {
+                    None
                 }
-            }
-        }
+            })
+            .collect();
 
         // Collect models by provider (only configured)
         let mut by_provider = HashMap::new();
@@ -246,26 +259,29 @@ impl ModelRegistry {
         (recent_models, by_provider)
     }
 
-    /// Get models organized for display (non-blocking)
+    /// Get models organized for display (non-blocking) - O(n) for recent models via index
     /// Returns None if locks are contended
     pub fn try_get_organized_models(
         &self,
         configured_providers: &[ProviderId],
     ) -> Option<(Vec<ModelMetadata>, HashMap<ProviderId, Vec<ModelMetadata>>)> {
         let models = self.models.try_read().ok()?;
+        let index = self.model_index.try_read().ok()?;
         let recent_ids = self.recent_ids.try_read().ok()?;
 
-        let mut recent_models = Vec::new();
-        for id in recent_ids.iter() {
-            for provider_models in models.values() {
-                if let Some(model) = provider_models.iter().find(|m| &m.id == id) {
-                    if configured_providers.contains(&model.provider) {
-                        recent_models.push(model.clone());
-                    }
-                    break;
+        // Collect recent models using index for O(1) lookup per ID
+        let recent_models: Vec<ModelMetadata> = recent_ids
+            .iter()
+            .filter_map(|id| {
+                let (provider, idx) = index.get(id)?;
+                let model = models.get(provider)?.get(*idx)?;
+                if configured_providers.contains(&model.provider) {
+                    Some(model.clone())
+                } else {
+                    None
                 }
-            }
-        }
+            })
+            .collect();
 
         let mut by_provider = HashMap::new();
         for provider in configured_providers {

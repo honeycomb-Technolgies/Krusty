@@ -28,8 +28,4 @@ pub mod types;
 // Re-export main types from new module
 pub use client::{AiClient, AiClientConfig, CallOptions, KRUSTY_SYSTEM_PROMPT};
 
-// Backwards compatibility re-exports (deprecated)
-#[allow(deprecated)]
-pub use client::{AnthropicClient, AnthropicConfig};
-
 pub use title::{generate_pinch_title, generate_title};

@@ -27,14 +27,6 @@ pub mod updater;
 // Re-exports for convenience
 pub use ai::client::{AiClient, AiClientConfig, CallOptions, KRUSTY_SYSTEM_PROMPT};
 pub use ai::streaming::StreamPart;
-
-// Backwards compatibility (deprecated)
-#[deprecated(note = "Use AiClient instead")]
-#[allow(deprecated)]
-pub use ai::client::AnthropicClient;
-#[deprecated(note = "Use AiClientConfig instead")]
-#[allow(deprecated)]
-pub use ai::client::AnthropicConfig;
 pub use ai::types::{AiTool, AiToolCall, Content, ModelMessage, Role};
 pub use mcp::McpManager;
 pub use skills::SkillsManager;

@@ -14,7 +14,7 @@ use ratatui::{
 };
 use std::time::{Duration, Instant};
 
-use super::{BlockEvent, ClipContext, EventResult, StreamBlock};
+use super::{BlockEvent, ClipContext, EventResult, StreamBlock, WidthScrollable};
 use crate::tui::components::scrollbars::render_scrollbar;
 use crate::tui::themes::Theme;
 
@@ -130,11 +130,6 @@ impl WriteBlock {
         self.collapsed = collapsed;
     }
 
-    /// Set scroll offset (for session restoration)
-    pub fn set_scroll_offset(&mut self, offset: u16) {
-        self.scroll_offset = offset;
-    }
-
     /// Check if this is a pending block (no content yet)
     pub fn is_pending(&self) -> bool {
         self.content.is_empty()
@@ -245,23 +240,6 @@ impl WriteBlock {
         }
     }
 
-    /// Get wrapped lines for current width
-    fn get_lines(&mut self, width: u16) -> &[String] {
-        // Cap at MAX_CONTENT_WIDTH (matches ThinkingBlock pattern)
-        let content_width = MAX_CONTENT_WIDTH.min(width.saturating_sub(10) as usize);
-        if self.cached_width != width || self.cached_lines.is_empty() {
-            self.cached_lines = self.wrap_content(content_width);
-            self.cached_width = width;
-            let content_lines = (self.cached_lines.len() as u16).min(MAX_VISIBLE_LINES);
-            self.cached_height = if self.collapsed {
-                1
-            } else {
-                (content_lines + 2).max(3)
-            };
-        }
-        &self.cached_lines
-    }
-
     /// Wrap content lines to fit width
     fn wrap_content(&self, max_width: usize) -> Vec<String> {
         if max_width == 0 {
@@ -284,17 +262,10 @@ impl WriteBlock {
         result
     }
 
-    /// Max scroll offset
-    fn max_scroll(&mut self, width: u16) -> u16 {
-        let total = self.get_lines(width).len() as u16;
-        total.saturating_sub(MAX_VISIBLE_LINES)
-    }
-
-    /// Get scroll info for drag handling: (total_lines, visible_lines, scrollbar_height)
+    /// Get scroll info for drag handling
+    /// Note: delegates to WidthScrollable::get_width_scroll_info
     pub fn get_scroll_info(&mut self, width: u16) -> (u16, u16, u16) {
-        let total = self.get_lines(width).len() as u16;
-        let visible = total.min(MAX_VISIBLE_LINES);
-        (total, visible, visible)
+        self.get_width_scroll_info(width)
     }
 
     /// Calculate actual rendered box width for hit testing
@@ -302,19 +273,6 @@ impl WriteBlock {
         let content_width = MAX_CONTENT_WIDTH.min(available_width.saturating_sub(10) as usize);
         let wrapped_lines = self.wrap_content(content_width);
         self.calc_box_width(&wrapped_lines, available_width)
-    }
-
-    /// Scroll up
-    fn scroll_up(&mut self) {
-        self.scroll_offset = self.scroll_offset.saturating_sub(1);
-    }
-
-    /// Scroll down
-    fn scroll_down(&mut self, width: u16) {
-        let max = self.max_scroll(width);
-        if self.scroll_offset < max {
-            self.scroll_offset += 1;
-        }
     }
 
     /// Get short version of file path
@@ -633,6 +591,35 @@ impl WriteBlock {
                 );
             }
         }
+    }
+}
+
+impl WidthScrollable for WriteBlock {
+    fn get_lines(&mut self, width: u16) -> &[String] {
+        let content_width = MAX_CONTENT_WIDTH.min(width.saturating_sub(10) as usize);
+        if self.cached_width != width || self.cached_lines.is_empty() {
+            self.cached_lines = self.wrap_content(content_width);
+            self.cached_width = width;
+            let content_lines = (self.cached_lines.len() as u16).min(MAX_VISIBLE_LINES);
+            self.cached_height = if self.collapsed {
+                1
+            } else {
+                (content_lines + 2).max(3)
+            };
+        }
+        &self.cached_lines
+    }
+
+    fn scroll_offset(&self) -> u16 {
+        self.scroll_offset
+    }
+
+    fn set_scroll_offset(&mut self, offset: u16) {
+        self.scroll_offset = offset;
+    }
+
+    fn max_visible_lines(&self) -> u16 {
+        MAX_VISIBLE_LINES
     }
 }
 

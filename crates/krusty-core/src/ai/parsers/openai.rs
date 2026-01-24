@@ -19,6 +19,17 @@ impl OpenAIParser {
         }
     }
 
+    /// Lock tool accumulators with proper error handling
+    fn lock_tool_accumulators(
+        &self,
+    ) -> anyhow::Result<
+        std::sync::MutexGuard<'_, std::collections::HashMap<usize, ToolCallAccumulator>>,
+    > {
+        self.tool_accumulators
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Tool accumulators lock poisoned: {}", e))
+    }
+
     /// Parse OpenAI Responses API event format
     /// Used by GPT-5 models via OpenCode Zen and ChatGPT Codex
     fn parse_responses_api_event(&self, json: &Value, event_type: &str) -> SseEvent {
@@ -63,18 +74,19 @@ impl OpenAIParser {
                     }
                 });
 
-                let mut accumulators = self.tool_accumulators.lock().unwrap();
-                if !accumulators.is_empty() {
-                    // Complete all accumulated tool calls
-                    let tool_calls: Vec<_> = accumulators
-                        .drain()
-                        .map(|(_, mut acc)| acc.force_complete())
-                        .collect();
-                    tracing::info!(
-                        "Responses API completing with {} tool calls",
-                        tool_calls.len()
-                    );
-                    return SseEvent::FinishWithToolCalls { tool_calls, usage };
+                if let Ok(mut accumulators) = self.lock_tool_accumulators() {
+                    if !accumulators.is_empty() {
+                        // Complete all accumulated tool calls
+                        let tool_calls: Vec<_> = accumulators
+                            .drain()
+                            .map(|(_, mut acc)| acc.force_complete())
+                            .collect();
+                        tracing::info!(
+                            "Responses API completing with {} tool calls",
+                            tool_calls.len()
+                        );
+                        return SseEvent::FinishWithToolCalls { tool_calls, usage };
+                    }
                 }
                 return SseEvent::Finish {
                     reason: FinishReason::Stop,
@@ -102,10 +114,13 @@ impl OpenAIParser {
                                 id,
                                 name
                             );
-                            let mut accumulators = self.tool_accumulators.lock().unwrap();
-                            let index = accumulators.len();
-                            accumulators
-                                .insert(index, ToolCallAccumulator::new(id.clone(), name.clone()));
+                            if let Ok(mut accumulators) = self.lock_tool_accumulators() {
+                                let index = accumulators.len();
+                                accumulators.insert(
+                                    index,
+                                    ToolCallAccumulator::new(id.clone(), name.clone()),
+                                );
+                            }
                             return SseEvent::ToolCallStart { id, name };
                         }
                     }
@@ -115,13 +130,14 @@ impl OpenAIParser {
             // Function arguments delta
             "response.function_call_arguments.delta" => {
                 if let Some(delta) = json.get("delta").and_then(|d| d.as_str()) {
-                    let mut accumulators = self.tool_accumulators.lock().unwrap();
-                    if let Some((_, acc)) = accumulators.iter_mut().last() {
-                        acc.add_arguments(delta);
-                        return SseEvent::ToolCallDelta {
-                            id: acc.id.clone(),
-                            delta: delta.to_string(),
-                        };
+                    if let Ok(mut accumulators) = self.lock_tool_accumulators() {
+                        if let Some((_, acc)) = accumulators.iter_mut().last() {
+                            acc.add_arguments(delta);
+                            return SseEvent::ToolCallDelta {
+                                id: acc.id.clone(),
+                                delta: delta.to_string(),
+                            };
+                        }
                     }
                 }
             }
@@ -130,17 +146,18 @@ impl OpenAIParser {
             "response.function_call_arguments.done" => {
                 // Arguments complete, tool call will be finalized on response.done
                 if let Some(arguments) = json.get("arguments").and_then(|a| a.as_str()) {
-                    let mut accumulators = self.tool_accumulators.lock().unwrap();
-                    if let Some((_, acc)) = accumulators.iter_mut().last() {
-                        // Ensure we have the complete arguments
-                        if acc.arguments.is_empty() {
-                            acc.add_arguments(arguments);
+                    if let Ok(mut accumulators) = self.lock_tool_accumulators() {
+                        if let Some((_, acc)) = accumulators.iter_mut().last() {
+                            // Ensure we have the complete arguments
+                            if acc.arguments.is_empty() {
+                                acc.add_arguments(arguments);
+                            }
+                            tracing::debug!(
+                                "Tool call arguments complete: id={}, args_len={}",
+                                acc.id,
+                                acc.arguments.len()
+                            );
                         }
-                        tracing::debug!(
-                            "Tool call arguments complete: id={}, args_len={}",
-                            acc.id,
-                            acc.arguments.len()
-                        );
                     }
                 }
             }
@@ -254,7 +271,7 @@ impl SseParser for OpenAIParser {
                     }
                     if reason == "tool_calls" {
                         // Complete all accumulated tool calls
-                        let mut accumulators = self.tool_accumulators.lock().unwrap();
+                        let mut accumulators = self.lock_tool_accumulators()?;
                         let tool_calls: Vec<_> = accumulators
                             .drain()
                             .map(|(_, mut acc)| acc.force_complete())
@@ -310,7 +327,7 @@ impl SseParser for OpenAIParser {
 
                                 if let Some(name) = function.get("name").and_then(|n| n.as_str()) {
                                     // New tool call starting
-                                    let mut accumulators = self.tool_accumulators.lock().unwrap();
+                                    let mut accumulators = self.lock_tool_accumulators()?;
                                     accumulators.insert(
                                         index,
                                         ToolCallAccumulator::new(id.clone(), name.to_string()),
@@ -325,7 +342,7 @@ impl SseParser for OpenAIParser {
                                     function.get("arguments").and_then(|a| a.as_str())
                                 {
                                     // Arguments delta
-                                    let mut accumulators = self.tool_accumulators.lock().unwrap();
+                                    let mut accumulators = self.lock_tool_accumulators()?;
                                     if let Some(acc) = accumulators.get_mut(&index) {
                                         acc.add_arguments(args);
                                         return Ok(SseEvent::ToolCallDelta {

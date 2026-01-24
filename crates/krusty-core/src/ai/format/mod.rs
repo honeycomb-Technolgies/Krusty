@@ -79,3 +79,35 @@ pub fn get_format_handler(format: crate::ai::models::ApiFormat) -> Box<dyn Forma
         ApiFormat::Google => Box::new(google::GoogleFormat::new()),
     }
 }
+
+/// Check if a filler message is needed to maintain role alternation.
+///
+/// Returns Some(filler_role) if a filler message should be inserted,
+/// None if no filler is needed.
+///
+/// # Arguments
+/// * `last_role` - The role of the previous message, if any
+/// * `current_role` - The role of the current message
+/// * `exclude_roles` - Roles to exclude from alternation check (e.g., "tool" for OpenAI)
+pub fn needs_role_alternation_filler(
+    last_role: Option<&str>,
+    current_role: &str,
+    exclude_roles: &[&str],
+) -> Option<&'static str> {
+    if let Some(prev_role) = last_role {
+        // Check if current role should be excluded from alternation
+        if exclude_roles.contains(&current_role) {
+            return None;
+        }
+        // Check for consecutive same-role messages
+        if prev_role == current_role {
+            // Return the opposite role for filler
+            return Some(if current_role == "user" {
+                "assistant"
+            } else {
+                "user"
+            });
+        }
+    }
+    None
+}

@@ -24,6 +24,17 @@ impl GoogleParser {
         }
     }
 
+    /// Lock tool accumulators with proper error handling
+    fn lock_tool_accumulators(
+        &self,
+    ) -> anyhow::Result<
+        std::sync::MutexGuard<'_, std::collections::HashMap<usize, ToolCallAccumulator>>,
+    > {
+        self.tool_accumulators
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Tool accumulators lock poisoned: {}", e))
+    }
+
     /// Parse Google finish reason to our FinishReason enum
     fn parse_finish_reason(reason: &str) -> FinishReason {
         match reason {
@@ -99,7 +110,7 @@ impl SseParser for GoogleParser {
                                     let id = format!("google_{}", uuid::Uuid::new_v4());
 
                                     // Store accumulator
-                                    let mut accumulators = self.tool_accumulators.lock().unwrap();
+                                    let mut accumulators = self.lock_tool_accumulators()?;
                                     let index = accumulators.len();
                                     let mut acc =
                                         ToolCallAccumulator::new(id.clone(), name.clone());

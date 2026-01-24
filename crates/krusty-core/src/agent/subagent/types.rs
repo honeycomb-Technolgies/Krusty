@@ -1,0 +1,261 @@
+//! Sub-agent types and data structures
+//!
+//! Core types for sub-agent configuration, progress tracking, and results.
+
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::time::Duration;
+
+use crate::ai::retry::is_retryable_status;
+use crate::ai::retry::IsRetryable;
+
+/// Error type for subagent API calls that supports retry logic
+#[derive(Debug)]
+pub struct SubAgentApiError {
+    pub message: String,
+    pub status: Option<u16>,
+    pub retry_after: Option<Duration>,
+}
+
+impl std::fmt::Display for SubAgentApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(status) = self.status {
+            write!(f, "HTTP {}: {}", status, self.message)
+        } else {
+            write!(f, "{}", self.message)
+        }
+    }
+}
+
+impl std::error::Error for SubAgentApiError {}
+
+impl IsRetryable for SubAgentApiError {
+    fn is_retryable(&self) -> bool {
+        match self.status {
+            Some(status) => is_retryable_status(status),
+            // Network errors without status codes are typically retryable
+            None => {
+                self.message.contains("timeout")
+                    || self.message.contains("connection")
+                    || self.message.contains("network")
+            }
+        }
+    }
+
+    fn retry_after(&self) -> Option<Duration> {
+        self.retry_after
+    }
+}
+
+impl From<anyhow::Error> for SubAgentApiError {
+    fn from(err: anyhow::Error) -> Self {
+        let message = err.to_string();
+        // Try to extract HTTP status from error message
+        let status = extract_status_from_error(&message);
+        Self {
+            message,
+            status,
+            retry_after: None,
+        }
+    }
+}
+
+/// Try to extract HTTP status code from error message
+pub fn extract_status_from_error(message: &str) -> Option<u16> {
+    // Common patterns: "HTTP 429", "status: 429", "status code: 429"
+    for pattern in &["HTTP ", "status: ", "status code: "] {
+        if let Some(pos) = message.find(pattern) {
+            let start = pos + pattern.len();
+            let code_str: String = message[start..]
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            if let Ok(code) = code_str.parse() {
+                return Some(code);
+            }
+        }
+    }
+    None
+}
+
+/// Real-time progress update from a sub-agent
+#[derive(Debug, Clone, Default)]
+pub struct AgentProgress {
+    /// Agent task ID
+    pub task_id: String,
+    /// Display name (derived from task context)
+    pub name: String,
+    /// Current status
+    pub status: AgentProgressStatus,
+    /// Number of tool calls made
+    pub tool_count: usize,
+    /// Approximate token usage
+    pub tokens: usize,
+    /// Current action description (e.g., "reading app.rs")
+    pub current_action: Option<String>,
+    /// Lines added (for build agents)
+    pub lines_added: usize,
+    /// Lines removed (for build agents)
+    pub lines_removed: usize,
+    /// Plan task ID completed (for auto-marking tasks)
+    pub completed_plan_task: Option<String>,
+}
+
+/// Status of a sub-agent
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum AgentProgressStatus {
+    /// Agent is running
+    #[default]
+    Running,
+    /// Agent completed successfully
+    Complete,
+    /// Agent failed
+    Failed,
+}
+
+/// Available models for sub-agents
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SubAgentModel {
+    /// Claude Haiku 4.5 - fast and cheap, ideal for exploration
+    Haiku,
+    /// Claude Sonnet 4.5 - balanced, good for analysis
+    Sonnet,
+    /// Claude Opus 4.5 - powerful, for builder agents
+    Opus,
+}
+
+impl SubAgentModel {
+    pub fn model_id(&self) -> &'static str {
+        use crate::agent::constants::models;
+        match self {
+            SubAgentModel::Haiku => models::HAIKU_4_5,
+            SubAgentModel::Sonnet => models::SONNET_4_5,
+            SubAgentModel::Opus => models::OPUS_4_5,
+        }
+    }
+
+    pub fn max_tokens(&self) -> usize {
+        use crate::agent::constants::token_limits;
+        match self {
+            SubAgentModel::Haiku => token_limits::SMALL as usize,
+            SubAgentModel::Sonnet => token_limits::MEDIUM as usize,
+            SubAgentModel::Opus => token_limits::LARGE as usize,
+        }
+    }
+}
+
+/// Configuration for a sub-agent task
+#[derive(Debug, Clone)]
+pub struct SubAgentTask {
+    pub id: String,
+    /// Display name for the agent (e.g., "tui", "agent", "main")
+    pub name: String,
+    pub prompt: String,
+    pub model: SubAgentModel,
+    pub working_dir: PathBuf,
+    /// Plan task ID this agent completes (for auto-marking)
+    pub plan_task_id: Option<String>,
+    /// Whether thinking/reasoning is enabled for this agent
+    pub thinking_enabled: bool,
+}
+
+impl SubAgentTask {
+    pub fn new(id: impl Into<String>, prompt: impl Into<String>) -> Self {
+        let id = id.into();
+        let name = id.clone(); // Default name is same as id
+        Self {
+            id,
+            name,
+            prompt: prompt.into(),
+            model: SubAgentModel::Haiku,
+            working_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            plan_task_id: None,
+            thinking_enabled: false, // Default off for sub-agents
+        }
+    }
+
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
+    }
+
+    pub fn with_working_dir(mut self, dir: PathBuf) -> Self {
+        self.working_dir = dir;
+        self
+    }
+
+    pub fn with_model(mut self, model: SubAgentModel) -> Self {
+        self.model = model;
+        self
+    }
+
+    pub fn with_plan_task_id(mut self, task_id: impl Into<String>) -> Self {
+        self.plan_task_id = Some(task_id.into());
+        self
+    }
+
+    pub fn with_thinking(mut self, enabled: bool) -> Self {
+        self.thinking_enabled = enabled;
+        self
+    }
+
+    pub(crate) fn system_prompt(&self) -> String {
+        format!(
+            r#"You are a codebase explorer. Your task is to systematically investigate the codebase and answer questions.
+
+## Working Directory
+{}
+
+## Available Tools
+You have read-only access to these tools - USE THEM:
+
+1. **glob** - Find files by pattern
+   - Start here to discover file structure
+   - Examples: `**/*.rs`, `src/**/*.ts`, `**/test*`
+
+2. **grep** - Search file contents with regex
+   - Find specific patterns, functions, or keywords
+   - Use after glob to narrow down relevant files
+
+3. **read** - Read file contents
+   - Read specific files to understand implementation details
+   - Always read files you need to answer questions about
+
+## Instructions
+1. START by using glob to find relevant files in the directory
+2. Use grep to search for specific patterns or keywords
+3. Read the most relevant files to understand the code
+4. Be THOROUGH - examine multiple files, not just one
+5. Track what files you examine and report them in your summary
+
+## Output Format
+When you have gathered enough information, provide:
+1. A clear answer to the question
+2. List of key files examined
+3. Specific code references where relevant
+
+Do NOT skip tool usage - always explore before answering."#,
+            self.working_dir.display()
+        )
+    }
+}
+
+/// Result from a sub-agent execution
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubAgentResult {
+    pub task_id: String,
+    pub success: bool,
+    pub output: String,
+    pub files_examined: Vec<String>,
+    pub duration_ms: u64,
+    pub turns_used: usize,
+    pub error: Option<String>,
+}
+
+/// Parsed tool call from API response
+#[derive(Debug)]
+pub(crate) struct ToolCall {
+    pub id: String,
+    pub name: String,
+    pub input: serde_json::Value,
+}

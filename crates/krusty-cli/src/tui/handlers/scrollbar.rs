@@ -3,7 +3,7 @@
 //! Handles scrollbar click and drag operations for messages, input, and block scrollbars.
 
 use crate::tui::app::App;
-use crate::tui::blocks::BlockType;
+use crate::tui::blocks::{BlockType, SimpleScrollable, WidthScrollable};
 use crate::tui::state::DragTarget;
 
 impl App {

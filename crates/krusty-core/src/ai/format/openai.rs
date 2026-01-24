@@ -7,7 +7,7 @@
 use serde_json::Value;
 use tracing::debug;
 
-use super::{FormatHandler, RequestOptions};
+use super::{needs_role_alternation_filler, FormatHandler, RequestOptions};
 use crate::ai::models::ApiFormat;
 use crate::ai::providers::ProviderId;
 use crate::ai::types::{AiTool, Content, ModelMessage, Role};
@@ -99,19 +99,15 @@ impl FormatHandler for OpenAIFormat {
 
             // Check for consecutive same-role messages (excluding tool role)
             // Many OpenAI-compatible APIs require strict user/assistant alternation
-            if let Some(prev_role) = last_role {
-                if prev_role == role && role != "tool" {
-                    // Insert minimal message of opposite role to maintain alternation
-                    let filler_role = if role == "user" { "assistant" } else { "user" };
-                    debug!(
-                        "Inserting filler {} message to maintain alternation",
-                        filler_role
-                    );
-                    result.push(serde_json::json!({
-                        "role": filler_role,
-                        "content": "."
-                    }));
-                }
+            if let Some(filler_role) = needs_role_alternation_filler(last_role, role, &["tool"]) {
+                debug!(
+                    "Inserting filler {} message to maintain alternation",
+                    filler_role
+                );
+                result.push(serde_json::json!({
+                    "role": filler_role,
+                    "content": "."
+                }));
             }
 
             // For assistant messages with tool calls

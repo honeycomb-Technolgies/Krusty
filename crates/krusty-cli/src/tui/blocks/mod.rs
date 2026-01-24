@@ -90,6 +90,101 @@ pub enum BlockEvent {
     ToggleDiffMode,
 }
 
+/// Simple scrolling for blocks with fixed-line content (no width dependency)
+///
+/// Used by blocks where total content lines are known without render width:
+/// ToolResultBlock (result list), WebSearchBlock (result pairs)
+pub trait SimpleScrollable {
+    /// Get the total number of content lines
+    fn total_lines(&self) -> u16;
+    /// Get the current scroll offset
+    fn scroll_offset(&self) -> u16;
+    /// Set the scroll offset (implementation should clamp to max)
+    fn set_scroll_offset(&mut self, offset: u16);
+    /// Get the max visible lines constant for this block type
+    fn max_visible_lines(&self) -> u16;
+
+    /// Scroll up by one line
+    fn scroll_up(&mut self) {
+        let current = self.scroll_offset();
+        self.set_scroll_offset(current.saturating_sub(1));
+    }
+
+    /// Scroll down by one line
+    fn scroll_down(&mut self) {
+        let current = self.scroll_offset();
+        let max = self.max_scroll();
+        if current < max {
+            self.set_scroll_offset(current + 1);
+        }
+    }
+
+    /// Calculate max scroll offset
+    fn max_scroll(&self) -> u16 {
+        self.total_lines().saturating_sub(self.max_visible_lines())
+    }
+
+    /// Check if scrollbar is needed
+    fn needs_scrollbar(&self) -> bool {
+        self.total_lines() > self.max_visible_lines()
+    }
+
+    /// Get scroll info: (total_lines, visible_lines, scrollbar_height)
+    fn simple_scroll_info(&self) -> (u16, u16, u16) {
+        let total = self.total_lines();
+        let visible = total.min(self.max_visible_lines());
+        (total, visible, visible)
+    }
+}
+
+/// Width-dependent scrolling for blocks that wrap content dynamically
+///
+/// Used by blocks where content wrapping depends on render width:
+/// ReadBlock, WriteBlock, ThinkingBlock
+pub trait WidthScrollable {
+    /// Get wrapped lines for a given width
+    fn get_lines(&mut self, width: u16) -> &[String];
+    /// Get the current scroll offset
+    fn scroll_offset(&self) -> u16;
+    /// Set the scroll offset
+    fn set_scroll_offset(&mut self, offset: u16);
+    /// Get the max visible lines constant for this block type
+    fn max_visible_lines(&self) -> u16;
+
+    /// Scroll up by one line
+    fn scroll_up(&mut self) {
+        let current = self.scroll_offset();
+        self.set_scroll_offset(current.saturating_sub(1));
+    }
+
+    /// Scroll down by one line (requires width for max calculation)
+    fn scroll_down(&mut self, width: u16) {
+        let current = self.scroll_offset();
+        let max = self.max_scroll(width);
+        if current < max {
+            self.set_scroll_offset(current + 1);
+        }
+    }
+
+    /// Calculate max scroll offset (requires width)
+    fn max_scroll(&mut self, width: u16) -> u16 {
+        let total = self.get_lines(width).len() as u16;
+        total.saturating_sub(self.max_visible_lines())
+    }
+
+    /// Check if scrollbar is needed (requires width)
+    fn needs_scrollbar(&mut self, width: u16) -> bool {
+        self.get_lines(width).len() as u16 > self.max_visible_lines()
+    }
+
+    /// Get scroll info: (total_lines, visible_lines, scrollbar_height)
+    fn get_width_scroll_info(&mut self, width: u16) -> (u16, u16, u16) {
+        let total = self.get_lines(width).len() as u16;
+        let visible = total.min(self.max_visible_lines());
+        (total, visible, visible)
+    }
+}
+
 /// Core trait for all stream blocks
 pub trait StreamBlock: Send + Sync {
     /// Calculate height needed given a width
