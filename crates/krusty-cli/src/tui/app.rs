@@ -756,45 +756,12 @@ impl App {
 
     /// Create AiClientConfig for the current active provider
     pub fn create_client_config(&self) -> crate::ai::client::AiClientConfig {
-        use crate::ai::models::ApiFormat;
-        use crate::ai::providers::get_provider;
-
-        // OpenAI requires special handling to detect OAuth vs API key
-        // and route to the correct endpoint (ChatGPT Responses API vs OpenAI Chat Completions)
-        if self.active_provider == ProviderId::OpenAI {
-            return crate::ai::client::AiClientConfig::for_openai_with_auth_detection(
-                &self.current_model,
-                &self.services.credential_store,
-            );
-        }
-
-        let provider = get_provider(self.active_provider)
-            .unwrap_or_else(|| get_provider(ProviderId::Anthropic).unwrap());
-
-        // Determine API format based on provider
-        // - OpenCode Zen: model-specific format routing (Anthropic/OpenAI/Google)
-        // - Kimi: uses OpenAI chat/completions format
-        // - All others: Anthropic-compatible format
-        let api_format = match self.active_provider {
-            ProviderId::OpenCodeZen => self
-                .services
-                .model_registry
-                .try_get_model(&self.current_model)
-                .map(|m| m.api_format)
-                .unwrap_or(ApiFormat::Anthropic),
-            ProviderId::Kimi => ApiFormat::OpenAI, // Kimi Code uses OpenAI format
-            _ => ApiFormat::Anthropic,
-        };
-
-        crate::ai::client::AiClientConfig {
-            model: self.current_model.clone(),
-            max_tokens: crate::constants::ai::MAX_OUTPUT_TOKENS,
-            base_url: Some(provider.base_url.clone()),
-            auth_header: provider.auth_header,
-            provider_id: provider.id,
-            api_format,
-            custom_headers: provider.custom_headers.clone(),
-        }
+        crate::tui::auth::create_client_config(
+            self.active_provider,
+            &self.current_model,
+            &self.services.credential_store,
+            &self.services.model_registry,
+        )
     }
 
     /// Create an AI client with the current provider configuration
@@ -824,7 +791,7 @@ impl App {
     /// Switch to a different provider
     /// Automatically translates the current model to the equivalent in the new provider
     pub fn switch_provider(&mut self, provider_id: ProviderId) {
-        use crate::ai::providers::{get_provider, translate_model_or_default};
+        use crate::tui::auth::{translate_model_for_provider, validate_model_for_provider};
 
         let previous_provider = self.active_provider;
         self.active_provider = provider_id;
@@ -835,20 +802,10 @@ impl App {
         }
 
         // Translate model ID to the new provider's format
-        // e.g., "claude-opus-4-5-20251101" -> "anthropic/claude-opus-4.5" for OpenRouter
-        let translated =
-            translate_model_or_default(&self.current_model, previous_provider, provider_id);
-
-        if translated != self.current_model {
-            tracing::info!(
-                "Translated model '{}' -> '{}' for {}",
-                self.current_model,
-                translated,
-                provider_id
-            );
+        let (translated, changed) =
+            translate_model_for_provider(&self.current_model, previous_provider, provider_id);
+        if changed {
             self.current_model = translated.clone();
-
-            // Save translated model to preferences
             if let Some(ref prefs) = self.services.preferences {
                 if let Err(e) = prefs.set_current_model(&translated) {
                     tracing::warn!("Failed to save current model: {}", e);
@@ -857,21 +814,13 @@ impl App {
         }
 
         // Validate the model exists for this provider (fallback to default if not)
-        if let Some(provider) = get_provider(provider_id) {
-            if !provider.has_model(&self.current_model) {
-                let default = provider.default_model().to_string();
-                tracing::info!(
-                    "Model '{}' not available for {}, using default '{}'",
-                    self.current_model,
-                    provider_id,
-                    default
-                );
-                self.current_model = default.clone();
-
-                if let Some(ref prefs) = self.services.preferences {
-                    if let Err(e) = prefs.set_current_model(&default) {
-                        tracing::warn!("Failed to save current model: {}", e);
-                    }
+        let (validated, was_fallback) =
+            validate_model_for_provider(&self.current_model, provider_id);
+        if was_fallback {
+            self.current_model = validated.clone();
+            if let Some(ref prefs) = self.services.preferences {
+                if let Err(e) = prefs.set_current_model(&validated) {
+                    tracing::warn!("Failed to save current model: {}", e);
                 }
             }
         }
