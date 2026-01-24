@@ -212,13 +212,12 @@ pub fn wrap_provider_options(options: Value, provider_id: ProviderId) -> Provide
 pub fn transform_message_for_provider(
     message: &serde_json::Value,
     model_id: &str,
-    provider_id: ProviderId,
+    _provider_id: ProviderId,
 ) -> serde_json::Value {
     let id = model_id.to_lowercase();
 
-    // Note: Z.ai now uses Anthropic-compatible endpoint, may not need this transform.
-    // Keeping for now as tool call ID sanitization is harmless for Anthropic format.
-    if id.contains("mistral") || provider_id == ProviderId::ZAi {
+    // Mistral requires tool call ID sanitization
+    if id.contains("mistral") {
         return transform_mistral_message(message);
     }
 

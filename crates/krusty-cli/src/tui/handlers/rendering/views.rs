@@ -43,8 +43,8 @@ impl App {
         render_toolbar(
             f,
             chunks[0],
-            &self.theme,
-            self.work_mode,
+            &self.ui.theme,
+            self.ui.work_mode,
             None,
             false,
             "",
@@ -56,8 +56,8 @@ impl App {
         let logo_block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(self.theme.border_color))
-            .style(Style::default().bg(self.theme.bg_color));
+            .border_style(Style::default().fg(self.ui.theme.border_color))
+            .style(Style::default().bg(self.ui.theme.bg_color));
 
         let inner_area = logo_block.inner(chunks[1]);
         f.render_widget(logo_block, chunks[1]);
@@ -85,7 +85,7 @@ impl App {
                 Span::styled(
                     "▄ •▄ ▄▄▄  ▄• ▄▌.▄▄ · ▄▄▄▄▄ ▄· ▄▌",
                     Style::default()
-                        .fg(self.theme.logo_primary_color)
+                        .fg(self.ui.theme.logo_primary_color)
                         .add_modifier(Modifier::BOLD),
                 ),
             ]),
@@ -93,28 +93,28 @@ impl App {
                 Span::raw(&title_padding),
                 Span::styled(
                     "█▌▄▌▪▀▄ █·█▪██▌▐█ ▀. •██  ▐█▪██▌",
-                    Style::default().fg(self.theme.logo_primary_color),
+                    Style::default().fg(self.ui.theme.logo_primary_color),
                 ),
             ]),
             Line::from(vec![
                 Span::raw(&title_padding),
                 Span::styled(
                     "▐▀▀▄·▐▀▀▄ █▌▐█▌▄▀▀▀█▄ ▐█.▪▐█▌▐█▪",
-                    Style::default().fg(self.theme.logo_secondary_color),
+                    Style::default().fg(self.ui.theme.logo_secondary_color),
                 ),
             ]),
             Line::from(vec![
                 Span::raw(&title_padding),
                 Span::styled(
                     "▐█.█▌▐█•█▌▐█▄█▌▐█▄▪▐█ ▐█▌· ▐█▀·.",
-                    Style::default().fg(self.theme.logo_secondary_color),
+                    Style::default().fg(self.ui.theme.logo_secondary_color),
                 ),
             ]),
             Line::from(vec![
                 Span::raw(&title_padding),
                 Span::styled(
                     "·▀  ▀.▀  ▀ ▀▀▀  ▀▀▀▀  ▀▀▀   ▀ • ",
-                    Style::default().fg(self.theme.logo_primary_color),
+                    Style::default().fg(self.ui.theme.logo_primary_color),
                 ),
             ]),
         ];
@@ -125,8 +125,8 @@ impl App {
         let crab_height = crab_frames.len() as u16;
         let crab_y = inner_area.y + inner_area.height.saturating_sub(crab_height);
 
-        let crab_color = self.theme.accent_color;
-        let eye_color = self.theme.mode_chat_color;
+        let crab_color = self.ui.theme.accent_color;
+        let eye_color = self.ui.theme.mode_chat_color;
 
         for (i, line) in crab_frames.into_iter().enumerate() {
             let y = crab_y + i as u16;
@@ -171,77 +171,107 @@ impl App {
                 Span::styled(
                     "Quick Actions:",
                     Style::default()
-                        .fg(self.theme.title_color)
+                        .fg(self.ui.theme.title_color)
                         .add_modifier(Modifier::BOLD),
                 ),
             ]),
             Line::from(vec![
                 Span::raw(&padding),
-                Span::styled("  /init   ", Style::default().fg(self.theme.accent_color)),
+                Span::styled(
+                    "  /init   ",
+                    Style::default().fg(self.ui.theme.accent_color),
+                ),
                 Span::styled(
                     "Initialize project (KRAB.md)",
-                    Style::default().fg(self.theme.text_color),
+                    Style::default().fg(self.ui.theme.text_color),
                 ),
             ]),
             Line::from(vec![
                 Span::raw(&padding),
-                Span::styled("  /load   ", Style::default().fg(self.theme.accent_color)),
+                Span::styled(
+                    "  /load   ",
+                    Style::default().fg(self.ui.theme.accent_color),
+                ),
                 Span::styled(
                     "Load previous session",
-                    Style::default().fg(self.theme.text_color),
+                    Style::default().fg(self.ui.theme.text_color),
                 ),
             ]),
             Line::from(vec![
                 Span::raw(&padding),
-                Span::styled("  /model  ", Style::default().fg(self.theme.accent_color)),
+                Span::styled(
+                    "  /model  ",
+                    Style::default().fg(self.ui.theme.accent_color),
+                ),
                 Span::styled(
                     "Select AI model",
-                    Style::default().fg(self.theme.text_color),
+                    Style::default().fg(self.ui.theme.text_color),
                 ),
             ]),
             Line::from(vec![
                 Span::raw(&padding),
-                Span::styled("  /auth   ", Style::default().fg(self.theme.accent_color)),
+                Span::styled(
+                    "  /auth   ",
+                    Style::default().fg(self.ui.theme.accent_color),
+                ),
                 Span::styled(
                     "Manage API providers",
-                    Style::default().fg(self.theme.text_color),
+                    Style::default().fg(self.ui.theme.text_color),
                 ),
             ]),
             Line::from(vec![
                 Span::raw(&padding),
-                Span::styled("  /theme  ", Style::default().fg(self.theme.accent_color)),
+                Span::styled(
+                    "  /theme  ",
+                    Style::default().fg(self.ui.theme.accent_color),
+                ),
                 Span::styled(
                     "Change color theme",
-                    Style::default().fg(self.theme.text_color),
+                    Style::default().fg(self.ui.theme.text_color),
                 ),
             ]),
             Line::from(vec![
                 Span::raw(&padding),
-                Span::styled("  /skills ", Style::default().fg(self.theme.accent_color)),
-                Span::styled("Browse skills", Style::default().fg(self.theme.text_color)),
+                Span::styled(
+                    "  /skills ",
+                    Style::default().fg(self.ui.theme.accent_color),
+                ),
+                Span::styled(
+                    "Browse skills",
+                    Style::default().fg(self.ui.theme.text_color),
+                ),
             ]),
             Line::from(vec![
                 Span::raw(&padding),
-                Span::styled("  /lsp    ", Style::default().fg(self.theme.accent_color)),
+                Span::styled(
+                    "  /lsp    ",
+                    Style::default().fg(self.ui.theme.accent_color),
+                ),
                 Span::styled(
                     "Browse LSP extensions",
-                    Style::default().fg(self.theme.text_color),
+                    Style::default().fg(self.ui.theme.text_color),
                 ),
             ]),
             Line::from(vec![
                 Span::raw(&padding),
-                Span::styled("  /hooks  ", Style::default().fg(self.theme.accent_color)),
+                Span::styled(
+                    "  /hooks  ",
+                    Style::default().fg(self.ui.theme.accent_color),
+                ),
                 Span::styled(
                     "Configure tool hooks",
-                    Style::default().fg(self.theme.text_color),
+                    Style::default().fg(self.ui.theme.text_color),
                 ),
             ]),
             Line::from(vec![
                 Span::raw(&padding),
-                Span::styled("  /cmd    ", Style::default().fg(self.theme.accent_color)),
+                Span::styled(
+                    "  /cmd    ",
+                    Style::default().fg(self.ui.theme.accent_color),
+                ),
                 Span::styled(
                     "Show all controls",
-                    Style::default().fg(self.theme.text_color),
+                    Style::default().fg(self.ui.theme.text_color),
                 ),
             ]),
         ];
@@ -250,41 +280,46 @@ impl App {
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(self.theme.border_color))
-                .style(Style::default().bg(self.theme.bg_color)),
+                .border_style(Style::default().fg(self.ui.theme.border_color))
+                .style(Style::default().bg(self.ui.theme.bg_color)),
         );
         f.render_widget(commands, chunks[2]);
 
         // Input area (full width)
         let input_area = chunks[3];
-        self.layout.input_area = Some(input_area);
+        self.scroll_system.layout.input_area = Some(input_area);
         self.input
             .set_max_visible_lines(input_area.height.saturating_sub(2));
 
         // Get input selection if selecting in input area
-        let input_selection = if self.selection.area == SelectionArea::Input {
-            self.selection.normalized()
+        let input_selection = if self.scroll_system.selection.area == SelectionArea::Input {
+            self.scroll_system.selection.normalized()
         } else {
             None
         };
 
         // Border color changes to accent when thinking mode enabled (Tab toggle)
         let input_border_color = if self.thinking_enabled {
-            self.theme.accent_color
+            self.ui.theme.accent_color
         } else {
-            self.theme.border_color
+            self.ui.theme.border_color
         };
         // Get hover range for file ref highlighting
-        let hover_range = self.hover.input_file_ref.as_ref().map(|(s, e, _)| (*s, *e));
+        let hover_range = self
+            .scroll_system
+            .hover
+            .input_file_ref
+            .as_ref()
+            .map(|(s, e, _)| (*s, *e));
         let input_widget = self.input.render_styled_with_file_refs(
             input_area,
-            self.theme.bg_color,
+            self.ui.theme.bg_color,
             input_border_color,
-            self.theme.text_color,
+            self.ui.theme.text_color,
             input_selection,
-            self.theme.selection_bg_color,
-            self.theme.selection_fg_color,
-            Some(self.theme.link_color),
+            self.ui.theme.selection_bg_color,
+            self.ui.theme.selection_fg_color,
+            Some(self.ui.theme.link_color),
             hover_range,
         );
         f.render_widget(input_widget, input_area);
@@ -299,14 +334,14 @@ impl App {
             1,
             input_area.height.saturating_sub(2),
         );
-        self.layout.input_scrollbar_area = Some(scrollbar_area);
+        self.scroll_system.layout.input_scrollbar_area = Some(scrollbar_area);
         render_input_scrollbar(
             f,
             scrollbar_area,
             total_lines,
             visible_lines,
             self.input.get_viewport_offset(),
-            &self.theme,
+            &self.ui.theme,
         );
 
         // Autocomplete popup above input
@@ -318,7 +353,7 @@ impl App {
                 input_area.width,
                 ac_height,
             );
-            self.autocomplete.render(f, ac_area, &self.theme);
+            self.autocomplete.render(f, ac_area, &self.ui.theme);
         }
 
         // File search popup above input (mutually exclusive with autocomplete)
@@ -331,14 +366,14 @@ impl App {
                 input_area.width,
                 fs_height,
             );
-            self.file_search.render(f, fs_area, &self.theme);
+            self.file_search.render(f, fs_area, &self.ui.theme);
         }
 
         // Status bar (no context tokens in start menu)
         render_status_bar(
             f,
             chunks[4],
-            &self.theme,
+            &self.ui.theme,
             &self.current_model,
             &self.working_dir,
             None,
@@ -383,7 +418,7 @@ impl App {
             .blocks
             .pinned_terminal
             .and_then(|idx| self.blocks.terminal.get(idx))
-            .map(|tp| tp.height(area.width.saturating_sub(4), &self.theme))
+            .map(|tp| tp.height(area.width.saturating_sub(4), &self.ui.theme))
             .unwrap_or(0);
 
         // Layout: toolbar, pinned (0 if none), messages, prompt (0 if none), input, status
@@ -400,11 +435,11 @@ impl App {
             .split(area);
 
         // Render toolbar with session title (clickable to edit)
-        self.layout.toolbar_title_area = render_toolbar(
+        self.scroll_system.layout.toolbar_title_area = render_toolbar(
             f,
             chunks[0],
-            &self.theme,
-            self.work_mode,
+            &self.ui.theme,
+            self.ui.work_mode,
             self.session_title.as_deref(),
             self.title_editor.is_editing,
             &self.title_editor.buffer,
@@ -421,26 +456,33 @@ impl App {
                     width: chunks[1].width.saturating_sub(2),
                     height: chunks[1].height,
                 };
-                self.layout.pinned_terminal_area = Some(pinned_area);
+                self.scroll_system.layout.pinned_terminal_area = Some(pinned_area);
                 let is_focused = self.blocks.focused_terminal == Some(pinned_idx);
-                tp.render(pinned_area, f.buffer_mut(), &self.theme, is_focused, None);
+                tp.render(
+                    pinned_area,
+                    f.buffer_mut(),
+                    &self.ui.theme,
+                    is_focused,
+                    None,
+                );
             }
         } else {
-            self.layout.pinned_terminal_area = None;
+            self.scroll_system.layout.pinned_terminal_area = None;
         }
 
         // Messages area (chunks[2] now, was chunks[1])
         let messages_chunk = chunks[2];
 
         // Calculate scroll position BEFORE rendering (fixes 1-frame lag on streaming)
-        self.layout.messages_area = Some(messages_chunk);
+        self.scroll_system.layout.messages_area = Some(messages_chunk);
         let msg_total_lines = self.calculate_message_lines(messages_chunk.width);
         let msg_visible_height = messages_chunk.height.saturating_sub(2);
 
         // Update max scroll, clamp offset, and handle auto-scroll
-        self.scroll
+        self.scroll_system
+            .scroll
             .update_max_scroll(msg_total_lines, msg_visible_height);
-        self.scroll.apply_scroll_to_bottom();
+        self.scroll_system.scroll.apply_scroll_to_bottom();
 
         // NOW render messages with correct scroll position
         self.render_messages(f, messages_chunk);
@@ -452,56 +494,61 @@ impl App {
             1,
             messages_chunk.height.saturating_sub(2),
         );
-        self.layout.messages_scrollbar_area = Some(msg_scrollbar_area);
+        self.scroll_system.layout.messages_scrollbar_area = Some(msg_scrollbar_area);
         render_messages_scrollbar(
             f,
             msg_scrollbar_area,
-            self.scroll.offset,
+            self.scroll_system.scroll.offset,
             msg_total_lines,
             msg_visible_height as usize,
-            &self.theme,
+            &self.ui.theme,
         );
 
         // Decision prompt (chunks[3])
         if self.decision_prompt.visible {
             let prompt_area = chunks[3];
-            self.layout.prompt_area = Some(prompt_area);
+            self.scroll_system.layout.prompt_area = Some(prompt_area);
             self.decision_prompt
-                .render(f.buffer_mut(), prompt_area, &self.theme);
+                .render(f.buffer_mut(), prompt_area, &self.ui.theme);
         } else {
-            self.layout.prompt_area = None;
+            self.scroll_system.layout.prompt_area = None;
         }
 
         // Input area (chunks[4] with prompt, was chunks[3])
         let input_area = chunks[4];
-        self.layout.input_area = Some(input_area);
+        self.scroll_system.layout.input_area = Some(input_area);
         self.input
             .set_max_visible_lines(input_area.height.saturating_sub(2));
 
         // Get input selection if selecting in input area
-        let input_selection = if self.selection.area == SelectionArea::Input {
-            self.selection.normalized()
+        let input_selection = if self.scroll_system.selection.area == SelectionArea::Input {
+            self.scroll_system.selection.normalized()
         } else {
             None
         };
 
         // Border color changes to accent when thinking mode enabled (Tab toggle)
         let input_border_color = if self.thinking_enabled {
-            self.theme.accent_color
+            self.ui.theme.accent_color
         } else {
-            self.theme.border_color
+            self.ui.theme.border_color
         };
         // Get hover range for file ref highlighting
-        let hover_range = self.hover.input_file_ref.as_ref().map(|(s, e, _)| (*s, *e));
+        let hover_range = self
+            .scroll_system
+            .hover
+            .input_file_ref
+            .as_ref()
+            .map(|(s, e, _)| (*s, *e));
         let input_widget = self.input.render_styled_with_file_refs(
             input_area,
-            self.theme.bg_color,
+            self.ui.theme.bg_color,
             input_border_color,
-            self.theme.text_color,
+            self.ui.theme.text_color,
             input_selection,
-            self.theme.selection_bg_color,
-            self.theme.selection_fg_color,
-            Some(self.theme.link_color),
+            self.ui.theme.selection_bg_color,
+            self.ui.theme.selection_fg_color,
+            Some(self.ui.theme.link_color),
             hover_range,
         );
         f.render_widget(input_widget, input_area);
@@ -515,14 +562,14 @@ impl App {
             1,
             input_area.height.saturating_sub(2),
         );
-        self.layout.input_scrollbar_area = Some(scrollbar_area);
+        self.scroll_system.layout.input_scrollbar_area = Some(scrollbar_area);
         render_input_scrollbar(
             f,
             scrollbar_area,
             total_lines,
             visible_lines,
             self.input.get_viewport_offset(),
-            &self.theme,
+            &self.ui.theme,
         );
 
         // Autocomplete popup above input
@@ -534,7 +581,7 @@ impl App {
                 input_area.width,
                 ac_height,
             );
-            self.autocomplete.render(f, ac_area, &self.theme);
+            self.autocomplete.render(f, ac_area, &self.ui.theme);
         }
 
         // File search popup above input (mutually exclusive with autocomplete)
@@ -547,7 +594,7 @@ impl App {
                 input_area.width,
                 fs_height,
             );
-            self.file_search.render(f, fs_area, &self.theme);
+            self.file_search.render(f, fs_area, &self.ui.theme);
         }
 
         // Status bar (with context tokens in chat mode)
@@ -559,7 +606,7 @@ impl App {
         render_status_bar(
             f,
             chunks[5],
-            &self.theme,
+            &self.ui.theme,
             &self.current_model,
             &self.working_dir,
             context_tokens,
@@ -569,18 +616,18 @@ impl App {
 
         // Render plan sidebar if visible and we have an active plan
         if let (Some(sidebar_rect), Some(plan)) = (sidebar_area, self.active_plan.clone()) {
-            self.layout.plan_sidebar_area = Some(sidebar_rect);
+            self.scroll_system.layout.plan_sidebar_area = Some(sidebar_rect);
             let result = render_plan_sidebar(
                 f.buffer_mut(),
                 sidebar_rect,
                 &plan,
-                &self.theme,
+                &self.ui.theme,
                 &mut self.plan_sidebar,
             );
-            self.layout.plan_sidebar_scrollbar_area = result.scrollbar_area;
+            self.scroll_system.layout.plan_sidebar_scrollbar_area = result.scrollbar_area;
         } else {
-            self.layout.plan_sidebar_area = None;
-            self.layout.plan_sidebar_scrollbar_area = None;
+            self.scroll_system.layout.plan_sidebar_area = None;
+            self.scroll_system.layout.plan_sidebar_scrollbar_area = None;
         }
     }
 }

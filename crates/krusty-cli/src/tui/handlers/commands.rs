@@ -13,12 +13,12 @@ impl App {
         match command.as_str() {
             "/home" => {
                 self.current_session_id = None;
-                self.messages.clear();
-                self.streaming_assistant_idx = None;
-                self.conversation.clear();
+                self.chat.messages.clear();
+                self.chat.streaming_assistant_idx = None;
+                self.chat.conversation.clear();
                 self.active_plan = None;
                 self.plan_sidebar.reset();
-                self.view = View::StartMenu;
+                self.ui.view = View::StartMenu;
             }
             "/load" => {
                 // Set current directory for the popup title
@@ -37,7 +37,7 @@ impl App {
                     .collect();
 
                 self.popups.session.set_sessions(sessions);
-                self.popup = Popup::SessionList;
+                self.ui.popup = Popup::SessionList;
             }
             "/model" => {
                 // Populate model list from registry (non-blocking)
@@ -62,7 +62,7 @@ impl App {
                     self.popups.model.set_models(recent_models, models_vec);
                 }
 
-                self.popup = Popup::ModelSelect;
+                self.ui.popup = Popup::ModelSelect;
 
                 // If OpenRouter is configured but has no models, trigger fetch
                 if configured.contains(&crate::ai::providers::ProviderId::OpenRouter) {
@@ -91,28 +91,28 @@ impl App {
                 // Set configured providers to show checkmarks
                 let configured = self.configured_providers();
                 self.popups.auth.set_configured_providers(configured);
-                self.popup = Popup::Auth;
+                self.ui.popup = Popup::Auth;
             }
             "/lsp" => {
-                self.popup = Popup::LspBrowser;
+                self.ui.popup = Popup::LspBrowser;
                 if self.popups.lsp.needs_fetch() {
                     self.start_extensions_fetch();
                 }
             }
             "/ps" | "/processes" => {
                 self.refresh_process_popup();
-                self.popup = Popup::ProcessList;
+                self.ui.popup = Popup::ProcessList;
             }
             "/theme" => {
-                self.popups.theme.open(&self.theme_name);
-                self.popup = Popup::ThemeSelect;
+                self.popups.theme.open(&self.ui.theme_name);
+                self.ui.popup = Popup::ThemeSelect;
             }
             "/clear" => {
-                self.messages.clear();
-                self.streaming_assistant_idx = None;
+                self.chat.messages.clear();
+                self.chat.streaming_assistant_idx = None;
                 self.blocks = crate::tui::state::BlockManager::new();
             }
-            "/cmd" => self.popup = Popup::Help,
+            "/cmd" => self.ui.popup = Popup::Help,
             "/init" => {
                 self.handle_init_command();
             }
@@ -138,7 +138,8 @@ impl App {
                 self.start_update_check();
             }
             _ => {
-                self.messages
+                self.chat
+                    .messages
                     .push(("system".to_string(), format!("Unknown command: {}", cmd)));
             }
         }
@@ -157,7 +158,7 @@ impl App {
 
         // Check if already exploring
         if self.channels.init_exploration.is_some() {
-            self.messages.push((
+            self.chat.messages.push((
                 "system".to_string(),
                 "Exploration already in progress...".to_string(),
             ));
@@ -165,8 +166,8 @@ impl App {
         }
 
         // If on start menu, switch to chat view
-        if self.view == View::StartMenu {
-            self.view = View::Chat;
+        if self.ui.view == View::StartMenu {
+            self.ui.view = View::Chat;
         }
 
         // Create session if none exists
@@ -175,7 +176,8 @@ impl App {
         }
 
         // Add /init as user message (like a natural conversation)
-        self.messages
+        self.chat
+            .messages
             .push(("user".to_string(), "/init".to_string()));
 
         // Generate unique ID for this exploration
@@ -189,7 +191,8 @@ impl App {
         self.blocks.explore.push(explore_block);
 
         // Add to message timeline so it renders in chat
-        self.messages
+        self.chat
+            .messages
             .push(("explore".to_string(), explore_id.clone()));
 
         // Store the explore ID for completion
@@ -221,7 +224,7 @@ impl App {
                 } else {
                     "Created"
                 };
-                self.messages.push((
+                self.chat.messages.push((
                     "system".to_string(),
                     format!(
                         "{} KRAB.md ({} bytes) - basic template\n\n\
@@ -232,7 +235,7 @@ impl App {
                 ));
             }
             Err(e) => {
-                self.messages.push((
+                self.chat.messages.push((
                     "system".to_string(),
                     format!("Failed to write KRAB.md: {}", e),
                 ));
@@ -249,7 +252,7 @@ impl App {
         let client = match self.create_ai_client() {
             Some(c) => Arc::new(c),
             None => {
-                self.messages.push((
+                self.chat.messages.push((
                     "system".to_string(),
                     "Failed to create AI client for exploration".to_string(),
                 ));
@@ -421,8 +424,8 @@ impl App {
 
     /// Handle /pinch command - open pinch popup
     fn handle_pinch_command(&mut self) {
-        if self.messages.is_empty() {
-            self.messages.push((
+        if self.chat.messages.is_empty() {
+            self.chat.messages.push((
                 "system".to_string(),
                 "No conversation to summarize. Start a chat first.".to_string(),
             ));
@@ -442,7 +445,7 @@ impl App {
 
         // Start the pinch popup
         self.popups.pinch.start(usage_percent, top_files);
-        self.popup = Popup::Pinch;
+        self.ui.popup = Popup::Pinch;
     }
 
     /// Get top N files by activity for preview
@@ -490,14 +493,15 @@ impl App {
                 self.blocks.terminal.push(pane);
 
                 // Add to message timeline (store process_id for reliable lookup)
-                self.messages
+                self.chat
+                    .messages
                     .push(("terminal".to_string(), process_id_clone));
 
                 // Auto-scroll to show the new terminal
-                self.scroll.request_scroll_to_bottom();
+                self.scroll_system.scroll.request_scroll_to_bottom();
             }
             Err(e) => {
-                self.messages.push((
+                self.chat.messages.push((
                     "system".to_string(),
                     format!("Failed to spawn terminal: {}", e),
                 ));
@@ -530,9 +534,10 @@ impl App {
                     } else {
                         format!("Plan '{}' abandoned. Saved at: {}", title, file_path)
                     };
-                    self.messages.push(("system".to_string(), msg));
+                    self.chat.messages.push(("system".to_string(), msg));
                 } else {
-                    self.messages
+                    self.chat
+                        .messages
                         .push(("system".to_string(), "No active plan to clear.".to_string()));
                 }
             }
@@ -545,7 +550,7 @@ impl App {
                     .list_completed_for_dir(&working_dir_str)
                 {
                     Ok(plans) if plans.is_empty() => {
-                        self.messages.push((
+                        self.chat.messages.push((
                             "system".to_string(),
                             "No completed plans for this directory.".to_string(),
                         ));
@@ -562,10 +567,11 @@ impl App {
                         if plans.len() > 5 {
                             msg.push_str(&format!("  ... and {} more", plans.len() - 5));
                         }
-                        self.messages.push(("system".to_string(), msg));
+                        self.chat.messages.push(("system".to_string(), msg));
                     }
                     Err(e) => {
-                        self.messages
+                        self.chat
+                            .messages
                             .push(("system".to_string(), format!("Failed to list plans: {}", e)));
                     }
                 }
@@ -574,7 +580,7 @@ impl App {
                 if let Some(ref plan) = self.active_plan {
                     let (completed, total) = plan.progress();
                     let status_icon = if completed == total { "✓" } else { "◐" };
-                    self.messages.push((
+                    self.chat.messages.push((
                         "system".to_string(),
                         format!(
                             "{} '{}' ({}/{} tasks)\nUse Ctrl+T to toggle sidebar, /plan clear to abandon.",
@@ -586,7 +592,7 @@ impl App {
                         self.plan_sidebar.toggle();
                     }
                 } else {
-                    self.messages.push((
+                    self.chat.messages.push((
                         "system".to_string(),
                         "No active plan.\n\
                         • Enter PLAN mode (Ctrl+B) and ask the AI to create a plan\n\
@@ -596,7 +602,7 @@ impl App {
                 }
             }
             Some(unknown) => {
-                self.messages.push((
+                self.chat.messages.push((
                     "system".to_string(),
                     format!(
                         "Unknown: /plan {}. Use: /plan, /plan list, /plan clear",
@@ -613,7 +619,7 @@ impl App {
         let skills = match self.services.skills_manager.try_write() {
             Ok(mut guard) => guard.list_skills(),
             Err(_) => {
-                self.messages.push((
+                self.chat.messages.push((
                     "system".to_string(),
                     "Skills manager is busy, try again.".to_string(),
                 ));
@@ -622,7 +628,7 @@ impl App {
         };
 
         self.popups.skills.set_skills(skills);
-        self.popup = Popup::SkillsBrowser;
+        self.ui.popup = Popup::SkillsBrowser;
     }
 
     /// Refresh skills in the browser
@@ -641,7 +647,7 @@ impl App {
     fn open_mcp_browser(&mut self) {
         // Update the popup with current server state
         self.refresh_mcp_popup();
-        self.popup = Popup::McpBrowser;
+        self.ui.popup = Popup::McpBrowser;
     }
 
     /// Refresh MCP servers in the browser popup
@@ -662,7 +668,7 @@ impl App {
                 .to_vec()
         });
         self.popups.hooks.set_hooks(hooks);
-        self.popup = Popup::Hooks;
+        self.ui.popup = Popup::Hooks;
     }
 }
 

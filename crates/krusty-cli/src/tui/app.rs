@@ -27,28 +27,24 @@ use crate::agent::{AgentCancellation, AgentConfig, AgentEventBus, AgentState, Us
 use crate::ai::client::AiClient;
 use crate::ai::models::SharedModelRegistry;
 use crate::ai::providers::ProviderId;
-use crate::ai::types::{AiTool, AiToolCall, Content, ModelMessage};
+use crate::ai::types::{AiTool, AiToolCall, Content};
 use crate::extensions::WasmHost;
 use crate::lsp::LspManager;
 use crate::plan::{PlanFile, PlanManager};
 use crate::process::ProcessRegistry;
 use crate::storage::{CredentialStore, Preferences, SessionManager};
-use crate::tools::{register_build_tool, register_explore_tool, ToolRegistry};
+use crate::tools::ToolRegistry;
 use crate::tui::animation::MenuAnimator;
 use crate::tui::input::{AutocompletePopup, MultiLineInput};
 use crate::tui::markdown::MarkdownCache;
 use crate::tui::polling::{
-    poll_background_processes, poll_bash_output, poll_build_progress, poll_explore_progress,
-    poll_init_exploration, poll_mcp_status, poll_oauth_status, PollAction, PollResult,
+    poll_background_processes, poll_init_exploration, poll_mcp_status, poll_oauth_status,
 };
-use crate::tui::state::PopupState;
 use crate::tui::state::{
-    BlockManager, BlockUiStates, EdgeScrollState, HoverState, LayoutState, ScrollState,
-    SelectionState, ToolResultCache,
+    BlockManager, BlockUiStates, ChatState, PopupState, ScrollSystem, ToolResultCache, UiState,
 };
 use crate::tui::streaming::StreamingManager;
-use crate::tui::themes::{Theme, THEME_REGISTRY};
-use crate::tui::utils::{count_wrapped_lines, AsyncChannels, TitleEditor};
+use crate::tui::utils::{AsyncChannels, TitleEditor};
 use krusty_core::skills::SkillsManager;
 
 /// View types
@@ -124,12 +120,9 @@ pub struct AppServices {
 
 /// Application state
 pub struct App {
-    pub view: View,
+    /// UI state (view, popup, theme, work_mode)
+    pub ui: UiState,
     pub pending_view_change: Option<View>,
-    pub theme: Arc<Theme>,
-    pub theme_name: String,
-    pub popup: Popup,
-    pub work_mode: WorkMode,
     pub active_plan: Option<PlanFile>,
     pub services: AppServices,
 
@@ -139,22 +132,13 @@ pub struct App {
     pub input: MultiLineInput,
     pub autocomplete: AutocompletePopup,
     pub file_search: crate::tui::input::FileSearchPopup,
-    pub messages: Vec<(String, String)>,
-    pub conversation: Vec<ModelMessage>,
-    // Processing state - split into streaming vs tool execution to prevent race conditions
-    pub is_streaming: bool,               // True while streaming from AI API
-    pub is_executing_tools: bool,         // True while tools are running
-    pub current_activity: Option<String>, // Current activity for top toolbar (e.g., "thinking", "reading", "writing")
 
-    // Scroll state - centralized scroll management
-    pub scroll: ScrollState,
+    /// Chat state (messages, conversation, streaming flags)
+    pub chat: ChatState,
 
-    // Layout state - cached areas for hit testing
-    pub layout: LayoutState,
+    /// Scroll/layout system (scroll, layout, selection, hover, edge_scroll)
+    pub scroll_system: ScrollSystem,
 
-    pub selection: SelectionState,
-    pub hover: HoverState,
-    pub edge_scroll: EdgeScrollState,
     pub current_model: String,
 
     // Token tracking
@@ -212,9 +196,6 @@ pub struct App {
     // Streaming state machine (replaces flag-based state)
     pub streaming: StreamingManager,
 
-    // Cache for streaming assistant message index (avoids O(n) scan per delta)
-    pub streaming_assistant_idx: Option<usize>,
-
     // Clipboard images pending resolution (id -> RGBA bytes)
     pub pending_clipboard_images: std::collections::HashMap<String, (usize, usize, Vec<u8>)>,
 
@@ -268,12 +249,8 @@ impl App {
         ) = crate::tui::app_builder::init_services(&working_dir).await;
 
         Self {
-            view: View::StartMenu,
+            ui: UiState::new(theme, theme_name),
             pending_view_change: None,
-            theme,
-            theme_name,
-            popup: Popup::None,
-            work_mode: WorkMode::Build,
             active_plan: None,
             services,
             plan_sidebar: crate::tui::components::PlanSidebarState::default(),
@@ -282,16 +259,8 @@ impl App {
             input: MultiLineInput::new(5),
             autocomplete: AutocompletePopup::new(),
             file_search: crate::tui::input::FileSearchPopup::new(working_dir.clone()),
-            messages: Vec::new(),
-            conversation: Vec::new(),
-            is_streaming: false,
-            is_executing_tools: false,
-            current_activity: None,
-            scroll: ScrollState::new(),
-            layout: LayoutState::new(),
-            selection: SelectionState::default(),
-            hover: HoverState::default(),
-            edge_scroll: EdgeScrollState::default(),
+            chat: ChatState::new(),
+            scroll_system: ScrollSystem::new(),
             current_model,
             context_tokens_used: 0,
             ai_client: None,
@@ -322,9 +291,6 @@ impl App {
 
             // Streaming state machine
             streaming: StreamingManager::new(),
-
-            // Streaming assistant index cache
-            streaming_assistant_idx: None,
 
             // Clipboard images
             pending_clipboard_images: std::collections::HashMap::new(),
@@ -405,155 +371,39 @@ impl App {
 
     /// Start streaming from AI - sets is_streaming flag
     pub fn start_streaming(&mut self) {
-        self.is_streaming = true;
-        self.current_activity = Some("thinking".to_string());
+        self.chat.start_streaming();
     }
 
     /// Stop streaming from AI - clears is_streaming flag and related caches
     pub fn stop_streaming(&mut self) {
-        self.is_streaming = false;
-        self.current_activity = None;
-        self.streaming_assistant_idx = None;
+        self.chat.stop_streaming();
     }
 
     /// Start tool execution - sets is_executing_tools flag
     pub fn start_tool_execution(&mut self) {
-        self.is_executing_tools = true;
+        self.chat.start_tool_execution();
     }
 
     /// Stop tool execution - clears is_executing_tools flag
     pub fn stop_tool_execution(&mut self) {
-        self.is_executing_tools = false;
-        self.current_activity = None;
+        self.chat.stop_tool_execution();
     }
 
     /// Apply any pending view change (called at end of event loop iteration)
     pub fn apply_pending_view_change(&mut self) {
         if let Some(view) = self.pending_view_change.take() {
-            self.view = view;
+            self.ui.view = view;
         }
     }
 
     /// Check if busy (streaming OR executing tools)
     pub fn is_busy(&self) -> bool {
-        self.is_streaming || self.is_executing_tools
-    }
-
-    /// Calculate total lines in messages for scrollbar
-    /// Uses the same wrapping logic as render_messages for accurate counting
-    /// NOTE: Takes &mut self to populate markdown cache for consistency with render
-    pub fn calculate_message_lines(&mut self, width: u16) -> usize {
-        use crate::tui::blocks::{BlockType, StreamBlock};
-        use crate::tui::state::BlockIndices;
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        let mut total = 0;
-        let mut indices = BlockIndices::new();
-        // Account for borders (2) + scrollbar padding (4) = 6 total
-        // MUST match render_messages() which uses: inner.width.saturating_sub(4)
-        // where inner.width = area.width - 2 (from block.inner), so total = width - 6
-        let inner_width = width.saturating_sub(6) as usize;
-        let content_width = width.saturating_sub(6); // Must match inner_width for blocks
-
-        // Pre-render markdown to cache (same as render_messages) to ensure consistent line counts
-        self.markdown_cache.check_width(inner_width);
-
-        for (role, content) in &self.messages {
-            if let Some((block_type, idx)) = indices.get_and_increment(role) {
-                // Handle block types
-                let height = match block_type {
-                    BlockType::Thinking => self
-                        .blocks
-                        .thinking
-                        .get(idx)
-                        .map(|b| b.height(content_width, &self.theme)),
-                    BlockType::Bash => self
-                        .blocks
-                        .bash
-                        .get(idx)
-                        .map(|b| b.height(content_width, &self.theme)),
-                    BlockType::TerminalPane => {
-                        // Skip pinned terminal - it's rendered at top
-                        if self.blocks.pinned_terminal == Some(idx) {
-                            None
-                        } else {
-                            self.blocks
-                                .terminal
-                                .get(idx)
-                                .map(|b| b.height(content_width, &self.theme))
-                        }
-                    }
-                    BlockType::ToolResult => self
-                        .blocks
-                        .tool_result
-                        .get(idx)
-                        .map(|b| b.height(content_width, &self.theme)),
-                    BlockType::Read => self
-                        .blocks
-                        .read
-                        .get(idx)
-                        .map(|b| b.height(content_width, &self.theme)),
-                    BlockType::Edit => self
-                        .blocks
-                        .edit
-                        .get(idx)
-                        .map(|b| b.height(content_width, &self.theme)),
-                    BlockType::Write => self
-                        .blocks
-                        .write
-                        .get(idx)
-                        .map(|b| b.height(content_width, &self.theme)),
-                    BlockType::WebSearch => self
-                        .blocks
-                        .web_search
-                        .get(idx)
-                        .map(|b| b.height(content_width, &self.theme)),
-                    BlockType::Explore => self
-                        .blocks
-                        .explore
-                        .get(idx)
-                        .map(|b| b.height(content_width, &self.theme)),
-                    BlockType::Build => self
-                        .blocks
-                        .build
-                        .get(idx)
-                        .map(|b| b.height(content_width, &self.theme)),
-                };
-                if let Some(h) = height {
-                    total += h as usize + 1; // +1 for blank after
-                }
-            } else if role == "assistant" {
-                // Render markdown to cache and get line count (matches render_messages exactly)
-                let mut hasher = DefaultHasher::new();
-                content.hash(&mut hasher);
-                let content_hash = hasher.finish();
-                let rendered = self.markdown_cache.get_or_render_with_links(
-                    content,
-                    content_hash,
-                    inner_width,
-                    &self.theme,
-                );
-                total += rendered.lines.len() + 1; // +1 for blank after
-            } else {
-                // User/system messages - plain text with wrapping
-                // Must match render_messages exactly: wrap each line, then blank after
-                for line in content.lines() {
-                    if line.is_empty() {
-                        total += 1;
-                    } else {
-                        total += count_wrapped_lines(line, inner_width);
-                    }
-                }
-                total += 1; // Blank line after
-            }
-        }
-        total
+        self.chat.is_busy()
     }
 
     /// Start editing the session title
     pub fn start_title_edit(&mut self) {
-        if self.view == View::Chat {
+        if self.ui.view == View::Chat {
             self.title_editor.start(self.session_title.as_deref());
         }
     }
@@ -597,319 +447,6 @@ impl App {
             extension_path,
         )
         .await
-    }
-
-    /// Try to load existing authentication for the active provider
-    pub async fn try_load_auth(&mut self) -> Result<()> {
-        // Try credential store for all providers (API keys and OAuth tokens)
-        if let Some(key) = self
-            .services
-            .credential_store
-            .get_auth(&self.active_provider)
-        {
-            let config = self.create_client_config();
-            self.ai_client = Some(AiClient::with_api_key(config, key.clone()));
-            self.api_key = Some(key);
-            self.register_explore_tool_if_client().await;
-            return Ok(());
-        }
-
-        Ok(())
-    }
-
-    /// Register explore and build tools if client is available
-    async fn register_explore_tool_if_client(&mut self) {
-        let client = self.create_ai_client();
-
-        if let Some(client) = client {
-            let client = Arc::new(client);
-
-            // Register explore tool
-            register_explore_tool(
-                &self.services.tool_registry,
-                client.clone(),
-                self.cancellation.clone(),
-            )
-            .await;
-
-            // Register build tool (The Kraken)
-            register_build_tool(
-                &self.services.tool_registry,
-                client,
-                self.cancellation.clone(),
-            )
-            .await;
-
-            // Update cached tools so API knows about explore and build
-            self.services.cached_ai_tools = self.services.tool_registry.get_ai_tools().await;
-            tracing::info!(
-                "Registered explore and build tools, total tools: {}",
-                self.services.cached_ai_tools.len()
-            );
-        }
-    }
-
-    /// Create AiClientConfig for the current active provider
-    pub fn create_client_config(&self) -> crate::ai::client::AiClientConfig {
-        crate::tui::auth::create_client_config(
-            self.active_provider,
-            &self.current_model,
-            &self.services.credential_store,
-            &self.services.model_registry,
-        )
-    }
-
-    /// Create an AI client with the current provider configuration
-    pub fn create_ai_client(&self) -> Option<AiClient> {
-        let config = self.create_client_config();
-        self.api_key
-            .as_ref()
-            .map(|key| AiClient::with_api_key(config, key.clone()))
-    }
-
-    /// Set API key for current provider and create client
-    pub fn set_api_key(&mut self, key: String) {
-        // Create client with provider config
-        let config = self.create_client_config();
-        self.ai_client = Some(AiClient::with_api_key(config, key.clone()));
-        self.api_key = Some(key.clone());
-
-        // Save to credential store (unified storage for all providers)
-        self.services
-            .credential_store
-            .set(self.active_provider, key);
-        if let Err(e) = self.services.credential_store.save() {
-            tracing::warn!("Failed to save credential store: {}", e);
-        }
-    }
-
-    /// Switch to a different provider
-    /// Automatically translates the current model to the equivalent in the new provider
-    pub fn switch_provider(&mut self, provider_id: ProviderId) {
-        use crate::tui::auth::{translate_model_for_provider, validate_model_for_provider};
-
-        let previous_provider = self.active_provider;
-        self.active_provider = provider_id;
-
-        // Save active provider selection
-        if let Err(e) = crate::storage::credentials::ActiveProviderStore::save(provider_id) {
-            tracing::warn!("Failed to save active provider: {}", e);
-        }
-
-        // Translate model ID to the new provider's format
-        let (translated, changed) =
-            translate_model_for_provider(&self.current_model, previous_provider, provider_id);
-        if changed {
-            self.current_model = translated.clone();
-            if let Some(ref prefs) = self.services.preferences {
-                if let Err(e) = prefs.set_current_model(&translated) {
-                    tracing::warn!("Failed to save current model: {}", e);
-                }
-            }
-        }
-
-        // Validate the model exists for this provider (fallback to default if not)
-        let (validated, was_fallback) =
-            validate_model_for_provider(&self.current_model, provider_id);
-        if was_fallback {
-            self.current_model = validated.clone();
-            if let Some(ref prefs) = self.services.preferences {
-                if let Err(e) = prefs.set_current_model(&validated) {
-                    tracing::warn!("Failed to save current model: {}", e);
-                }
-            }
-        }
-
-        // Try to load credentials for the new provider (API key or OAuth token)
-        if let Some(key) = self.services.credential_store.get_auth(&provider_id) {
-            let config = self.create_client_config();
-            self.ai_client = Some(AiClient::with_api_key(config, key.clone()));
-            self.api_key = Some(key);
-            tracing::info!(
-                "Switched to provider {} (loaded existing auth)",
-                provider_id
-            );
-        } else {
-            // No stored credentials - user will need to authenticate
-            self.ai_client = None;
-            self.api_key = None;
-            tracing::info!(
-                "Switched to provider {} (requires authentication)",
-                provider_id
-            );
-        }
-    }
-
-    /// Get list of configured provider IDs (ones with API keys)
-    pub fn configured_providers(&self) -> Vec<ProviderId> {
-        // Use providers_with_auth to include both API key and OAuth-authenticated providers
-        self.services.credential_store.providers_with_auth()
-    }
-
-    /// Check if authenticated
-    pub fn is_authenticated(&self) -> bool {
-        self.ai_client.is_some()
-    }
-
-    /// Get the current theme
-    #[allow(dead_code)]
-    pub fn current_theme(&self) -> &Theme {
-        &self.theme
-    }
-
-    /// Set theme and persist to preferences
-    pub fn set_theme(&mut self, name: &str) {
-        let theme = THEME_REGISTRY.get_or_default(name);
-        self.theme = Arc::new(theme.clone());
-        self.theme_name = name.to_string();
-
-        // Update menu animator with theme color
-        let accent_rgb = theme.get_bubble_rgb();
-        self.menu_animator.set_theme_color(accent_rgb);
-
-        // Save to preferences
-        if let Some(ref prefs) = self.services.preferences {
-            if let Err(e) = prefs.set_theme(name) {
-                tracing::warn!("Failed to save theme preference: {}", e);
-            }
-        }
-    }
-
-    /// Preview theme without saving to preferences (for live preview)
-    pub fn preview_theme(&mut self, name: &str) {
-        let theme = THEME_REGISTRY.get_or_default(name);
-        self.theme = Arc::new(theme.clone());
-        self.theme_name = name.to_string();
-
-        // Update menu animator with theme color
-        let accent_rgb = theme.get_bubble_rgb();
-        self.menu_animator.set_theme_color(accent_rgb);
-        // Don't save to preferences - this is just a preview
-    }
-
-    /// Restore theme to original (cancel preview)
-    pub fn restore_original_theme(&mut self) {
-        if let Some(original) = self
-            .popups
-            .theme
-            .get_original_theme_name()
-            .map(|s| s.to_string())
-        {
-            self.preview_theme(&original);
-        }
-    }
-
-    /// Poll bash output channel and update BashBlock with streaming output
-    fn poll_bash_output(&mut self) -> PollResult {
-        poll_bash_output(
-            &mut self.channels,
-            &mut self.blocks.bash,
-            &mut self.scroll,
-            &self.process_registry,
-        )
-    }
-
-    /// Poll explore progress channel and update ExploreBlock with agent progress
-    fn poll_explore_progress(&mut self) -> PollResult {
-        poll_explore_progress(&mut self.channels, &mut self.blocks.explore)
-    }
-
-    /// Poll build progress channel and update BuildBlock with builder progress
-    fn poll_build_progress(&mut self) -> PollResult {
-        poll_build_progress(
-            &mut self.channels,
-            &mut self.blocks.build,
-            &mut self.active_plan,
-            &self.services.plan_manager,
-        )
-    }
-
-    /// Poll terminal panes for PTY output and update cursor animations
-    fn poll_terminal_panes(&mut self) {
-        self.blocks.poll_terminals();
-    }
-
-    /// Process actions returned from polling operations
-    fn process_poll_actions(&mut self, result: PollResult) {
-        // Add messages
-        for (role, content) in result.messages {
-            self.messages.push((role, content));
-        }
-
-        // Execute actions
-        for action in result.actions {
-            match action {
-                PollAction::RefreshMcpPopup => {
-                    self.refresh_mcp_popup();
-                }
-                PollAction::RefreshAiTools => {
-                    self.services.cached_ai_tools =
-                        futures::executor::block_on(self.services.tool_registry.get_ai_tools());
-                    tracing::info!(
-                        "Refreshed AI tools after MCP update, total: {}",
-                        self.services.cached_ai_tools.len()
-                    );
-                }
-                PollAction::SwitchProvider(provider) => {
-                    self.switch_provider(provider);
-                }
-            }
-        }
-    }
-
-    /// Tick all animations. Returns true if any animation is still running.
-    fn tick_blocks(&mut self) -> bool {
-        let blocks = self.blocks.tick_all();
-        self.popups.pinch.tick();
-        let sidebar = self.plan_sidebar.tick();
-
-        if self.plan_sidebar.should_clear_plan() {
-            self.active_plan = None;
-            tracing::info!("Plan cleared after sidebar collapse");
-        }
-
-        use crate::tui::popups::pinch::PinchStage;
-        let pinch_active = matches!(
-            self.popups.pinch.stage,
-            PinchStage::Summarizing { .. } | PinchStage::Creating
-        );
-
-        blocks || sidebar || pinch_active || self.view == View::StartMenu
-    }
-
-    /// Close a terminal pane by index
-    pub fn close_terminal(&mut self, idx: usize) {
-        // Get the process_id before we close (needed for message lookup)
-        let process_id = if idx < self.blocks.terminal.len() {
-            self.blocks.terminal[idx]
-                .get_process_id()
-                .map(|s| s.to_string())
-        } else {
-            None
-        };
-
-        // Unregister from process registry before removing
-        if let Some(ref id) = process_id {
-            let registry = self.process_registry.clone();
-            let id_clone = id.clone();
-            tokio::spawn(async move {
-                registry.unregister(&id_clone).await;
-            });
-        }
-
-        // Close the terminal (handles focus/pin adjustments)
-        self.blocks.close_terminal(idx);
-
-        // Remove the corresponding "terminal" message by process_id (reliable lookup)
-        if let Some(ref pid) = process_id {
-            if let Some(msg_idx) = self
-                .messages
-                .iter()
-                .position(|(role, content)| role == "terminal" && content == pid)
-            {
-                self.messages.remove(msg_idx);
-            }
-        }
     }
 
     /// Run the application
@@ -1047,7 +584,7 @@ impl App {
         let mut event_stream = EventStream::new();
 
         loop {
-            if let Some(area) = self.layout.input_area {
+            if let Some(area) = self.scroll_system.layout.input_area {
                 self.input.set_width(area.width);
             }
 
@@ -1058,7 +595,7 @@ impl App {
             self.running_process_elapsed = self.process_registry.try_oldest_running_elapsed();
 
             // Keep process popup updated while open (non-blocking)
-            if self.popup == Popup::ProcessList {
+            if self.ui.popup == Popup::ProcessList {
                 if let Some(processes) = self.process_registry.try_list() {
                     self.popups.process.update(processes);
                 }
@@ -1114,7 +651,7 @@ impl App {
             }
 
             // Update menu animations (only when on start menu for efficiency)
-            if self.view == View::StartMenu {
+            if self.ui.view == View::StartMenu {
                 // Use inner_area width (terminal width minus borders) so crab stays contained
                 let term_size = terminal.size()?;
                 let inner_width = term_size.width.saturating_sub(2); // Account for logo border
@@ -1193,13 +730,13 @@ impl App {
             }
 
             // Process continuous edge scrolling during selection
-            if self.edge_scroll.direction.is_some() {
+            if self.scroll_system.edge_scroll.direction.is_some() {
                 self.process_edge_scroll();
                 self.needs_redraw = true;
             }
 
             // Always redraw if streaming is active (receiving deltas)
-            if self.is_streaming {
+            if self.chat.is_streaming {
                 self.needs_redraw = true;
             }
 
@@ -1210,7 +747,7 @@ impl App {
             }
 
             // 60fps polling - edge scroll needs faster polling for smooth scrolling
-            let poll_timeout = if self.edge_scroll.direction.is_some() {
+            let poll_timeout = if self.scroll_system.edge_scroll.direction.is_some() {
                 Duration::from_millis(8) // 125fps for smooth edge scrolling
             } else {
                 Duration::from_millis(16) // 60fps normal

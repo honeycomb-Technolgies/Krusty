@@ -43,7 +43,7 @@ impl App {
         let project_context = self.read_project_context();
 
         // Clone conversation for the async task
-        let conversation = self.conversation.clone();
+        let conversation = self.chat.conversation.clone();
 
         // Capture current model for summarization
         let current_model = self.current_model.clone();

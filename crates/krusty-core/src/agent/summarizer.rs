@@ -323,7 +323,7 @@ fn get_fallback_model(provider: ProviderId) -> &'static str {
         ProviderId::Anthropic => ANTHROPIC_SUMMARIZATION_MODEL,
         ProviderId::OpenRouter => "anthropic/claude-3.5-haiku", // Fast and cheap on OpenRouter
         ProviderId::OpenCodeZen => "minimax-m2.1-free",         // Free tier model
-        ProviderId::ZAi => "glm-4.5-flash",                     // Fast GLM model
+        ProviderId::ZAi => "GLM-4.5-Air",                       // Fast GLM model
         ProviderId::MiniMax => "MiniMax-M2.1",                  // MiniMax default
         ProviderId::Kimi => "kimi-for-coding",                  // Kimi Code API model
         ProviderId::OpenAI => "gpt-4o-mini",                    // Fast and cheap OpenAI model

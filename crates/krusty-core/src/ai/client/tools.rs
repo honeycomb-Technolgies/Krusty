@@ -77,17 +77,23 @@ impl AiClient {
             "tools": tools
         });
 
-        // Add thinking configuration when enabled
-        if thinking_enabled {
+        // Add thinking configuration when enabled (native Anthropic only)
+        // Z.ai and other Anthropic-compatible providers don't support budget_tokens
+        if thinking_enabled && self.config().is_anthropic() {
             body["thinking"] = serde_json::json!({
                 "type": "enabled",
                 "budget_tokens": 32000  // Maximum budget for sub-agents
             });
         }
 
-        // Add thinking beta for providers that support it
-        let beta_headers = vec!["interleaved-thinking-2025-05-14"];
-        let request = self.build_request_with_beta(&self.config().api_url(), &beta_headers);
+        // Add thinking beta headers for native Anthropic only
+        // Z.ai ignores/rejects these headers
+        let request = if self.config().is_anthropic() {
+            let beta_headers = vec!["interleaved-thinking-2025-05-14"];
+            self.build_request_with_beta(&self.config().api_url(), &beta_headers)
+        } else {
+            self.build_request(&self.config().api_url())
+        };
 
         info!(model = model, provider = %self.provider_id(), "Sub-agent API call starting");
         let start = Instant::now();

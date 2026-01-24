@@ -12,7 +12,7 @@ impl App {
     /// Convert screen coordinates to messages text position (line, column)
     /// Returns None if click is outside content
     pub fn hit_test_messages(&self, screen_x: u16, screen_y: u16) -> Option<(usize, usize)> {
-        let area = self.layout.messages_area?;
+        let area = self.scroll_system.layout.messages_area?;
 
         // Check if within messages area (accounting for border)
         let inner_x = area.x + 1;
@@ -33,7 +33,7 @@ impl App {
         let rel_y = (screen_y - inner_y) as usize;
 
         // Add scroll offset to get actual line index
-        let line_index = rel_y + self.scroll.offset;
+        let line_index = rel_y + self.scroll_system.scroll.offset;
 
         Some((line_index, rel_x))
     }
@@ -82,7 +82,7 @@ impl App {
     ///
     /// This consolidates hit testing into a single message iteration instead of 5 separate ones.
     pub fn hit_test_any_block(&self, screen_x: u16, screen_y: u16) -> Option<BlockHitResult> {
-        let area = self.layout.messages_area?;
+        let area = self.scroll_system.layout.messages_area?;
         let inner_x = area.x + 1;
         let inner_y = area.y + 1;
         let inner_width = area.width.saturating_sub(2);
@@ -96,7 +96,7 @@ impl App {
             return None;
         }
 
-        let scroll = self.scroll.offset as u16;
+        let scroll = self.scroll_system.scroll.offset as u16;
         // MUST match render_messages(): content_width = inner.width - 4, wrap_width = inner.width - 4
         // inner_width here = area.width - 2, so both should be inner_width - 4
         let content_width = inner_width.saturating_sub(4);
@@ -146,7 +146,7 @@ impl App {
             None
         };
 
-        for (role, content) in &self.messages {
+        for (role, content) in &self.chat.messages {
             if let Some((block_type, idx)) = indices.get_and_increment(role) {
                 // Get block height based on type
                 let height = match block_type {
@@ -154,12 +154,12 @@ impl App {
                         .blocks
                         .thinking
                         .get(idx)
-                        .map(|b| b.height(content_width, &self.theme)),
+                        .map(|b| b.height(content_width, &self.ui.theme)),
                     BlockType::Bash => self
                         .blocks
                         .bash
                         .get(idx)
-                        .map(|b| b.height(content_width, &self.theme)),
+                        .map(|b| b.height(content_width, &self.ui.theme)),
                     BlockType::TerminalPane => {
                         // Skip pinned terminal - handled separately at top
                         if self.blocks.pinned_terminal == Some(idx) {
@@ -168,44 +168,44 @@ impl App {
                             self.blocks
                                 .terminal
                                 .get(idx)
-                                .map(|b| b.height(content_width, &self.theme))
+                                .map(|b| b.height(content_width, &self.ui.theme))
                         }
                     }
                     BlockType::ToolResult => self
                         .blocks
                         .tool_result
                         .get(idx)
-                        .map(|b| b.height(content_width, &self.theme)),
+                        .map(|b| b.height(content_width, &self.ui.theme)),
                     BlockType::Read => self
                         .blocks
                         .read
                         .get(idx)
-                        .map(|b| b.height(content_width, &self.theme)),
+                        .map(|b| b.height(content_width, &self.ui.theme)),
                     BlockType::Edit => self
                         .blocks
                         .edit
                         .get(idx)
-                        .map(|b| b.height(content_width, &self.theme)),
+                        .map(|b| b.height(content_width, &self.ui.theme)),
                     BlockType::Write => self
                         .blocks
                         .write
                         .get(idx)
-                        .map(|b| b.height(content_width, &self.theme)),
+                        .map(|b| b.height(content_width, &self.ui.theme)),
                     BlockType::WebSearch => self
                         .blocks
                         .web_search
                         .get(idx)
-                        .map(|b| b.height(content_width, &self.theme)),
+                        .map(|b| b.height(content_width, &self.ui.theme)),
                     BlockType::Explore => self
                         .blocks
                         .explore
                         .get(idx)
-                        .map(|b| b.height(content_width, &self.theme)),
+                        .map(|b| b.height(content_width, &self.ui.theme)),
                     BlockType::Build => self
                         .blocks
                         .build
                         .get(idx)
-                        .map(|b| b.height(content_width, &self.theme)),
+                        .map(|b| b.height(content_width, &self.ui.theme)),
                 };
 
                 if let Some(height) = height {
@@ -237,7 +237,7 @@ impl App {
     /// Convert screen coordinates to input text position (line, column)
     /// Returns None if click is outside content
     pub fn hit_test_input(&self, screen_x: u16, screen_y: u16) -> Option<(usize, usize)> {
-        let area = self.layout.input_area?;
+        let area = self.scroll_system.layout.input_area?;
 
         // Check if within input area (accounting for border)
         let inner_x = area.x + 1;

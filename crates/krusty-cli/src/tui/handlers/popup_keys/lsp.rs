@@ -13,7 +13,7 @@ impl App {
                 if self.popups.lsp.search_active {
                     self.popups.lsp.toggle_search();
                 } else {
-                    self.popup = Popup::None;
+                    self.ui.popup = Popup::None;
                 }
             }
             KeyCode::Up => self.popups.lsp.prev(),
@@ -53,7 +53,7 @@ impl App {
         match code {
             KeyCode::Esc => {
                 self.popups.file_preview.reset();
-                self.popup = Popup::None;
+                self.ui.popup = Popup::None;
             }
             KeyCode::Char('o') | KeyCode::Char('O') => {
                 self.popups.file_preview.open_external();
@@ -94,7 +94,7 @@ impl App {
                     }
                     Some(LspSuggestion::None) | None => {
                         self.popups.lsp_install.clear();
-                        self.popup = Popup::None;
+                        self.ui.popup = Popup::None;
                     }
                 }
             }
@@ -109,7 +109,7 @@ impl App {
                     self.services.lsp_skip_list.insert(ext);
                 }
                 self.popups.lsp_install.clear();
-                self.popup = Popup::None;
+                self.ui.popup = Popup::None;
             }
             KeyCode::Char('a') | KeyCode::Char('A') => {
                 // Always skip
@@ -122,7 +122,7 @@ impl App {
                     self.services.lsp_skip_list.insert(ext);
                 }
                 self.popups.lsp_install.clear();
-                self.popup = Popup::None;
+                self.ui.popup = Popup::None;
             }
             _ => {}
         }

@@ -27,11 +27,11 @@ impl<'a> RenderModel<'a> {
     #[allow(dead_code)]
     pub fn from_app(app: &'a App) -> Self {
         Self {
-            view: &app.view,
-            popup: &app.popup,
-            theme: &app.theme,
-            theme_name: &app.theme_name,
-            work_mode: app.work_mode,
+            view: &app.ui.view,
+            popup: &app.ui.popup,
+            theme: &app.ui.theme,
+            theme_name: &app.ui.theme_name,
+            work_mode: app.ui.work_mode,
             toasts: &app.toasts,
         }
     }

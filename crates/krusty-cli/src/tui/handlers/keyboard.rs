@@ -23,7 +23,7 @@ impl App {
         }
 
         // Handle popups first
-        if self.popup != Popup::None {
+        if self.ui.popup != Popup::None {
             self.handle_popup_key(code, modifiers);
             return;
         }
@@ -133,7 +133,7 @@ impl App {
 
         // Ctrl+B to toggle work mode (BUILD/PLAN)
         if modifiers.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('b') {
-            self.work_mode = self.work_mode.toggle();
+            self.ui.work_mode = self.ui.work_mode.toggle();
             return;
         }
 
@@ -148,11 +148,11 @@ impl App {
         // Ctrl+P to open process list
         if modifiers.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('p') {
             self.refresh_process_popup();
-            self.popup = Popup::ProcessList;
+            self.ui.popup = Popup::ProcessList;
             return;
         }
 
-        match self.view {
+        match self.ui.view {
             View::StartMenu => self.handle_start_menu_key(code, modifiers),
             View::Chat => self.handle_chat_key(code, modifiers),
         }
@@ -163,7 +163,7 @@ impl App {
         use crate::tui::popups::auth::AuthState;
 
         // Route paste to auth popup if active and in input state
-        if let Popup::Auth = &self.popup {
+        if let Popup::Auth = &self.ui.popup {
             if let AuthState::ApiKeyInput { .. } = &self.popups.auth.state {
                 for c in text.trim().chars() {
                     self.popups.auth.add_api_key_char(c);
@@ -173,7 +173,7 @@ impl App {
         }
 
         // Route paste to pinch popup if in input state
-        if let Popup::Pinch = &self.popup {
+        if let Popup::Pinch = &self.ui.popup {
             use crate::tui::popups::pinch::PinchStage;
             match &self.popups.pinch.stage {
                 PinchStage::PreservationInput { .. } | PinchStage::DirectionInput { .. } => {
@@ -270,7 +270,8 @@ impl App {
                 self.streaming.reset();
                 self.stop_streaming();
                 self.stop_tool_execution();
-                self.messages
+                self.chat
+                    .messages
                     .push(("system".to_string(), "Interrupted.".to_string()));
             }
             return;
@@ -317,12 +318,12 @@ impl App {
 
         // PageUp - show older content (decrease offset toward 0/top)
         if code == KeyCode::PageUp {
-            self.scroll.scroll_up(5);
+            self.scroll_system.scroll.scroll_up(5);
             return;
         }
         // PageDown - show newer content (increase offset toward MAX/bottom)
         if code == KeyCode::PageDown {
-            self.scroll.scroll_down(5);
+            self.scroll_system.scroll.scroll_down(5);
             return;
         }
 
@@ -339,7 +340,7 @@ impl App {
                     }
                 } else if !text.is_empty() {
                     if self.is_busy() {
-                        self.messages.push((
+                        self.chat.messages.push((
                             "system".to_string(),
                             "Please wait for the current response to complete.".to_string(),
                         ));
@@ -558,7 +559,7 @@ impl App {
                 match idx {
                     0 => {
                         // Execute - switch to BUILD mode and auto-start
-                        self.work_mode = crate::tui::app::WorkMode::Build;
+                        self.ui.work_mode = crate::tui::app::WorkMode::Build;
 
                         // Auto-send execute message to Claude
                         let execute_msg =
@@ -569,14 +570,14 @@ impl App {
                         // Abandon - clear plan
                         if let Some(ref plan) = self.active_plan {
                             let title = plan.title.clone();
-                            self.messages.push((
+                            self.chat.messages.push((
                                 "system".to_string(),
                                 format!("Plan '{}' abandoned.", title),
                             ));
                         }
                         self.active_plan = None;
                         self.plan_sidebar.reset();
-                        self.work_mode = crate::tui::app::WorkMode::Build;
+                        self.ui.work_mode = crate::tui::app::WorkMode::Build;
                     }
                     _ => {}
                 }
@@ -654,7 +655,7 @@ impl App {
             "Sending AskUserQuestion tool result"
         );
 
-        self.conversation.push(msg.clone());
+        self.chat.conversation.push(msg.clone());
         self.save_model_message(&msg);
 
         // Continue AI conversation

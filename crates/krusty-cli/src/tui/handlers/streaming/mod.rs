@@ -42,13 +42,13 @@ impl App {
             return;
         }
 
-        if self.view == View::StartMenu {
-            self.view = View::Chat;
+        if self.ui.view == View::StartMenu {
+            self.ui.view = View::Chat;
         }
 
         if !self.is_authenticated() {
             self.input.insert_text(&text);
-            self.messages.push((
+            self.chat.messages.push((
                 "system".to_string(),
                 "Not authenticated. Use /auth to set up API key.".to_string(),
             ));
@@ -62,18 +62,19 @@ impl App {
         let (content_blocks, display_text) = match self.build_user_content(&text) {
             Ok(result) => result,
             Err(e) => {
-                self.messages
+                self.chat
+                    .messages
                     .push(("system".to_string(), format!("Error: {}", e)));
                 return;
             }
         };
 
-        self.messages.push(("user".to_string(), display_text));
+        self.chat.messages.push(("user".to_string(), display_text));
         let user_msg = ModelMessage {
             role: Role::User,
             content: content_blocks,
         };
-        self.conversation.push(user_msg.clone());
+        self.chat.conversation.push(user_msg.clone());
         self.save_model_message(&user_msg);
         self.send_to_ai();
     }
@@ -178,11 +179,11 @@ impl App {
 
         tracing::info!(
             "=== send_to_ai START === conversation_len={}",
-            self.conversation.len()
+            self.chat.conversation.len()
         );
 
         // Log conversation structure for debugging
-        for (i, msg) in self.conversation.iter().enumerate() {
+        for (i, msg) in self.chat.conversation.iter().enumerate() {
             let content_summary: Vec<String> = msg
                 .content
                 .iter()
@@ -215,7 +216,7 @@ impl App {
                 turn: self.agent_state.current_turn,
                 reason: InterruptReason::MaxTurnsReached,
             });
-            self.messages.push((
+            self.chat.messages.push((
                 "system".to_string(),
                 format!(
                     "Max turns ({}) reached. Use /home to start a new session.",
@@ -226,7 +227,8 @@ impl App {
         }
 
         let Some(ref _client) = self.ai_client else {
-            self.messages
+            self.chat
+                .messages
                 .push(("system".to_string(), "No AI client configured".to_string()));
             return;
         };
@@ -237,7 +239,7 @@ impl App {
         self.agent_state.start_turn();
         self.event_bus.emit(AgentEvent::TurnStart {
             turn: self.agent_state.current_turn,
-            message_count: self.conversation.len(),
+            message_count: self.chat.conversation.len(),
         });
 
         // Build context
@@ -266,7 +268,7 @@ impl App {
         }
 
         let has_thinking_conversation = self.thinking_enabled
-            && self.conversation.iter().any(|msg| {
+            && self.chat.conversation.iter().any(|msg| {
                 msg.role == Role::Assistant
                     && msg
                         .content
@@ -274,7 +276,7 @@ impl App {
                         .any(|c| matches!(c, Content::Thinking { .. }))
             });
 
-        let mut conversation = self.conversation.clone();
+        let mut conversation = self.chat.conversation.clone();
         let mut system_insert_count = 0;
 
         // Inject project context FIRST
@@ -347,7 +349,7 @@ impl App {
         let client = match self.create_ai_client() {
             Some(c) => c,
             None => {
-                self.messages.push((
+                self.chat.messages.push((
                     "system".to_string(),
                     "No authentication available".to_string(),
                 ));

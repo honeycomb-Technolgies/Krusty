@@ -69,7 +69,7 @@ impl App {
                 self.handle_mouse_up();
             }
             MouseEventKind::Moved => {
-                self.scroll.unlock_from_messages();
+                self.scroll_system.scroll.unlock_from_messages();
                 self.update_hover_state(mouse.column, mouse.row);
             }
             _ => {}
@@ -84,9 +84,9 @@ impl App {
         };
 
         // Check if over input area
-        if let Some(area) = self.layout.input_area {
+        if let Some(area) = self.scroll_system.layout.input_area {
             if area.contains(Position::new(x, y)) {
-                self.scroll.unlock_from_messages();
+                self.scroll_system.scroll.unlock_from_messages();
                 match direction {
                     ScrollDirection::Up => self.input.scroll_up(),
                     ScrollDirection::Down => self.input.scroll_down(),
@@ -96,7 +96,7 @@ impl App {
         }
 
         // Check if over plan sidebar
-        if let Some(area) = self.layout.plan_sidebar_area {
+        if let Some(area) = self.scroll_system.layout.plan_sidebar_area {
             if area.contains(Position::new(x, y)) {
                 let visible_height = area.height.saturating_sub(2) as usize;
                 match direction {
@@ -110,7 +110,7 @@ impl App {
         // Check if over pinned terminal at top
         if let (Some(pinned_idx), Some(pinned_area)) = (
             self.blocks.pinned_terminal,
-            self.layout.pinned_terminal_area,
+            self.scroll_system.layout.pinned_terminal_area,
         ) {
             if pinned_area.contains(Position::new(x, y)) {
                 if let Some(tp) = self.blocks.terminal.get_mut(pinned_idx) {
@@ -129,21 +129,21 @@ impl App {
         }
 
         // Route scroll to block if not locked
-        if !self.scroll.is_locked_to_messages()
-            && !self.scroll.is_locked_for_selection()
+        if !self.scroll_system.scroll.is_locked_to_messages()
+            && !self.scroll_system.scroll.is_locked_for_selection()
             && self.route_scroll_to_block(x, y, direction)
         {
             return;
         }
 
         // Check if over messages area
-        if let Some(area) = self.layout.messages_area {
+        if let Some(area) = self.scroll_system.layout.messages_area {
             if area.contains(Position::new(x, y)) {
-                self.scroll.lock_to_messages();
+                self.scroll_system.scroll.lock_to_messages();
                 let scroll_amount = (area.height as usize / 10).clamp(3, 10);
                 match direction {
-                    ScrollDirection::Up => self.scroll.scroll_up(scroll_amount),
-                    ScrollDirection::Down => self.scroll.scroll_down(scroll_amount),
+                    ScrollDirection::Up => self.scroll_system.scroll.scroll_up(scroll_amount),
+                    ScrollDirection::Down => self.scroll_system.scroll.scroll_down(scroll_amount),
                 }
             }
         }
@@ -161,12 +161,12 @@ impl App {
         }
 
         // Clear any existing selection first
-        self.selection.clear();
-        self.scroll.unlock_from_selection();
+        self.scroll_system.selection.clear();
+        self.scroll_system.scroll.unlock_from_selection();
 
         // Check if clicking decision prompt options
         if self.decision_prompt.visible {
-            if let Some(area) = self.layout.prompt_area {
+            if let Some(area) = self.scroll_system.layout.prompt_area {
                 if area.contains(Position::new(x, y)) {
                     self.handle_prompt_click(x, y, area);
                     return;
@@ -175,7 +175,7 @@ impl App {
         }
 
         // Check if clicking toolbar title area
-        if let Some(area) = self.layout.toolbar_title_area {
+        if let Some(area) = self.scroll_system.layout.toolbar_title_area {
             if area.contains(Position::new(x, y)) {
                 self.start_title_edit();
                 return;
@@ -183,24 +183,26 @@ impl App {
         }
 
         // Check scrollbar clicks - jump to position and start drag for continued movement
-        if let Some(area) = self.layout.messages_scrollbar_area {
+        if let Some(area) = self.scroll_system.layout.messages_scrollbar_area {
             if area.contains(Position::new(x, y)) {
                 // Jump to clicked position
                 let clamped_y = y.clamp(area.y, area.y + area.height.saturating_sub(1));
                 let relative_y = clamped_y.saturating_sub(area.y) as f32;
                 let height = (area.height.saturating_sub(1)).max(1) as f32;
-                let new_offset =
-                    ((relative_y / height) * self.scroll.max_scroll as f32).round() as usize;
-                self.scroll.scroll_to_line(new_offset);
+                let new_offset = ((relative_y / height)
+                    * self.scroll_system.scroll.max_scroll as f32)
+                    .round() as usize;
+                self.scroll_system.scroll.scroll_to_line(new_offset);
 
                 // Start drag from new position for continued movement
-                let drag = ScrollbarDrag::new(y, new_offset, area, self.scroll.max_scroll);
-                self.layout.dragging_scrollbar = Some(DragTarget::Messages(drag));
+                let drag =
+                    ScrollbarDrag::new(y, new_offset, area, self.scroll_system.scroll.max_scroll);
+                self.scroll_system.layout.dragging_scrollbar = Some(DragTarget::Messages(drag));
                 return;
             }
         }
 
-        if let Some(area) = self.layout.input_scrollbar_area {
+        if let Some(area) = self.scroll_system.layout.input_scrollbar_area {
             if area.contains(Position::new(x, y)) {
                 let total_lines = self.input.get_wrapped_lines_count();
                 let visible_lines = self.input.get_max_visible_lines() as usize;
@@ -215,14 +217,14 @@ impl App {
 
                 // Start drag from new position for continued movement
                 let drag = ScrollbarDrag::new(y, new_offset, area, max_offset);
-                self.layout.dragging_scrollbar = Some(DragTarget::Input(drag));
+                self.scroll_system.layout.dragging_scrollbar = Some(DragTarget::Input(drag));
                 return;
             }
         }
 
-        if let Some(area) = self.layout.plan_sidebar_scrollbar_area {
+        if let Some(area) = self.scroll_system.layout.plan_sidebar_scrollbar_area {
             if area.contains(Position::new(x, y)) {
-                self.layout.dragging_scrollbar = Some(DragTarget::PlanSidebar);
+                self.scroll_system.layout.dragging_scrollbar = Some(DragTarget::PlanSidebar);
                 return;
             }
         }
@@ -249,33 +251,33 @@ impl App {
 
         // Start text selection
         if let Some(pos) = self.hit_test_messages(x, y) {
-            self.selection.start = Some(pos);
-            self.selection.end = Some(pos);
-            self.selection.is_selecting = true;
-            self.selection.area = SelectionArea::Messages;
-            self.scroll.lock_for_selection();
+            self.scroll_system.selection.start = Some(pos);
+            self.scroll_system.selection.end = Some(pos);
+            self.scroll_system.selection.is_selecting = true;
+            self.scroll_system.selection.area = SelectionArea::Messages;
+            self.scroll_system.scroll.lock_for_selection();
             return;
         }
 
         if let Some(pos) = self.hit_test_input(x, y) {
             // Check for input file reference click first
-            if let Some(area) = self.layout.input_area {
+            if let Some(area) = self.scroll_system.layout.input_area {
                 let relative_x = x.saturating_sub(area.x);
                 let relative_y = y.saturating_sub(area.y);
                 if let Some((_start, _end, path)) =
                     self.input.get_file_ref_at_click(relative_x, relative_y)
                 {
                     self.popups.file_preview.open(path);
-                    self.popup = Popup::FilePreview;
+                    self.ui.popup = Popup::FilePreview;
                     return;
                 }
                 self.input.handle_click(relative_x, relative_y);
             }
-            self.selection.start = Some(pos);
-            self.selection.end = Some(pos);
-            self.selection.is_selecting = true;
-            self.selection.area = SelectionArea::Input;
-            self.scroll.lock_for_selection();
+            self.scroll_system.selection.start = Some(pos);
+            self.scroll_system.selection.end = Some(pos);
+            self.scroll_system.selection.is_selecting = true;
+            self.scroll_system.selection.area = SelectionArea::Input;
+            self.scroll_system.scroll.lock_for_selection();
         }
     }
 
@@ -287,7 +289,7 @@ impl App {
         // Check pinned terminal first (separate area, not in messages)
         if let (Some(pinned_idx), Some(pinned_area)) = (
             self.blocks.pinned_terminal,
-            self.layout.pinned_terminal_area,
+            self.scroll_system.layout.pinned_terminal_area,
         ) {
             if pinned_area.contains(Position::new(x, y)) {
                 self.blocks.clear_all_terminal_focus();
@@ -344,7 +346,8 @@ impl App {
                             total_lines,
                             visible_lines,
                         );
-                        self.layout.dragging_scrollbar = Some(DragTarget::Block(drag));
+                        self.scroll_system.layout.dragging_scrollbar =
+                            Some(DragTarget::Block(drag));
                     }
                     block.handle_event(&event, block_area, clip);
                 }
@@ -363,7 +366,8 @@ impl App {
                             total_lines,
                             visible_lines,
                         );
-                        self.layout.dragging_scrollbar = Some(DragTarget::Block(drag));
+                        self.scroll_system.layout.dragging_scrollbar =
+                            Some(DragTarget::Block(drag));
                     }
                     block.handle_event(&event, block_area, clip);
                 }
@@ -386,7 +390,8 @@ impl App {
                             total_lines,
                             visible_lines,
                         );
-                        self.layout.dragging_scrollbar = Some(DragTarget::Block(drag));
+                        self.scroll_system.layout.dragging_scrollbar =
+                            Some(DragTarget::Block(drag));
                     }
                     block.handle_event(&event, block_area, clip);
                 }
@@ -405,7 +410,8 @@ impl App {
                             total_lines,
                             visible_lines,
                         );
-                        self.layout.dragging_scrollbar = Some(DragTarget::Block(drag));
+                        self.scroll_system.layout.dragging_scrollbar =
+                            Some(DragTarget::Block(drag));
                     }
                     let result = block.handle_event(&event, block_area, clip);
                     if let EventResult::Action(BlockEvent::ToggleDiffMode) = result {
@@ -433,7 +439,8 @@ impl App {
                                 total_lines,
                                 visible_lines,
                             );
-                            self.layout.dragging_scrollbar = Some(DragTarget::Block(drag));
+                            self.scroll_system.layout.dragging_scrollbar =
+                                Some(DragTarget::Block(drag));
                         }
                     }
                     block.handle_event(&event, block_area, clip);
@@ -454,7 +461,8 @@ impl App {
                                 total_lines,
                                 visible_lines,
                             );
-                            self.layout.dragging_scrollbar = Some(DragTarget::Block(drag));
+                            self.scroll_system.layout.dragging_scrollbar =
+                                Some(DragTarget::Block(drag));
                         }
                     }
                     block.handle_event(&event, block_area, clip);
@@ -476,7 +484,8 @@ impl App {
                             total_lines,
                             visible_lines,
                         );
-                        self.layout.dragging_scrollbar = Some(DragTarget::Block(drag));
+                        self.scroll_system.layout.dragging_scrollbar =
+                            Some(DragTarget::Block(drag));
                     }
                     block.handle_event(&event, block_area, clip);
                 }
@@ -533,18 +542,19 @@ impl App {
 
     /// Handle mouse button release
     fn handle_mouse_up(&mut self) {
-        self.layout.dragging_scrollbar = None;
-        self.edge_scroll.direction = None;
+        self.scroll_system.layout.dragging_scrollbar = None;
+        self.scroll_system.edge_scroll.direction = None;
 
-        if self.selection.is_selecting && self.selection.has_selection() {
+        if self.scroll_system.selection.is_selecting && self.scroll_system.selection.has_selection()
+        {
             // Copy to clipboard then clear selection
             self.copy_selection_to_clipboard();
-            self.selection.clear();
+            self.scroll_system.selection.clear();
         } else {
-            self.selection.is_selecting = false;
+            self.scroll_system.selection.is_selecting = false;
         }
 
-        self.scroll.unlock_from_selection();
+        self.scroll_system.scroll.unlock_from_selection();
     }
 
     /// Route scroll event to block under cursor
@@ -736,21 +746,21 @@ impl App {
     /// Update hover state based on mouse position
     fn update_hover_state(&mut self, x: u16, y: u16) {
         // Always update mouse position (cheap)
-        self.hover.mouse_pos = Some((x, y));
+        self.scroll_system.hover.mouse_pos = Some((x, y));
 
         // Throttle expensive detection operations
-        if !self.hover.should_detect() {
+        if !self.scroll_system.hover.should_detect() {
             return;
         }
 
         // Check messages area for file references
-        self.hover.message_file_ref = self.detect_message_file_ref(x, y);
+        self.scroll_system.hover.message_file_ref = self.detect_message_file_ref(x, y);
 
         // Check messages area for hyperlinks
-        self.hover.message_link = self.detect_message_link(x, y);
+        self.scroll_system.hover.message_link = self.detect_message_link(x, y);
 
         // Check input area for file references
-        self.hover.input_file_ref = self.detect_input_file_ref(x, y);
+        self.scroll_system.hover.input_file_ref = self.detect_input_file_ref(x, y);
     }
 
     /// Detect file reference in messages at position
@@ -761,7 +771,7 @@ impl App {
         static FILE_REF_PATTERN: LazyLock<Regex> =
             LazyLock::new(|| Regex::new(r"\[(Image|PDF): ([^\]]+)\]").unwrap());
 
-        let area = self.layout.messages_area?;
+        let area = self.scroll_system.layout.messages_area?;
         if !area.contains(Position::new(x, y)) {
             return None;
         }
@@ -771,7 +781,7 @@ impl App {
         let wrap_width = area.width.saturating_sub(6) as usize;
         let mut current_line = 0usize;
 
-        for (msg_idx, (role, content)) in self.messages.iter().enumerate() {
+        for (msg_idx, (role, content)) in self.chat.messages.iter().enumerate() {
             if role == "user" || role == "system" {
                 let mut msg_lines = 0usize;
                 for line in content.lines() {
@@ -803,7 +813,7 @@ impl App {
 
     /// Detect file reference in input at position
     fn detect_input_file_ref(&self, x: u16, y: u16) -> Option<(usize, usize, std::path::PathBuf)> {
-        let area = self.layout.input_area?;
+        let area = self.scroll_system.layout.input_area?;
         if !area.contains(Position::new(x, y)) {
             return None;
         }
@@ -829,7 +839,7 @@ impl App {
             hasher.finish()
         }
 
-        let area = self.layout.messages_area?;
+        let area = self.scroll_system.layout.messages_area?;
         if !area.contains(Position::new(x, y)) {
             return None;
         }
@@ -839,7 +849,7 @@ impl App {
         let wrap_width = area.width.saturating_sub(6) as usize;
         let mut current_line = 0usize;
 
-        for (msg_idx, (role, content)) in self.messages.iter().enumerate() {
+        for (msg_idx, (role, content)) in self.chat.messages.iter().enumerate() {
             if role == "assistant" {
                 // Get rendered markdown from cache
                 let content_hash = hash_content(content);
@@ -913,7 +923,7 @@ impl App {
             LazyLock::new(|| Regex::new(r"\[(Image|PDF): ([^\]]+)\]").unwrap());
 
         // Check if click is in messages area
-        let Some(area) = self.layout.messages_area else {
+        let Some(area) = self.scroll_system.layout.messages_area else {
             return false;
         };
 
@@ -930,7 +940,7 @@ impl App {
         let wrap_width = area.width.saturating_sub(6) as usize;
         let mut current_line = 0usize;
 
-        for (role, content) in &self.messages {
+        for (role, content) in &self.chat.messages {
             if role == "user" || role == "system" {
                 // Calculate lines in this message
                 let mut msg_lines = 0usize;
@@ -953,7 +963,7 @@ impl App {
                         if let Some(path) = self.attached_files.get(display_name) {
                             // Open the preview popup
                             self.popups.file_preview.open(path.clone());
-                            self.popup = Popup::FilePreview;
+                            self.ui.popup = Popup::FilePreview;
                             return true;
                         }
                     }

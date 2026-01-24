@@ -46,7 +46,7 @@ impl App {
     /// This allows the popup to interrupt the conversation and wait for user input.
     pub fn process_stream_events(&mut self) -> bool {
         // Pause streaming while LSP popup is shown (waiting for user decision)
-        if self.popup == crate::tui::app::Popup::LspInstall {
+        if self.ui.popup == crate::tui::app::Popup::LspInstall {
             return false;
         }
 
@@ -151,7 +151,7 @@ impl App {
                 error_code,
             } => {
                 tracing::warn!("Server tool error: {} ({})", error_code, tool_use_id);
-                self.messages.push((
+                self.chat.messages.push((
                     "system".to_string(),
                     format!("Web tool error: {}", error_code),
                 ));
@@ -176,10 +176,11 @@ impl App {
             self.active_plan.is_some() && COMPLETION_KEYWORDS.iter().any(|kw| delta.contains(kw));
 
         // Use cached streaming assistant index (O(1)) instead of O(n) scan per delta
-        let should_append = if let Some(idx) = self.streaming_assistant_idx {
+        let should_append = if let Some(idx) = self.chat.streaming_assistant_idx {
             // Verify cache is still valid: idx is in bounds and is the last message
-            idx == self.messages.len().saturating_sub(1)
+            idx == self.chat.messages.len().saturating_sub(1)
                 && self
+                    .chat
                     .messages
                     .get(idx)
                     .map(|(role, _)| role == "assistant")
@@ -187,6 +188,7 @@ impl App {
         } else {
             // Cache miss - find the last assistant message
             let last_assistant_idx = self
+                .chat
                 .messages
                 .iter()
                 .enumerate()
@@ -195,9 +197,9 @@ impl App {
                 .map(|(idx, _)| idx);
 
             if let Some(idx) = last_assistant_idx {
-                if idx == self.messages.len() - 1 {
+                if idx == self.chat.messages.len() - 1 {
                     // Cache it for subsequent deltas
-                    self.streaming_assistant_idx = Some(idx);
+                    self.chat.streaming_assistant_idx = Some(idx);
                     true
                 } else {
                     false
@@ -208,20 +210,20 @@ impl App {
         };
 
         if should_append {
-            if let Some((_, content)) = self.messages.last_mut() {
+            if let Some((_, content)) = self.chat.messages.last_mut() {
                 content.push_str(&delta);
             }
         } else {
             // Create new assistant message at end and cache its index
-            let new_idx = self.messages.len();
-            self.messages.push(("assistant".to_string(), delta));
-            self.streaming_assistant_idx = Some(new_idx);
+            let new_idx = self.chat.messages.len();
+            self.chat.messages.push(("assistant".to_string(), delta));
+            self.chat.streaming_assistant_idx = Some(new_idx);
         }
 
         // Real-time task completion detection
         if should_check_completion {
             // Clone last message content to avoid borrow issues
-            let check_text = self.messages.last().map(|(_, content)| {
+            let check_text = self.chat.messages.last().map(|(_, content)| {
                 if content.len() > 500 {
                     // Find a valid char boundary near the target position
                     // to avoid panicking on multi-byte UTF-8 characters
@@ -242,8 +244,8 @@ impl App {
             }
         }
 
-        if self.scroll.auto_scroll {
-            self.scroll.request_scroll_to_bottom();
+        if self.scroll_system.scroll.auto_scroll {
+            self.scroll_system.scroll.request_scroll_to_bottom();
         }
     }
 
@@ -255,17 +257,18 @@ impl App {
     ) {
         // Same logic as TextDelta - append only if last msg is assistant
         let last_is_assistant = self
+            .chat
             .messages
             .last()
             .map(|(role, _)| role == "assistant")
             .unwrap_or(false);
 
         if last_is_assistant {
-            if let Some((_, content)) = self.messages.last_mut() {
+            if let Some((_, content)) = self.chat.messages.last_mut() {
                 content.push_str(&delta);
             }
         } else {
-            self.messages.push(("assistant".to_string(), delta));
+            self.chat.messages.push(("assistant".to_string(), delta));
         }
 
         if !citations.is_empty() {
@@ -275,8 +278,8 @@ impl App {
             }
         }
 
-        if self.scroll.auto_scroll {
-            self.scroll.request_scroll_to_bottom();
+        if self.scroll_system.scroll.auto_scroll {
+            self.scroll_system.scroll.request_scroll_to_bottom();
         }
     }
 
@@ -299,7 +302,7 @@ impl App {
             if let Some(block) = self.blocks.edit.last_mut() {
                 block.set_diff_mode(self.blocks.diff_mode);
             }
-            self.messages.push(("edit".to_string(), String::new()));
+            self.chat.messages.push(("edit".to_string(), String::new()));
         }
 
         if name == "write" {
@@ -308,7 +311,9 @@ impl App {
                 .push(crate::tui::blocks::WriteBlock::new_pending(
                     "...".to_string(),
                 ));
-            self.messages.push(("write".to_string(), String::new()));
+            self.chat
+                .messages
+                .push(("write".to_string(), String::new()));
         }
 
         // NOTE: ExploreBlock is created in spawn_tool_execution where we have the tool_use_id
@@ -336,13 +341,15 @@ impl App {
                 | "task_complete"      // Silent - updates plan sidebar
                 | "enter_plan_mode" // Silent - updates status bar
         ) {
-            self.messages
+            self.chat
+                .messages
                 .push(("tool".to_string(), format!("Using tool: {} ...", name)));
         }
 
         // Special loading message for AskUserQuestion
         if name == "AskUserQuestion" {
-            self.messages
+            self.chat
+                .messages
                 .push(("tool".to_string(), "Preparing questions...".to_string()));
         }
     }
@@ -360,7 +367,9 @@ impl App {
         self.blocks
             .thinking
             .push(crate::tui::blocks::ThinkingBlock::new());
-        self.messages.push(("thinking".to_string(), String::new()));
+        self.chat
+            .messages
+            .push(("thinking".to_string(), String::new()));
     }
 
     /// Handle thinking delta event
@@ -432,7 +441,7 @@ impl App {
         });
 
         // Check for plan structure in AI response when in plan mode
-        if self.work_mode == WorkMode::Plan && !final_text.is_empty() {
+        if self.ui.work_mode == WorkMode::Plan && !final_text.is_empty() {
             self.try_detect_and_save_plan(&final_text);
         }
 
@@ -466,7 +475,7 @@ impl App {
                     "SAVING assistant message with {} content blocks (no tools)",
                     assistant_msg.content.len()
                 );
-                self.conversation.push(assistant_msg.clone());
+                self.chat.conversation.push(assistant_msg.clone());
                 self.save_model_message(&assistant_msg);
             } else {
                 // Check if we need a filler message after tool_result
@@ -619,7 +628,7 @@ impl App {
 
                 // Show visible feedback to user
                 let task_list = updated_tasks.join(", ");
-                self.messages.push((
+                self.chat.messages.push((
                     "system".to_string(),
                     format!("✓ Task {} complete ({}/{})", task_list, completed, total),
                 ));
@@ -630,7 +639,7 @@ impl App {
                         "Plan '{}' completed - starting graceful disengage",
                         plan_title
                     );
-                    self.messages.push((
+                    self.chat.messages.push((
                         "system".to_string(),
                         format!(
                             "🎉 Plan '{}' complete! All {} tasks finished.",
@@ -690,14 +699,14 @@ impl App {
 
             // Show inline feedback
             let task_list = updated_tasks.join(", ");
-            self.messages.push((
+            self.chat.messages.push((
                 "system".to_string(),
                 format!("✓ Task {} complete ({}/{})", task_list, completed, total),
             ));
 
             if plan_complete {
                 tracing::info!("Plan '{}' completed (real-time detection)", plan_title);
-                self.messages.push((
+                self.chat.messages.push((
                     "system".to_string(),
                     format!(
                         "🎉 Plan '{}' complete! All {} tasks finished.",
@@ -739,7 +748,7 @@ impl App {
                 } else {
                     format!("Plan '{}' abandoned. Saved at: {}", title, file_path)
                 };
-                self.messages.push(("system".to_string(), msg));
+                self.chat.messages.push(("system".to_string(), msg));
 
                 self.active_plan = None;
                 self.plan_sidebar.reset();
@@ -759,11 +768,13 @@ impl App {
 
         self.stop_streaming();
         self.agent_state.interrupt();
-        self.messages
+        self.chat
+            .messages
             .push(("system".to_string(), format!("Error: {}", error)));
 
         // If last message was a tool_result, add error assistant message
         let needs_assistant = self
+            .chat
             .conversation
             .last()
             .map(|msg| {
@@ -783,7 +794,7 @@ impl App {
                     text: format!("[Error: {}]", error),
                 }],
             };
-            self.conversation.push(assistant_msg.clone());
+            self.chat.conversation.push(assistant_msg.clone());
             self.save_model_message(&assistant_msg);
         }
 
@@ -845,7 +856,8 @@ impl App {
         if name == "web_search" {
             let block = WebSearchBlock::new(tool_use_id, String::new());
             self.blocks.web_search.push(block);
-            self.messages
+            self.chat
+                .messages
                 .push(("web_search".to_string(), String::new()));
         }
         // web_fetch doesn't need a block - results go inline
@@ -882,7 +894,8 @@ impl App {
     ) {
         tracing::info!("Web fetch completed: {} ({})", content.url, tool_use_id);
         let title = content.title.as_deref().unwrap_or("page");
-        self.messages
+        self.chat
+            .messages
             .push(("system".to_string(), format!("Fetched: {}", title)));
     }
 
@@ -925,6 +938,7 @@ impl App {
     /// They are NOT saved to database - the API client handles filler insertion dynamically.
     fn maybe_add_filler_message(&mut self) {
         let needs_assistant_follow_up = self
+            .chat
             .conversation
             .last()
             .map(|msg| {
@@ -947,7 +961,7 @@ impl App {
                 }],
             };
             // Only push to conversation for API alternation - do NOT save to database
-            self.conversation.push(assistant_msg);
+            self.chat.conversation.push(assistant_msg);
         }
     }
 
@@ -960,7 +974,7 @@ impl App {
                     "SAVING assistant message with {} content blocks BEFORE tool execution",
                     assistant_msg.content.len()
                 );
-                self.conversation.push(assistant_msg.clone());
+                self.chat.conversation.push(assistant_msg.clone());
                 self.save_model_message(&assistant_msg);
             }
 

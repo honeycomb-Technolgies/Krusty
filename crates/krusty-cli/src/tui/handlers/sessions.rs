@@ -188,12 +188,12 @@ impl App {
         let stored_token_count = session_info.as_ref().and_then(|i| i.token_count);
 
         // Clear current state
-        self.messages.clear();
-        self.conversation.clear();
+        self.chat.messages.clear();
+        self.chat.conversation.clear();
         self.blocks = BlockManager::new();
         self.block_ui.clear();
         self.tool_results.clear();
-        self.streaming_assistant_idx = None;
+        self.chat.streaming_assistant_idx = None;
         self.current_session_id = Some(session_id.to_string());
 
         // Load plan for this session (strict 1:1 linkage, no working_dir fallback)
@@ -270,7 +270,7 @@ impl App {
                     }]
                 });
 
-            self.conversation.push(ModelMessage {
+            self.chat.conversation.push(ModelMessage {
                 role: api_role,
                 content,
             });
@@ -292,12 +292,12 @@ impl App {
 
         // Use stored token count if available, otherwise estimate
         self.context_tokens_used = stored_token_count
-            .unwrap_or_else(|| Self::estimate_conversation_tokens(&self.conversation));
+            .unwrap_or_else(|| Self::estimate_conversation_tokens(&self.chat.conversation));
 
         tracing::info!(
             "Loaded session {} with {} messages, {} blocks, ~{} tokens",
             session_id,
-            self.messages.len(),
+            self.chat.messages.len(),
             self.blocks.thinking.len()
                 + self.blocks.bash.len()
                 + self.blocks.read.len()
@@ -376,7 +376,7 @@ impl App {
     fn build_tool_results_cache(&mut self) {
         self.tool_results.clear();
 
-        for msg in &self.conversation {
+        for msg in &self.chat.conversation {
             for content in &msg.content {
                 if let Content::ToolResult {
                     tool_use_id,
@@ -408,7 +408,7 @@ impl App {
 
     /// Find the tool name for a given tool_use_id by searching conversation
     fn find_tool_name_for_id(&self, tool_use_id: &str) -> String {
-        for msg in &self.conversation {
+        for msg in &self.chat.conversation {
             for content in &msg.content {
                 if let Content::ToolUse { id, name, .. } = content {
                     if id == tool_use_id {
@@ -429,11 +429,11 @@ impl App {
     /// - "read" / "edit" / "write" → respective block types
     /// - "tool_result" → ToolResultBlock (grep/glob/unknown tools)
     fn build_display_from_conversation(&mut self) {
-        self.messages.clear();
-        self.streaming_assistant_idx = None;
+        self.chat.messages.clear();
+        self.chat.streaming_assistant_idx = None;
         self.blocks = BlockManager::new();
 
-        for msg in &self.conversation {
+        for msg in &self.chat.conversation {
             let base_role = match msg.role {
                 Role::User => "user",
                 Role::Assistant => "assistant",
@@ -450,7 +450,9 @@ impl App {
                             continue;
                         }
                         // Text messages use the API role
-                        self.messages.push((base_role.to_string(), text.clone()));
+                        self.chat
+                            .messages
+                            .push((base_role.to_string(), text.clone()));
                     }
 
                     Content::Thinking {
@@ -458,7 +460,9 @@ impl App {
                         signature,
                     } => {
                         // Thinking gets its own message entry with "thinking" role
-                        self.messages.push(("thinking".to_string(), String::new()));
+                        self.chat
+                            .messages
+                            .push(("thinking".to_string(), String::new()));
 
                         let mut block = ThinkingBlock::new();
                         block.append(thinking);
@@ -479,7 +483,9 @@ impl App {
 
                     Content::RedactedThinking { .. } => {
                         // Redacted thinking - create a placeholder thinking block
-                        self.messages.push(("thinking".to_string(), String::new()));
+                        self.chat
+                            .messages
+                            .push(("thinking".to_string(), String::new()));
 
                         let mut block = ThinkingBlock::new();
                         block.append("[Redacted]");
@@ -492,7 +498,7 @@ impl App {
                         // Each tool use gets its own message entry with tool-specific role
                         match name.to_lowercase().as_str() {
                             "bash" => {
-                                self.messages.push(("bash".to_string(), id.clone()));
+                                self.chat.messages.push(("bash".to_string(), id.clone()));
 
                                 let command = input
                                     .get("command")
@@ -511,7 +517,7 @@ impl App {
                             }
 
                             "read" => {
-                                self.messages.push(("read".to_string(), id.clone()));
+                                self.chat.messages.push(("read".to_string(), id.clone()));
 
                                 let file_path = input
                                     .get("file_path")
@@ -540,7 +546,9 @@ impl App {
 
                                 if is_error {
                                     // Failed edit - show as tool_result with error
-                                    self.messages.push(("tool_result".to_string(), id.clone()));
+                                    self.chat
+                                        .messages
+                                        .push(("tool_result".to_string(), id.clone()));
 
                                     let mut block = ToolResultBlock::new(
                                         id.clone(),
@@ -560,7 +568,7 @@ impl App {
                                     self.blocks.tool_result.push(block);
                                 } else {
                                     // Successful edit - show as edit block
-                                    self.messages.push(("edit".to_string(), id.clone()));
+                                    self.chat.messages.push(("edit".to_string(), id.clone()));
 
                                     let file_path = input
                                         .get("file_path")
@@ -600,7 +608,9 @@ impl App {
 
                                 if is_error {
                                     // Failed write - show as tool_result with error
-                                    self.messages.push(("tool_result".to_string(), id.clone()));
+                                    self.chat
+                                        .messages
+                                        .push(("tool_result".to_string(), id.clone()));
 
                                     let mut block = ToolResultBlock::new(
                                         id.clone(),
@@ -620,7 +630,7 @@ impl App {
                                     self.blocks.tool_result.push(block);
                                 } else {
                                     // Successful write - show as write block
-                                    self.messages.push(("write".to_string(), id.clone()));
+                                    self.chat.messages.push(("write".to_string(), id.clone()));
 
                                     let file_path = input
                                         .get("file_path")
@@ -644,7 +654,9 @@ impl App {
                             }
 
                             "grep" | "glob" => {
-                                self.messages.push(("tool_result".to_string(), id.clone()));
+                                self.chat
+                                    .messages
+                                    .push(("tool_result".to_string(), id.clone()));
 
                                 let pattern = input
                                     .get("pattern")
@@ -665,7 +677,9 @@ impl App {
 
                             _ => {
                                 // Unknown tools go to tool_result
-                                self.messages.push(("tool_result".to_string(), id.clone()));
+                                self.chat
+                                    .messages
+                                    .push(("tool_result".to_string(), id.clone()));
 
                                 let mut block =
                                     ToolResultBlock::new(id.clone(), name.clone(), String::new());
@@ -686,7 +700,7 @@ impl App {
                         is_error,
                     } => {
                         // Check if this result has a matching ToolUse in the conversation
-                        let has_matching_tool_use = self.conversation.iter().any(|m| {
+                        let has_matching_tool_use = self.chat.conversation.iter().any(|m| {
                             m.content.iter().any(
                                 |c| matches!(c, Content::ToolUse { id, .. } if id == tool_use_id),
                             )
@@ -699,7 +713,8 @@ impl App {
                                 tool_use_id
                             );
 
-                            self.messages
+                            self.chat
+                                .messages
                                 .push(("tool_result".to_string(), tool_use_id.clone()));
 
                             let output_str = match output {
@@ -728,13 +743,15 @@ impl App {
 
                     Content::Image { .. } => {
                         // Images displayed as text for now
-                        self.messages
+                        self.chat
+                            .messages
                             .push((base_role.to_string(), "[Image]".to_string()));
                     }
 
                     Content::Document { .. } => {
                         // Documents (PDFs) displayed as text for now
-                        self.messages
+                        self.chat
+                            .messages
                             .push((base_role.to_string(), "[PDF]".to_string()));
                     }
                 }

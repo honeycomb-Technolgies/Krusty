@@ -20,10 +20,10 @@ impl App {
     ///
     /// Returns true if a scrollbar drag was handled.
     pub fn handle_scrollbar_drag(&mut self, y: u16) -> bool {
-        match self.layout.dragging_scrollbar {
+        match self.scroll_system.layout.dragging_scrollbar {
             Some(DragTarget::Messages(drag)) => {
                 let new_offset = drag.calculate_offset(y);
-                self.scroll.scroll_to_line(new_offset);
+                self.scroll_system.scroll.scroll_to_line(new_offset);
                 true
             }
             Some(DragTarget::Input(drag)) => {
@@ -32,7 +32,7 @@ impl App {
                 true
             }
             Some(DragTarget::PlanSidebar) => {
-                if let Some(area) = self.layout.plan_sidebar_scrollbar_area {
+                if let Some(area) = self.scroll_system.layout.plan_sidebar_scrollbar_area {
                     self.handle_plan_sidebar_scrollbar_click(y, area);
                 }
                 true

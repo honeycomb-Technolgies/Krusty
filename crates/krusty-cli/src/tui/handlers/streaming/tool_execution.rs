@@ -38,7 +38,7 @@ impl App {
                 tracing::info!("Cleared existing plan");
             }
 
-            self.work_mode = WorkMode::Plan;
+            self.ui.work_mode = WorkMode::Plan;
             tracing::info!("Switched to Plan mode: {}", reason);
 
             results.push(Content::ToolResult {
@@ -218,9 +218,9 @@ impl App {
         }
 
         // Remove the "Preparing questions..." message
-        if let Some((tag, _)) = self.messages.last() {
+        if let Some((tag, _)) = self.chat.messages.last() {
             if tag == "tool" {
-                self.messages.pop();
+                self.chat.messages.pop();
             }
         }
 
@@ -359,7 +359,7 @@ impl App {
         let process_registry = self.process_registry.clone();
         let skills_manager = self.services.skills_manager.clone();
         let cancel_token = self.cancellation.child_token();
-        let plan_mode = self.work_mode == crate::tui::app::WorkMode::Plan;
+        let plan_mode = self.ui.work_mode == crate::tui::app::WorkMode::Plan;
         let current_model = self.current_model.clone();
 
         tokio::spawn(async move {
@@ -460,7 +460,8 @@ impl App {
                         command,
                         tool_call.id.clone(),
                     ));
-                self.messages
+                self.chat
+                    .messages
                     .push(("bash".to_string(), tool_call.id.clone()));
             }
 
@@ -478,7 +479,8 @@ impl App {
                         tool_name.clone(),
                         pattern,
                     ));
-                self.messages
+                self.chat
+                    .messages
                     .push(("tool_result".to_string(), tool_call.id.clone()));
             }
 
@@ -493,7 +495,8 @@ impl App {
                     tool_call.id.clone(),
                     file_path,
                 ));
-                self.messages
+                self.chat
+                    .messages
                     .push(("read".to_string(), tool_call.id.clone()));
             }
 
@@ -564,10 +567,11 @@ impl App {
                         prompt,
                         tool_call.id.clone(),
                     ));
-                self.messages
+                self.chat
+                    .messages
                     .push(("explore".to_string(), tool_call.id.clone()));
-                if self.scroll.auto_scroll {
-                    self.scroll.request_scroll_to_bottom();
+                if self.scroll_system.scroll.auto_scroll {
+                    self.scroll_system.scroll.request_scroll_to_bottom();
                 }
             }
 
@@ -588,10 +592,11 @@ impl App {
                         prompt,
                         tool_call.id.clone(),
                     ));
-                self.messages
+                self.chat
+                    .messages
                     .push(("build".to_string(), tool_call.id.clone()));
-                if self.scroll.auto_scroll {
-                    self.scroll.request_scroll_to_bottom();
+                if self.scroll_system.scroll.auto_scroll {
+                    self.scroll_system.scroll.request_scroll_to_bottom();
                 }
             }
         }
@@ -661,7 +666,7 @@ impl App {
         };
 
         self.stop_tool_execution();
-        self.conversation.push(tool_result_msg.clone());
+        self.chat.conversation.push(tool_result_msg.clone());
         self.save_model_message(&tool_result_msg);
 
         // Continue conversation with AI

@@ -52,7 +52,7 @@ impl App {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(self.theme.border_color));
+            .border_style(Style::default().fg(self.ui.theme.border_color));
 
         let inner = block.inner(area);
         f.render_widget(block, area);
@@ -63,15 +63,15 @@ impl App {
         let content_width = inner.width.saturating_sub(4); // Must match wrap_width to prevent block overflow
 
         // Get selection range if selecting in messages area
-        let selection = if self.selection.area == SelectionArea::Messages {
-            self.selection.normalized()
+        let selection = if self.scroll_system.selection.area == SelectionArea::Messages {
+            self.scroll_system.selection.normalized()
         } else {
             None
         };
 
         // Selection highlight colors from theme
-        let sel_bg = self.theme.selection_bg_color;
-        let sel_fg = self.theme.selection_fg_color;
+        let sel_bg = self.ui.theme.selection_bg_color;
+        let sel_fg = self.ui.theme.selection_fg_color;
 
         // Clear cache if width changed (resize invalidation)
         self.markdown_cache.check_width(wrap_width);
@@ -79,15 +79,15 @@ impl App {
         // Pre-render all markdown content with link tracking
         // Uses Arc to avoid expensive clones on cache hits
         let mut rendered_markdown: Vec<Option<Arc<RenderedMarkdown>>> =
-            Vec::with_capacity(self.messages.len());
-        for (role, content) in &self.messages {
+            Vec::with_capacity(self.chat.messages.len());
+        for (role, content) in &self.chat.messages {
             if role == "assistant" {
                 let content_hash = hash_content(content);
                 let rendered = self.markdown_cache.get_or_render_with_links(
                     content,
                     content_hash,
                     wrap_width,
-                    &self.theme,
+                    &self.ui.theme,
                 );
                 rendered_markdown.push(Some(rendered));
             } else {
@@ -119,13 +119,13 @@ impl App {
         let mut total_lines: usize = 0;
 
         // Store message heights from first pass to avoid recalculating in second pass
-        let mut message_heights: Vec<usize> = Vec::with_capacity(self.messages.len());
+        let mut message_heights: Vec<usize> = Vec::with_capacity(self.chat.messages.len());
 
         // First pass: calculate positions (using pre-rendered markdown)
-        for (msg_idx, (role, content)) in self.messages.iter().enumerate() {
+        for (msg_idx, (role, content)) in self.chat.messages.iter().enumerate() {
             if role == "thinking" {
                 if let Some(tb) = self.blocks.thinking.get(thinking_idx) {
-                    let height = tb.height(content_width, &self.theme);
+                    let height = tb.height(content_width, &self.ui.theme);
                     thinking_positions.push((total_lines, height, thinking_idx));
                     total_lines += height as usize;
                     total_lines += 1; // blank after
@@ -137,7 +137,7 @@ impl App {
 
             if role == "bash" {
                 if let Some(bb) = self.blocks.bash.get(bash_idx) {
-                    let height = bb.height(content_width, &self.theme);
+                    let height = bb.height(content_width, &self.ui.theme);
                     bash_positions.push((total_lines, height, bash_idx));
                     total_lines += height as usize;
                     total_lines += 1; // blank after
@@ -150,7 +150,7 @@ impl App {
             if role == "terminal" {
                 if self.blocks.pinned_terminal != Some(terminal_idx) {
                     if let Some(tp) = self.blocks.terminal.get(terminal_idx) {
-                        let height = tp.height(content_width, &self.theme);
+                        let height = tp.height(content_width, &self.ui.theme);
                         terminal_positions.push((total_lines, height, terminal_idx));
                         total_lines += height as usize;
                         total_lines += 1;
@@ -163,7 +163,7 @@ impl App {
 
             if role == "tool_result" {
                 if let Some(tr) = self.blocks.tool_result.get(tool_result_idx) {
-                    let height = tr.height(content_width, &self.theme);
+                    let height = tr.height(content_width, &self.ui.theme);
                     tool_result_positions.push((total_lines, height, tool_result_idx));
                     total_lines += height as usize;
                     total_lines += 1;
@@ -175,7 +175,7 @@ impl App {
 
             if role == "read" {
                 if let Some(rb) = self.blocks.read.get(read_idx) {
-                    let height = rb.height(content_width, &self.theme);
+                    let height = rb.height(content_width, &self.ui.theme);
                     read_positions.push((total_lines, height, read_idx));
                     total_lines += height as usize;
                     total_lines += 1;
@@ -187,7 +187,7 @@ impl App {
 
             if role == "edit" {
                 if let Some(eb) = self.blocks.edit.get(edit_idx) {
-                    let height = eb.height(content_width, &self.theme);
+                    let height = eb.height(content_width, &self.ui.theme);
                     edit_positions.push((total_lines, height, edit_idx));
                     total_lines += height as usize;
                     total_lines += 1;
@@ -199,7 +199,7 @@ impl App {
 
             if role == "write" {
                 if let Some(wb) = self.blocks.write.get(write_idx) {
-                    let height = wb.height(content_width, &self.theme);
+                    let height = wb.height(content_width, &self.ui.theme);
                     write_positions.push((total_lines, height, write_idx));
                     total_lines += height as usize;
                     total_lines += 1;
@@ -211,7 +211,7 @@ impl App {
 
             if role == "web_search" {
                 if let Some(ws) = self.blocks.web_search.get(web_search_idx) {
-                    let height = ws.height(content_width, &self.theme);
+                    let height = ws.height(content_width, &self.ui.theme);
                     web_search_positions.push((total_lines, height, web_search_idx));
                     total_lines += height as usize;
                     total_lines += 1;
@@ -223,7 +223,7 @@ impl App {
 
             if role == "explore" {
                 if let Some(eb) = self.blocks.explore.get(explore_idx) {
-                    let height = eb.height(content_width, &self.theme);
+                    let height = eb.height(content_width, &self.ui.theme);
                     explore_positions.push((total_lines, height, explore_idx));
                     total_lines += height as usize;
                     total_lines += 1;
@@ -235,7 +235,7 @@ impl App {
 
             if role == "build" {
                 if let Some(bb) = self.blocks.build.get(build_idx) {
-                    let height = bb.height(content_width, &self.theme);
+                    let height = bb.height(content_width, &self.ui.theme);
                     build_positions.push((total_lines, height, build_idx));
                     total_lines += height as usize;
                     total_lines += 1;
@@ -274,7 +274,7 @@ impl App {
         // Second pass: build lines with placeholders for custom blocks
         // Also track message base line offsets for hyperlink positions
         // OPTIMIZATION: Only build styled content for visible messages
-        let scroll_offset = self.scroll.offset;
+        let scroll_offset = self.scroll_system.scroll.offset;
         let viewport_height = inner.height as usize;
         let visible_start = scroll_offset.saturating_sub(viewport_height); // Buffer above
         let visible_end = scroll_offset + viewport_height * 2; // Buffer below
@@ -293,7 +293,7 @@ impl App {
         explore_idx = 0;
         build_idx = 0;
 
-        for (msg_idx, (role, content)) in self.messages.iter().enumerate() {
+        for (msg_idx, (role, content)) in self.chat.messages.iter().enumerate() {
             if role == "thinking" {
                 if let Some(&(_, height, _)) = thinking_positions.get(thinking_idx) {
                     for _ in 0..height {
@@ -469,12 +469,12 @@ impl App {
             } else {
                 // On-screen user/system: render plain text
                 let content_color = match role.as_str() {
-                    "user" => self.theme.user_msg_color,
-                    "system" => self.theme.system_msg_color,
-                    _ => self.theme.text_color,
+                    "user" => self.ui.theme.user_msg_color,
+                    "system" => self.ui.theme.system_msg_color,
+                    _ => self.ui.theme.text_color,
                 };
 
-                let hovered_file_ref = self.hover.message_file_ref.as_ref();
+                let hovered_file_ref = self.scroll_system.hover.message_file_ref.as_ref();
 
                 for line in content.lines() {
                     if line.is_empty() {
@@ -488,7 +488,7 @@ impl App {
                                     line_idx,
                                     selection,
                                     Style::default().fg(content_color),
-                                    self.theme.link_color,
+                                    self.ui.theme.link_color,
                                     sel_bg,
                                     sel_fg,
                                     msg_idx,
@@ -516,7 +516,7 @@ impl App {
 
         // Render text content
         // Clamp scroll offset to u16::MAX to prevent overflow (supports ~65k lines of paragraph text)
-        let clamped_scroll = self.scroll.offset.min(u16::MAX as usize) as u16;
+        let clamped_scroll = self.scroll_system.scroll.offset.min(u16::MAX as usize) as u16;
         f.render_widget(Paragraph::new(lines).scroll((clamped_scroll, 0)), inner);
 
         // Apply OSC 8 hyperlinks to the buffer after Paragraph rendering
@@ -528,21 +528,21 @@ impl App {
                         f.buffer_mut(),
                         inner,
                         &rendered.links,
-                        self.scroll.offset,
+                        self.scroll_system.scroll.offset,
                         *base_line,
                     );
 
                     // Apply hover styling if this message contains the hovered link
-                    if let Some(hovered) = &self.hover.message_link {
+                    if let Some(hovered) = &self.scroll_system.hover.message_link {
                         if hovered.msg_idx == *msg_idx {
                             apply_link_hover_style(
                                 f.buffer_mut(),
                                 inner,
                                 &rendered.links,
                                 Some(hovered),
-                                self.scroll.offset,
+                                self.scroll_system.scroll.offset,
                                 *base_line,
-                                self.theme.link_color,
+                                self.ui.theme.link_color,
                             );
                         }
                     }
@@ -552,7 +552,7 @@ impl App {
 
         // Overlay each block at its position
         // Use usize for all position math to avoid overflow, convert to u16 only for screen coords
-        let scroll = self.scroll.offset;
+        let scroll = self.scroll_system.scroll.offset;
         let inner_height = inner.height as usize;
 
         for (start_line, height, idx) in &thinking_positions {
@@ -598,8 +598,8 @@ impl App {
                             width: inner.width,
                             height: visible_height,
                         };
-                        clear_area(f.buffer_mut(), clear_rect, self.theme.bg_color);
-                        tb.render(thinking_area, f.buffer_mut(), &self.theme, false, clip);
+                        clear_area(f.buffer_mut(), clear_rect, self.ui.theme.bg_color);
+                        tb.render(thinking_area, f.buffer_mut(), &self.ui.theme, false, clip);
                     }
                 }
             }
@@ -646,8 +646,8 @@ impl App {
                             width: inner.width,
                             height: visible_height,
                         };
-                        clear_area(f.buffer_mut(), clear_rect, self.theme.bg_color);
-                        bb.render(bash_area, f.buffer_mut(), &self.theme, false, clip);
+                        clear_area(f.buffer_mut(), clear_rect, self.ui.theme.bg_color);
+                        bb.render(bash_area, f.buffer_mut(), &self.ui.theme, false, clip);
                     }
                 }
             }
@@ -695,8 +695,14 @@ impl App {
                             width: inner.width,
                             height: visible_height,
                         };
-                        clear_area(f.buffer_mut(), clear_rect, self.theme.bg_color);
-                        tp.render(terminal_area, f.buffer_mut(), &self.theme, is_focused, clip);
+                        clear_area(f.buffer_mut(), clear_rect, self.ui.theme.bg_color);
+                        tp.render(
+                            terminal_area,
+                            f.buffer_mut(),
+                            &self.ui.theme,
+                            is_focused,
+                            clip,
+                        );
                     }
                 }
             }
@@ -743,8 +749,14 @@ impl App {
                             width: inner.width,
                             height: visible_height,
                         };
-                        clear_area(f.buffer_mut(), clear_rect, self.theme.bg_color);
-                        tr.render(tool_result_area, f.buffer_mut(), &self.theme, false, clip);
+                        clear_area(f.buffer_mut(), clear_rect, self.ui.theme.bg_color);
+                        tr.render(
+                            tool_result_area,
+                            f.buffer_mut(),
+                            &self.ui.theme,
+                            false,
+                            clip,
+                        );
                     }
                 }
             }
@@ -791,8 +803,8 @@ impl App {
                             width: inner.width,
                             height: visible_height,
                         };
-                        clear_area(f.buffer_mut(), clear_rect, self.theme.bg_color);
-                        rb.render(read_area, f.buffer_mut(), &self.theme, false, clip);
+                        clear_area(f.buffer_mut(), clear_rect, self.ui.theme.bg_color);
+                        rb.render(read_area, f.buffer_mut(), &self.ui.theme, false, clip);
                     }
                 }
             }
@@ -839,8 +851,8 @@ impl App {
                             width: inner.width,
                             height: visible_height,
                         };
-                        clear_area(f.buffer_mut(), clear_rect, self.theme.bg_color);
-                        eb.render(edit_area, f.buffer_mut(), &self.theme, false, clip);
+                        clear_area(f.buffer_mut(), clear_rect, self.ui.theme.bg_color);
+                        eb.render(edit_area, f.buffer_mut(), &self.ui.theme, false, clip);
                     }
                 }
             }
@@ -887,8 +899,8 @@ impl App {
                             width: inner.width,
                             height: visible_height,
                         };
-                        clear_area(f.buffer_mut(), clear_rect, self.theme.bg_color);
-                        wb.render(write_area, f.buffer_mut(), &self.theme, false, clip);
+                        clear_area(f.buffer_mut(), clear_rect, self.ui.theme.bg_color);
+                        wb.render(write_area, f.buffer_mut(), &self.ui.theme, false, clip);
                     }
                 }
             }
@@ -935,8 +947,8 @@ impl App {
                             width: inner.width,
                             height: visible_height,
                         };
-                        clear_area(f.buffer_mut(), clear_rect, self.theme.bg_color);
-                        ws.render(web_search_area, f.buffer_mut(), &self.theme, false, clip);
+                        clear_area(f.buffer_mut(), clear_rect, self.ui.theme.bg_color);
+                        ws.render(web_search_area, f.buffer_mut(), &self.ui.theme, false, clip);
                     }
                 }
             }
@@ -983,8 +995,8 @@ impl App {
                             width: inner.width,
                             height: visible_height,
                         };
-                        clear_area(f.buffer_mut(), clear_rect, self.theme.bg_color);
-                        eb.render(explore_area, f.buffer_mut(), &self.theme, false, clip);
+                        clear_area(f.buffer_mut(), clear_rect, self.ui.theme.bg_color);
+                        eb.render(explore_area, f.buffer_mut(), &self.ui.theme, false, clip);
                     }
                 }
             }
@@ -1031,8 +1043,8 @@ impl App {
                             width: inner.width,
                             height: visible_height,
                         };
-                        clear_area(f.buffer_mut(), clear_rect, self.theme.bg_color);
-                        bb.render(build_area, f.buffer_mut(), &self.theme, false, clip);
+                        clear_area(f.buffer_mut(), clear_rect, self.ui.theme.bg_color);
+                        bb.render(build_area, f.buffer_mut(), &self.ui.theme, false, clip);
                     }
                 }
             }

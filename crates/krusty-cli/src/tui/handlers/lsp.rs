@@ -28,7 +28,7 @@ impl App {
                 match std::fs::remove_dir_all(&ext_dir) {
                     Ok(_) => {
                         self.popups.lsp.uninstall_complete(&ext.id, true);
-                        self.messages.push((
+                        self.chat.messages.push((
                             "system".to_string(),
                             format!("Removed extension: {}", ext.id),
                         ));
@@ -128,7 +128,7 @@ impl App {
                     match result {
                         Ok(path) => {
                             self.popups.lsp.install_complete(&ext_id, true, None);
-                            self.messages.push((
+                            self.chat.messages.push((
                                 "system".to_string(),
                                 format!("Installed extension: {} at {:?}", ext_id, path),
                             ));
@@ -140,7 +140,8 @@ impl App {
                             self.popups
                                 .lsp
                                 .install_complete(&ext_id, false, Some(e.clone()));
-                            self.messages
+                            self.chat
+                                .messages
                                 .push(("system".to_string(), format!("Install failed: {}", e)));
                         }
                     }
@@ -233,22 +234,24 @@ impl App {
             match rx.try_recv() {
                 Ok(Ok(name)) => {
                     self.popups.lsp_install.set_progress("Installed!");
-                    self.messages
+                    self.chat
+                        .messages
                         .push(("system".to_string(), format!("Installed LSP: {}", name)));
                     self.popups.lsp_install.clear();
-                    self.popup = crate::tui::app::Popup::None;
+                    self.ui.popup = crate::tui::app::Popup::None;
                     self.channels.builtin_lsp_install = None;
                 }
                 Ok(Err(e)) => {
                     self.popups.lsp_install.set_error(&format!("Failed: {}", e));
-                    self.messages
+                    self.chat
+                        .messages
                         .push(("system".to_string(), format!("LSP install failed: {}", e)));
                     self.channels.builtin_lsp_install = None;
                 }
                 Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
                 Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
                     self.popups.lsp_install.clear();
-                    self.popup = crate::tui::app::Popup::None;
+                    self.ui.popup = crate::tui::app::Popup::None;
                     self.channels.builtin_lsp_install = None;
                 }
             }
@@ -263,17 +266,17 @@ impl App {
                     match result {
                         Ok(name) => {
                             self.popups.lsp_install.set_progress("Installed!");
-                            self.messages.push((
+                            self.chat.messages.push((
                                 "system".to_string(),
                                 format!("Installed extension: {}", name),
                             ));
                             self.popups.lsp_install.clear();
-                            self.popup = crate::tui::app::Popup::None;
+                            self.ui.popup = crate::tui::app::Popup::None;
                         }
                         Err(e) => {
                             // Set error state so user can see message and dismiss with Esc
                             self.popups.lsp_install.set_error(&format!("Failed: {}", e));
-                            self.messages.push((
+                            self.chat.messages.push((
                                 "system".to_string(),
                                 format!("Extension install failed: {}", e),
                             ));
@@ -284,7 +287,7 @@ impl App {
                 Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
                 Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
                     self.popups.lsp_install.clear();
-                    self.popup = crate::tui::app::Popup::None;
+                    self.ui.popup = crate::tui::app::Popup::None;
                     self.channels.extension_lsp_install = None;
                 }
             }
@@ -303,7 +306,7 @@ impl App {
             }
 
             // Don't prompt if popup already open (prevents stacking)
-            if self.popup != crate::tui::app::Popup::None {
+            if self.ui.popup != crate::tui::app::Popup::None {
                 // Put it back for later
                 self.services.pending_lsp_install = Some(missing);
                 return;
@@ -316,7 +319,7 @@ impl App {
                 missing.extension
             );
             self.popups.lsp_install.set(missing);
-            self.popup = crate::tui::app::Popup::LspInstall;
+            self.ui.popup = crate::tui::app::Popup::LspInstall;
         }
     }
 

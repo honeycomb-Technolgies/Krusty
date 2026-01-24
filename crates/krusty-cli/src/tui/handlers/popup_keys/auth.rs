@@ -13,7 +13,7 @@ impl App {
     pub fn handle_auth_popup_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
         match &self.popups.auth.state {
             AuthState::ProviderSelection { .. } => match code {
-                KeyCode::Esc => self.popup = Popup::None,
+                KeyCode::Esc => self.ui.popup = Popup::None,
                 KeyCode::Up => self.popups.auth.prev_provider(),
                 KeyCode::Down => self.popups.auth.next_provider(),
                 KeyCode::Enter => {
@@ -44,7 +44,7 @@ impl App {
             AuthState::Complete { .. } => {
                 if code == KeyCode::Esc || code == KeyCode::Enter {
                     self.popups.auth.reset();
-                    self.popup = Popup::None;
+                    self.ui.popup = Popup::None;
                 }
             }
         }
@@ -83,7 +83,8 @@ impl App {
                             self.switch_provider(provider);
                         }
                         self.set_api_key(key);
-                        self.messages
+                        self.chat
+                            .messages
                             .push(("system".to_string(), format!("{} API key saved!", provider)));
                         self.popups.auth.set_api_key_complete();
 

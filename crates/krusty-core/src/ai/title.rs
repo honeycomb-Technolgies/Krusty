@@ -11,7 +11,7 @@ fn get_title_model(provider: ProviderId) -> &'static str {
         ProviderId::Anthropic => "claude-haiku-4-5-20251001",
         ProviderId::OpenRouter => "anthropic/claude-3.5-haiku",
         ProviderId::OpenCodeZen => "minimax-m2.1-free", // Free model that works
-        ProviderId::ZAi => "glm-4.5-flash",
+        ProviderId::ZAi => "GLM-4.5-Air",
         ProviderId::MiniMax => "MiniMax-M2.1",
         ProviderId::Kimi => "kimi-for-coding", // Kimi Code API model
         ProviderId::OpenAI => "gpt-4o-mini",   // Fast and cheap OpenAI model
