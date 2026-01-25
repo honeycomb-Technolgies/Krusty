@@ -205,9 +205,9 @@ pub fn render_plan_sidebar(
         };
     }
 
-    // Draw clean border (no title)
+    // Draw clean border (no title) - all sides for proper encapsulation
     let block = Block::default()
-        .borders(Borders::LEFT | Borders::TOP | Borders::BOTTOM)
+        .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(theme.border_color))
         .style(Style::default().bg(theme.bg_color));
