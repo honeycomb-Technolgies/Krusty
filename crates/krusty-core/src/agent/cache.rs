@@ -7,11 +7,14 @@
 use dashmap::DashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::SystemTime;
 
-/// Cached file content
+/// Cached file content with modification time for invalidation
 #[derive(Clone, Debug)]
 pub struct CachedFile {
     pub content: String,
+    /// File modification time when cached (for invalidation)
+    pub mtime: Option<SystemTime>,
 }
 
 /// Shared cache for explore runs
@@ -49,9 +52,24 @@ impl SharedExploreCache {
     // File Cache
     // =========================================================================
 
-    /// Get cached file content, if present
+    /// Get cached file content, if present and not stale
+    ///
+    /// Returns None if the file has been modified since caching (mtime changed)
     pub fn get_file(&self, path: &PathBuf) -> Option<CachedFile> {
         if let Some(cached) = self.files.get(path) {
+            // Validate mtime - if file was modified externally, invalidate cache
+            if let Some(cached_mtime) = cached.mtime {
+                if let Ok(metadata) = std::fs::metadata(path) {
+                    if let Ok(current_mtime) = metadata.modified() {
+                        if current_mtime != cached_mtime {
+                            tracing::debug!(path = %path.display(), "Cache STALE (mtime changed)");
+                            drop(cached);
+                            self.files.remove(path);
+                            return None;
+                        }
+                    }
+                }
+            }
             self.file_hits.fetch_add(1, Ordering::Relaxed);
             tracing::debug!(path = %path.display(), "Cache HIT");
             Some(cached.clone())
@@ -61,11 +79,16 @@ impl SharedExploreCache {
         }
     }
 
-    /// Store file content in cache
+    /// Store file content in cache with modification time for validation
     pub fn put_file(&self, path: PathBuf, content: String) {
+        // Get current mtime for future validation
+        let mtime = std::fs::metadata(&path)
+            .ok()
+            .and_then(|m| m.modified().ok());
+
         self.file_misses.fetch_add(1, Ordering::Relaxed);
         tracing::debug!(path = %path.display(), size = content.len(), "Cache PUT");
-        self.files.insert(path, CachedFile { content });
+        self.files.insert(path, CachedFile { content, mtime });
     }
 
     // =========================================================================

@@ -33,6 +33,8 @@ Guidelines:
 - Provide clear, distinct options (2-4 is ideal)
 - Include a brief description for each option explaining trade-offs
 - For yes/no questions, just ask directly in chat instead
+- Keep question text under 500 characters, option labels under 50 characters
+- Questions may timeout after 5 minutes if the user doesn't respond
 
 The user can select an option by number, click, or type a custom response."#
     }

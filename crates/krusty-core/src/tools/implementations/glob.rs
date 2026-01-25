@@ -24,7 +24,7 @@ impl Tool for GlobTool {
     }
 
     fn description(&self) -> &str {
-        "Find files by glob pattern (e.g., '**/*.rs', 'src/**/*.ts'). Returns paths sorted by modification time."
+        "Find files by glob pattern (e.g., '**/*.rs', 'src/**/*.ts'). Returns up to 100 paths sorted by modification time (newest first). For large codebases, use specific patterns to narrow results."
     }
 
     fn parameters_schema(&self) -> Value {

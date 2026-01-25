@@ -4,6 +4,31 @@
 
 mod selection;
 
+/// Block type for position tracking
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BlockType {
+    Thinking,
+    Bash,
+    Terminal,
+    ToolResult,
+    Read,
+    Edit,
+    Write,
+    WebSearch,
+    Explore,
+    Build,
+}
+
+/// Unified block position tracking
+/// Consolidates the 10 separate Vec allocations into one
+#[derive(Debug, Clone)]
+struct BlockPosition {
+    line_start: usize,
+    height: u16,
+    block_idx: usize,
+    block_type: BlockType,
+}
+
 use ratatui::{
     layout::Rect,
     style::{Color, Style},
@@ -115,26 +140,18 @@ impl App {
             }
         }
 
-        // Track block positions: (line_start, height, block_index)
-        let mut thinking_positions: Vec<(usize, u16, usize)> = Vec::new();
+        // Track block positions with single Vec (consolidates 10 allocations into 1)
+        let estimated_blocks = self.blocks.total_count();
+        let mut block_positions: Vec<BlockPosition> = Vec::with_capacity(estimated_blocks);
         let mut thinking_idx = 0;
-        let mut bash_positions: Vec<(usize, u16, usize)> = Vec::new();
         let mut bash_idx = 0;
-        let mut terminal_positions: Vec<(usize, u16, usize)> = Vec::new();
         let mut terminal_idx = 0;
-        let mut tool_result_positions: Vec<(usize, u16, usize)> = Vec::new();
         let mut tool_result_idx = 0;
-        let mut read_positions: Vec<(usize, u16, usize)> = Vec::new();
         let mut read_idx = 0;
-        let mut edit_positions: Vec<(usize, u16, usize)> = Vec::new();
         let mut edit_idx = 0;
-        let mut write_positions: Vec<(usize, u16, usize)> = Vec::new();
         let mut write_idx = 0;
-        let mut web_search_positions: Vec<(usize, u16, usize)> = Vec::new();
         let mut web_search_idx = 0;
-        let mut explore_positions: Vec<(usize, u16, usize)> = Vec::new();
         let mut explore_idx = 0;
-        let mut build_positions: Vec<(usize, u16, usize)> = Vec::new();
         let mut build_idx = 0;
         let mut total_lines: usize = 0;
 
@@ -146,7 +163,12 @@ impl App {
             if role == "thinking" {
                 if let Some(tb) = self.blocks.thinking.get(thinking_idx) {
                     let height = tb.height(content_width, &self.ui.theme);
-                    thinking_positions.push((total_lines, height, thinking_idx));
+                    block_positions.push(BlockPosition {
+                        line_start: total_lines,
+                        height,
+                        block_idx: thinking_idx,
+                        block_type: BlockType::Thinking,
+                    });
                     total_lines += height as usize;
                     total_lines += 1; // blank after
                 }
@@ -158,7 +180,12 @@ impl App {
             if role == "bash" {
                 if let Some(bb) = self.blocks.bash.get(bash_idx) {
                     let height = bb.height(content_width, &self.ui.theme);
-                    bash_positions.push((total_lines, height, bash_idx));
+                    block_positions.push(BlockPosition {
+                        line_start: total_lines,
+                        height,
+                        block_idx: bash_idx,
+                        block_type: BlockType::Bash,
+                    });
                     total_lines += height as usize;
                     total_lines += 1; // blank after
                 }
@@ -171,7 +198,12 @@ impl App {
                 if self.blocks.pinned_terminal != Some(terminal_idx) {
                     if let Some(tp) = self.blocks.terminal.get(terminal_idx) {
                         let height = tp.height(content_width, &self.ui.theme);
-                        terminal_positions.push((total_lines, height, terminal_idx));
+                        block_positions.push(BlockPosition {
+                            line_start: total_lines,
+                            height,
+                            block_idx: terminal_idx,
+                            block_type: BlockType::Terminal,
+                        });
                         total_lines += height as usize;
                         total_lines += 1;
                     }
@@ -184,7 +216,12 @@ impl App {
             if role == "tool_result" {
                 if let Some(tr) = self.blocks.tool_result.get(tool_result_idx) {
                     let height = tr.height(content_width, &self.ui.theme);
-                    tool_result_positions.push((total_lines, height, tool_result_idx));
+                    block_positions.push(BlockPosition {
+                        line_start: total_lines,
+                        height,
+                        block_idx: tool_result_idx,
+                        block_type: BlockType::ToolResult,
+                    });
                     total_lines += height as usize;
                     total_lines += 1;
                 }
@@ -196,7 +233,12 @@ impl App {
             if role == "read" {
                 if let Some(rb) = self.blocks.read.get(read_idx) {
                     let height = rb.height(content_width, &self.ui.theme);
-                    read_positions.push((total_lines, height, read_idx));
+                    block_positions.push(BlockPosition {
+                        line_start: total_lines,
+                        height,
+                        block_idx: read_idx,
+                        block_type: BlockType::Read,
+                    });
                     total_lines += height as usize;
                     total_lines += 1;
                 }
@@ -208,7 +250,12 @@ impl App {
             if role == "edit" {
                 if let Some(eb) = self.blocks.edit.get(edit_idx) {
                     let height = eb.height(content_width, &self.ui.theme);
-                    edit_positions.push((total_lines, height, edit_idx));
+                    block_positions.push(BlockPosition {
+                        line_start: total_lines,
+                        height,
+                        block_idx: edit_idx,
+                        block_type: BlockType::Edit,
+                    });
                     total_lines += height as usize;
                     total_lines += 1;
                 }
@@ -220,7 +267,12 @@ impl App {
             if role == "write" {
                 if let Some(wb) = self.blocks.write.get(write_idx) {
                     let height = wb.height(content_width, &self.ui.theme);
-                    write_positions.push((total_lines, height, write_idx));
+                    block_positions.push(BlockPosition {
+                        line_start: total_lines,
+                        height,
+                        block_idx: write_idx,
+                        block_type: BlockType::Write,
+                    });
                     total_lines += height as usize;
                     total_lines += 1;
                 }
@@ -232,7 +284,12 @@ impl App {
             if role == "web_search" {
                 if let Some(ws) = self.blocks.web_search.get(web_search_idx) {
                     let height = ws.height(content_width, &self.ui.theme);
-                    web_search_positions.push((total_lines, height, web_search_idx));
+                    block_positions.push(BlockPosition {
+                        line_start: total_lines,
+                        height,
+                        block_idx: web_search_idx,
+                        block_type: BlockType::WebSearch,
+                    });
                     total_lines += height as usize;
                     total_lines += 1;
                 }
@@ -244,7 +301,12 @@ impl App {
             if role == "explore" {
                 if let Some(eb) = self.blocks.explore.get(explore_idx) {
                     let height = eb.height(content_width, &self.ui.theme);
-                    explore_positions.push((total_lines, height, explore_idx));
+                    block_positions.push(BlockPosition {
+                        line_start: total_lines,
+                        height,
+                        block_idx: explore_idx,
+                        block_type: BlockType::Explore,
+                    });
                     total_lines += height as usize;
                     total_lines += 1;
                 }
@@ -256,7 +318,12 @@ impl App {
             if role == "build" {
                 if let Some(bb) = self.blocks.build.get(build_idx) {
                     let height = bb.height(content_width, &self.ui.theme);
-                    build_positions.push((total_lines, height, build_idx));
+                    block_positions.push(BlockPosition {
+                        line_start: total_lines,
+                        height,
+                        block_idx: build_idx,
+                        block_type: BlockType::Build,
+                    });
                     total_lines += height as usize;
                     total_lines += 1;
                 }
@@ -313,9 +380,20 @@ impl App {
         explore_idx = 0;
         build_idx = 0;
 
+        // Helper to find block position by type and index
+        let find_position =
+            |positions: &[BlockPosition], block_type: BlockType, idx: usize| -> Option<u16> {
+                positions
+                    .iter()
+                    .find(|p| p.block_type == block_type && p.block_idx == idx)
+                    .map(|p| p.height)
+            };
+
         for (msg_idx, (role, content)) in self.chat.messages.iter().enumerate() {
             if role == "thinking" {
-                if let Some(&(_, height, _)) = thinking_positions.get(thinking_idx) {
+                if let Some(height) =
+                    find_position(&block_positions, BlockType::Thinking, thinking_idx)
+                {
                     for _ in 0..height {
                         lines.push(Line::from(""));
                         line_idx += 1;
@@ -328,7 +406,7 @@ impl App {
             }
 
             if role == "bash" {
-                if let Some(&(_, height, _)) = bash_positions.get(bash_idx) {
+                if let Some(height) = find_position(&block_positions, BlockType::Bash, bash_idx) {
                     for _ in 0..height {
                         lines.push(Line::from(""));
                         line_idx += 1;
@@ -343,10 +421,8 @@ impl App {
             if role == "terminal" {
                 // Skip pinned terminal - it's rendered at top
                 if self.blocks.pinned_terminal != Some(terminal_idx) {
-                    // Find the position entry for this terminal_idx
-                    if let Some(&(_, height, _)) = terminal_positions
-                        .iter()
-                        .find(|(_, _, idx)| *idx == terminal_idx)
+                    if let Some(height) =
+                        find_position(&block_positions, BlockType::Terminal, terminal_idx)
                     {
                         for _ in 0..height {
                             lines.push(Line::from(""));
@@ -361,7 +437,9 @@ impl App {
             }
 
             if role == "tool_result" {
-                if let Some(&(_, height, _)) = tool_result_positions.get(tool_result_idx) {
+                if let Some(height) =
+                    find_position(&block_positions, BlockType::ToolResult, tool_result_idx)
+                {
                     for _ in 0..height {
                         lines.push(Line::from(""));
                         line_idx += 1;
@@ -374,7 +452,7 @@ impl App {
             }
 
             if role == "read" {
-                if let Some(&(_, height, _)) = read_positions.get(read_idx) {
+                if let Some(height) = find_position(&block_positions, BlockType::Read, read_idx) {
                     for _ in 0..height {
                         lines.push(Line::from(""));
                         line_idx += 1;
@@ -387,7 +465,7 @@ impl App {
             }
 
             if role == "edit" {
-                if let Some(&(_, height, _)) = edit_positions.get(edit_idx) {
+                if let Some(height) = find_position(&block_positions, BlockType::Edit, edit_idx) {
                     for _ in 0..height {
                         lines.push(Line::from(""));
                         line_idx += 1;
@@ -400,7 +478,7 @@ impl App {
             }
 
             if role == "write" {
-                if let Some(&(_, height, _)) = write_positions.get(write_idx) {
+                if let Some(height) = find_position(&block_positions, BlockType::Write, write_idx) {
                     for _ in 0..height {
                         lines.push(Line::from(""));
                         line_idx += 1;
@@ -413,7 +491,9 @@ impl App {
             }
 
             if role == "web_search" {
-                if let Some(&(_, height, _)) = web_search_positions.get(web_search_idx) {
+                if let Some(height) =
+                    find_position(&block_positions, BlockType::WebSearch, web_search_idx)
+                {
                     for _ in 0..height {
                         lines.push(Line::from(""));
                         line_idx += 1;
@@ -426,7 +506,9 @@ impl App {
             }
 
             if role == "explore" {
-                if let Some(&(_, height, _)) = explore_positions.get(explore_idx) {
+                if let Some(height) =
+                    find_position(&block_positions, BlockType::Explore, explore_idx)
+                {
                     for _ in 0..height {
                         lines.push(Line::from(""));
                         line_idx += 1;
@@ -439,7 +521,7 @@ impl App {
             }
 
             if role == "build" {
-                if let Some(&(_, height, _)) = build_positions.get(build_idx) {
+                if let Some(height) = find_position(&block_positions, BlockType::Build, build_idx) {
                     for _ in 0..height {
                         lines.push(Line::from(""));
                         line_idx += 1;
@@ -631,27 +713,10 @@ impl App {
             content_width,
             scroll,
             inner_height,
-            &thinking_positions,
-            &bash_positions,
-            &terminal_positions,
-            &tool_result_positions,
-            &read_positions,
-            &edit_positions,
-            &write_positions,
-            &web_search_positions,
-            &explore_positions,
-            &build_positions,
+            &block_positions,
         );
-
-        // Final scrollbar gap clear after all block overlays
-        // This catches any content that might have bled into the scrollbar area from blocks
-        let scrollbar_clear_rect = Rect {
-            x: inner.x + content_width,
-            y: inner.y,
-            width: scrollbar_gap,
-            height: inner.height,
-        };
-        clear_area(f.buffer_mut(), scrollbar_clear_rect, self.ui.theme.bg_color);
+        // Note: Block overlays already clear with inner.width which includes scrollbar gap,
+        // so no additional scrollbar clear needed here.
 
         // Resize terminal PTYs to match render width (debounced)
         // Note: tick() is called in the event loop before render, not here
@@ -661,7 +726,6 @@ impl App {
     }
 
     /// Render block overlays at their calculated positions
-    #[allow(clippy::too_many_arguments)]
     fn render_block_overlays(
         &self,
         f: &mut Frame,
@@ -669,140 +733,114 @@ impl App {
         content_width: u16,
         scroll: usize,
         inner_height: usize,
-        thinking_positions: &[(usize, u16, usize)],
-        bash_positions: &[(usize, u16, usize)],
-        terminal_positions: &[(usize, u16, usize)],
-        tool_result_positions: &[(usize, u16, usize)],
-        read_positions: &[(usize, u16, usize)],
-        edit_positions: &[(usize, u16, usize)],
-        write_positions: &[(usize, u16, usize)],
-        web_search_positions: &[(usize, u16, usize)],
-        explore_positions: &[(usize, u16, usize)],
-        build_positions: &[(usize, u16, usize)],
+        block_positions: &[BlockPosition],
     ) {
-        // Helper closure to render a block at its position
-        let render_block = |f: &mut Frame,
-                            start_line: usize,
-                            height: u16,
-                            block: &dyn StreamBlock,
-                            is_focused: bool| {
-            let block_y = start_line;
-            let block_height = height as usize;
+        // Render all blocks in a single pass through the unified position list
+        for pos in block_positions {
+            let block_y = pos.line_start;
+            let block_height = pos.height as usize;
 
             // Check if visible
-            if block_y + block_height > scroll && block_y < scroll + inner_height {
-                let screen_y = if block_y >= scroll {
-                    inner.y + (block_y - scroll).min(u16::MAX as usize) as u16
-                } else {
-                    inner.y
-                };
+            if block_y + block_height <= scroll || block_y >= scroll + inner_height {
+                continue;
+            }
 
-                // Compute clip values in usize first, then clamp to height before converting to u16
-                // This prevents truncation bugs when scroll offsets are large
-                let clip_top_usize = scroll.saturating_sub(block_y);
-                let clip_top = (clip_top_usize.min(height as usize)) as u16;
-                let available_height = inner.height.saturating_sub(screen_y - inner.y);
-                let visible_height = height.saturating_sub(clip_top).min(available_height);
-                let clip_bottom = height.saturating_sub(clip_top + visible_height);
+            let screen_y = if block_y >= scroll {
+                inner.y + (block_y - scroll).min(u16::MAX as usize) as u16
+            } else {
+                inner.y
+            };
 
-                if visible_height > 0 {
-                    let block_area = Rect {
-                        x: inner.x,
-                        y: screen_y,
-                        width: content_width,
-                        height: visible_height,
-                    };
+            // Compute clip values in usize first, then clamp to height before converting to u16
+            // This prevents truncation bugs when scroll offsets are large
+            let clip_top_usize = scroll.saturating_sub(block_y);
+            let clip_top = (clip_top_usize.min(pos.height as usize)) as u16;
+            let available_height = inner.height.saturating_sub(screen_y - inner.y);
+            let visible_height = pos.height.saturating_sub(clip_top).min(available_height);
+            let clip_bottom = pos.height.saturating_sub(clip_top + visible_height);
 
-                    let clip = if clip_top > 0 || clip_bottom > 0 {
-                        Some(ClipContext {
-                            clip_top,
-                            clip_bottom,
-                        })
-                    } else {
-                        None
-                    };
+            if visible_height == 0 {
+                continue;
+            }
 
-                    // Clear full inner.width to remove Paragraph bleed in scrollbar gap
-                    let clear_rect = Rect {
-                        x: inner.x,
-                        y: screen_y,
-                        width: inner.width,
-                        height: visible_height,
-                    };
-                    clear_area(f.buffer_mut(), clear_rect, self.ui.theme.bg_color);
-                    block.render(block_area, f.buffer_mut(), &self.ui.theme, is_focused, clip);
+            let block_area = Rect {
+                x: inner.x,
+                y: screen_y,
+                width: content_width,
+                height: visible_height,
+            };
+
+            let clip = if clip_top > 0 || clip_bottom > 0 {
+                Some(ClipContext {
+                    clip_top,
+                    clip_bottom,
+                })
+            } else {
+                None
+            };
+
+            // Clear full inner.width to remove Paragraph bleed in scrollbar gap
+            let clear_rect = Rect {
+                x: inner.x,
+                y: screen_y,
+                width: inner.width,
+                height: visible_height,
+            };
+            clear_area(f.buffer_mut(), clear_rect, self.ui.theme.bg_color);
+
+            // Render the appropriate block type
+            match pos.block_type {
+                BlockType::Thinking => {
+                    if let Some(tb) = self.blocks.thinking.get(pos.block_idx) {
+                        tb.render(block_area, f.buffer_mut(), &self.ui.theme, false, clip);
+                    }
                 }
-            }
-        };
-
-        // Render thinking blocks
-        for (start_line, height, idx) in thinking_positions {
-            if let Some(tb) = self.blocks.thinking.get(*idx) {
-                render_block(f, *start_line, *height, tb, false);
-            }
-        }
-
-        // Render bash blocks
-        for (start_line, height, idx) in bash_positions {
-            if let Some(bb) = self.blocks.bash.get(*idx) {
-                render_block(f, *start_line, *height, bb, false);
-            }
-        }
-
-        // Render terminal blocks
-        for (start_line, height, idx) in terminal_positions {
-            if let Some(tp) = self.blocks.terminal.get(*idx) {
-                let is_focused = self.blocks.focused_terminal == Some(*idx);
-                render_block(f, *start_line, *height, tp, is_focused);
-            }
-        }
-
-        // Render tool_result blocks
-        for (start_line, height, idx) in tool_result_positions {
-            if let Some(tr) = self.blocks.tool_result.get(*idx) {
-                render_block(f, *start_line, *height, tr, false);
-            }
-        }
-
-        // Render read blocks
-        for (start_line, height, idx) in read_positions {
-            if let Some(rb) = self.blocks.read.get(*idx) {
-                render_block(f, *start_line, *height, rb, false);
-            }
-        }
-
-        // Render edit blocks
-        for (start_line, height, idx) in edit_positions {
-            if let Some(eb) = self.blocks.edit.get(*idx) {
-                render_block(f, *start_line, *height, eb, false);
-            }
-        }
-
-        // Render write blocks
-        for (start_line, height, idx) in write_positions {
-            if let Some(wb) = self.blocks.write.get(*idx) {
-                render_block(f, *start_line, *height, wb, false);
-            }
-        }
-
-        // Render web_search blocks
-        for (start_line, height, idx) in web_search_positions {
-            if let Some(ws) = self.blocks.web_search.get(*idx) {
-                render_block(f, *start_line, *height, ws, false);
-            }
-        }
-
-        // Render explore blocks
-        for (start_line, height, idx) in explore_positions {
-            if let Some(eb) = self.blocks.explore.get(*idx) {
-                render_block(f, *start_line, *height, eb, false);
-            }
-        }
-
-        // Render build blocks
-        for (start_line, height, idx) in build_positions {
-            if let Some(bb) = self.blocks.build.get(*idx) {
-                render_block(f, *start_line, *height, bb, false);
+                BlockType::Bash => {
+                    if let Some(bb) = self.blocks.bash.get(pos.block_idx) {
+                        bb.render(block_area, f.buffer_mut(), &self.ui.theme, false, clip);
+                    }
+                }
+                BlockType::Terminal => {
+                    if let Some(tp) = self.blocks.terminal.get(pos.block_idx) {
+                        let is_focused = self.blocks.focused_terminal == Some(pos.block_idx);
+                        tp.render(block_area, f.buffer_mut(), &self.ui.theme, is_focused, clip);
+                    }
+                }
+                BlockType::ToolResult => {
+                    if let Some(tr) = self.blocks.tool_result.get(pos.block_idx) {
+                        tr.render(block_area, f.buffer_mut(), &self.ui.theme, false, clip);
+                    }
+                }
+                BlockType::Read => {
+                    if let Some(rb) = self.blocks.read.get(pos.block_idx) {
+                        rb.render(block_area, f.buffer_mut(), &self.ui.theme, false, clip);
+                    }
+                }
+                BlockType::Edit => {
+                    if let Some(eb) = self.blocks.edit.get(pos.block_idx) {
+                        eb.render(block_area, f.buffer_mut(), &self.ui.theme, false, clip);
+                    }
+                }
+                BlockType::Write => {
+                    if let Some(wb) = self.blocks.write.get(pos.block_idx) {
+                        wb.render(block_area, f.buffer_mut(), &self.ui.theme, false, clip);
+                    }
+                }
+                BlockType::WebSearch => {
+                    if let Some(ws) = self.blocks.web_search.get(pos.block_idx) {
+                        ws.render(block_area, f.buffer_mut(), &self.ui.theme, false, clip);
+                    }
+                }
+                BlockType::Explore => {
+                    if let Some(eb) = self.blocks.explore.get(pos.block_idx) {
+                        eb.render(block_area, f.buffer_mut(), &self.ui.theme, false, clip);
+                    }
+                }
+                BlockType::Build => {
+                    if let Some(bb) = self.blocks.build.get(pos.block_idx) {
+                        bb.render(block_area, f.buffer_mut(), &self.ui.theme, false, clip);
+                    }
+                }
             }
         }
     }

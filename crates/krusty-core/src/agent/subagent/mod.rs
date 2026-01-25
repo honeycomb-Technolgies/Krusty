@@ -16,8 +16,11 @@ mod types;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, Semaphore};
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 use tracing::{debug, info, warn};
+
+/// Timeout for acquiring semaphore permit (prevents deadlock on hung agents)
+const SEMAPHORE_TIMEOUT: Duration = Duration::from_secs(300);
 
 use crate::agent::build_context::SharedBuildContext;
 use crate::agent::cache::SharedExploreCache;
@@ -141,9 +144,9 @@ impl SubAgentPool {
 
             let handle = tokio::spawn(async move {
                 debug!(task_id = %task_id, "SubAgent: Acquiring semaphore permit");
-                let _permit = match sem.acquire().await {
-                    Ok(p) => p,
-                    Err(e) => {
+                let _permit = match timeout(SEMAPHORE_TIMEOUT, sem.acquire()).await {
+                    Ok(Ok(p)) => p,
+                    Ok(Err(e)) => {
                         warn!(task_id = %task_id, error = %e, "SubAgent: Failed to acquire semaphore");
                         return SubAgentResult {
                             task_id,
@@ -153,6 +156,21 @@ impl SubAgentPool {
                             duration_ms: 0,
                             turns_used: 0,
                             error: Some(format!("Semaphore error: {}", e)),
+                        };
+                    }
+                    Err(_) => {
+                        warn!(task_id = %task_id, "SubAgent: Semaphore acquire timed out after {:?}", SEMAPHORE_TIMEOUT);
+                        return SubAgentResult {
+                            task_id,
+                            success: false,
+                            output: String::new(),
+                            files_examined: vec![],
+                            duration_ms: 0,
+                            turns_used: 0,
+                            error: Some(format!(
+                                "Semaphore acquire timed out after {:?}",
+                                SEMAPHORE_TIMEOUT
+                            )),
                         };
                     }
                 };
@@ -251,9 +269,9 @@ impl SubAgentPool {
             let resolved_model = self.resolve_model(&task);
 
             let handle = tokio::spawn(async move {
-                let _permit = match sem.acquire().await {
-                    Ok(p) => p,
-                    Err(e) => {
+                let _permit = match timeout(SEMAPHORE_TIMEOUT, sem.acquire()).await {
+                    Ok(Ok(p)) => p,
+                    Ok(Err(e)) => {
                         warn!(task_id = %task_id, error = %e, "SubAgent: Failed to acquire semaphore");
                         return SubAgentResult {
                             task_id,
@@ -263,6 +281,21 @@ impl SubAgentPool {
                             duration_ms: 0,
                             turns_used: 0,
                             error: Some(format!("Semaphore error: {}", e)),
+                        };
+                    }
+                    Err(_) => {
+                        warn!(task_id = %task_id, "SubAgent: Semaphore acquire timed out after {:?}", SEMAPHORE_TIMEOUT);
+                        return SubAgentResult {
+                            task_id,
+                            success: false,
+                            output: String::new(),
+                            files_examined: vec![],
+                            duration_ms: 0,
+                            turns_used: 0,
+                            error: Some(format!(
+                                "Semaphore acquire timed out after {:?}",
+                                SEMAPHORE_TIMEOUT
+                            )),
                         };
                     }
                 };
@@ -356,9 +389,9 @@ impl SubAgentPool {
             let resolved_model = self.resolve_model(&task);
 
             let handle = tokio::spawn(async move {
-                let _permit = match sem.acquire().await {
-                    Ok(p) => p,
-                    Err(e) => {
+                let _permit = match timeout(SEMAPHORE_TIMEOUT, sem.acquire()).await {
+                    Ok(Ok(p)) => p,
+                    Ok(Err(e)) => {
                         warn!(task_id = %task_id, error = %e, "Builder: Failed to acquire semaphore");
                         return SubAgentResult {
                             task_id,
@@ -368,6 +401,21 @@ impl SubAgentPool {
                             duration_ms: 0,
                             turns_used: 0,
                             error: Some(format!("Semaphore error: {}", e)),
+                        };
+                    }
+                    Err(_) => {
+                        warn!(task_id = %task_id, "Builder: Semaphore acquire timed out after {:?}", SEMAPHORE_TIMEOUT);
+                        return SubAgentResult {
+                            task_id,
+                            success: false,
+                            output: String::new(),
+                            files_examined: vec![],
+                            duration_ms: 0,
+                            turns_used: 0,
+                            error: Some(format!(
+                                "Semaphore acquire timed out after {:?}",
+                                SEMAPHORE_TIMEOUT
+                            )),
                         };
                     }
                 };

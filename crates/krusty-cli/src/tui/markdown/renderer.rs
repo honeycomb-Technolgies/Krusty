@@ -1,5 +1,6 @@
 //! Render markdown elements to Ratatui Lines
 
+use once_cell::sync::Lazy;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -24,6 +25,20 @@ const T_UP: char = '┴';
 const T_RIGHT: char = '├';
 const T_LEFT: char = '┤';
 const CROSS: char = '┼';
+
+/// Pre-computed horizontal border string (avoids repeated allocations)
+/// Maximum expected border width is 500 chars which covers most terminals
+const MAX_BORDER_WIDTH: usize = 500;
+static HORIZONTAL_BORDER: Lazy<String> =
+    Lazy::new(|| HORIZONTAL.to_string().repeat(MAX_BORDER_WIDTH));
+
+/// Get a horizontal border string of the given width (sliced from cache)
+#[inline]
+fn horizontal_border(width: usize) -> &'static str {
+    let chars = width.min(MAX_BORDER_WIDTH);
+    // HORIZONTAL is a 3-byte UTF-8 char (─), so multiply by 3 for byte index
+    &HORIZONTAL_BORDER[..chars * 3]
+}
 
 /// Convert markdown elements to styled lines with link tracking
 pub fn render_elements_with_links(
@@ -170,8 +185,8 @@ fn render_code_block(
     let highlighted_lines = highlight_code(code, lang_label, theme);
 
     // Calculate content width from actual code (use raw lines for width calculation)
-    let code_lines: Vec<&str> = code.lines().collect();
-    let longest_line = code_lines.iter().map(|l| l.width()).max().unwrap_or(0);
+    // Avoid .collect() allocation - iterate directly
+    let longest_line = code.lines().map(|l| l.width()).max().unwrap_or(0);
 
     // Minimum width to fit: " lang " in header (if present)
     let min_for_lang = if lang_label.is_empty() {
@@ -197,7 +212,7 @@ fn render_code_block(
         let header = format!(
             "{}{}{}",
             TOP_LEFT,
-            HORIZONTAL.to_string().repeat(total_width - 2),
+            horizontal_border(total_width - 2),
             TOP_RIGHT
         );
         header_spans.push(Span::styled(header, border_style));
@@ -211,19 +226,15 @@ fn render_code_block(
         ));
         header_spans.push(Span::styled(lang_label.to_string(), lang_style));
         header_spans.push(Span::styled(
-            format!(
-                " {}{}",
-                HORIZONTAL.to_string().repeat(fill_count),
-                TOP_RIGHT
-            ),
+            format!(" {}{}", horizontal_border(fill_count), TOP_RIGHT),
             border_style,
         ));
     }
     lines.push(Line::from(header_spans));
 
     // Code lines with syntax highlighting: │ content │
-    for (i, highlighted_spans) in highlighted_lines.iter().enumerate() {
-        let raw_line = code_lines.get(i).unwrap_or(&"");
+    // Zip highlighted spans with raw code lines to avoid index lookups
+    for (raw_line, highlighted_spans) in code.lines().zip(highlighted_lines.iter()) {
         let line_width = raw_line.width();
         let padding = box_inner_width.saturating_sub(line_width);
 
@@ -265,7 +276,7 @@ fn render_code_block(
     let footer = format!(
         "{}{}{}",
         BOTTOM_LEFT,
-        HORIZONTAL.to_string().repeat(total_width - 2),
+        horizontal_border(total_width - 2),
         BOTTOM_RIGHT
     );
     lines.push(Line::from(Span::styled(footer, border_style)));
@@ -431,7 +442,7 @@ fn render_table(
         let mut s = String::new();
         s.push(left);
         for (i, w) in col_widths.iter().enumerate() {
-            s.push_str(&HORIZONTAL.to_string().repeat(*w + 2));
+            s.push_str(horizontal_border(*w + 2));
             if i < col_widths.len() - 1 {
                 s.push(mid);
             }

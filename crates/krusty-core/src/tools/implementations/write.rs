@@ -27,7 +27,7 @@ impl Tool for WriteTool {
     }
 
     fn description(&self) -> &str {
-        "Create or overwrite files. Creates parent directories if needed. Reports LSP errors after write."
+        "Create new files or completely overwrite existing files. WARNING: Overwrites without backup - prefer 'edit' tool for modifying existing files. Creates parent directories if needed. Reports LSP errors after write. Max 10MB content."
     }
 
     fn parameters_schema(&self) -> Value {

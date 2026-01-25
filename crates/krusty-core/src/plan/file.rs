@@ -229,6 +229,9 @@ pub struct PlanFile {
     pub phases: Vec<PlanPhase>,
     /// Optional notes section
     pub notes: Option<String>,
+    /// Version number for conflict detection (incremented on each save)
+    #[serde(default)]
+    pub version: u64,
     /// File path (set when loaded/saved)
     #[serde(skip)]
     pub file_path: Option<PathBuf>,
@@ -245,8 +248,20 @@ impl PlanFile {
             status: PlanStatus::InProgress,
             phases: Vec::new(),
             notes: None,
+            version: 0,
             file_path: None,
         }
+    }
+
+    /// Increment version number (call before saving)
+    pub fn increment_version(&mut self) {
+        self.version += 1;
+    }
+
+    /// Check if this plan's version matches the expected version
+    /// Used for conflict detection before executing tasks
+    pub fn version_matches(&self, expected: u64) -> bool {
+        self.version == expected
     }
 
     /// Add a new phase (test helper)
@@ -388,6 +403,9 @@ impl PlanFile {
             lines.push(format!("Working Directory: {}", dir));
         }
         lines.push(format!("Status: {}", self.status));
+        if self.version > 0 {
+            lines.push(format!("Version: {}", self.version));
+        }
         lines.push(String::new());
         lines.push("---".to_string());
         lines.push(String::new());
@@ -421,6 +439,7 @@ impl PlanFile {
             status: PlanStatus::InProgress,
             phases: Vec::new(),
             notes: None,
+            version: 0,
             file_path: None,
         };
 
@@ -480,6 +499,12 @@ impl PlanFile {
             if trimmed.starts_with("Status:") {
                 let status_str = trimmed.strip_prefix("Status:").unwrap_or("").trim();
                 plan.status = status_str.parse().unwrap_or(PlanStatus::InProgress);
+                continue;
+            }
+
+            if trimmed.starts_with("Version:") {
+                let version_str = trimmed.strip_prefix("Version:").unwrap_or("").trim();
+                plan.version = version_str.parse().unwrap_or(0);
                 continue;
             }
 
@@ -599,6 +624,7 @@ impl PlanFile {
             status: PlanStatus::InProgress,
             phases: Vec::new(),
             notes: None,
+            version: 0,
             file_path: None,
         };
 

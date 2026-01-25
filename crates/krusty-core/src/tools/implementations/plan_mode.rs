@@ -17,7 +17,7 @@ impl Tool for EnterPlanModeTool {
     }
 
     fn description(&self) -> &str {
-        "Switch to Plan mode to create a new implementation plan. Use this when the user asks you to plan something, design an approach, or when you need to create a structured plan before implementing. In Plan mode, you can explore the codebase but cannot make modifications. After creating a plan, the user will review and approve it before implementation begins."
+        "Switch to Plan mode to create a new implementation plan. Use this when the user asks you to plan something, design an approach, or when you need to create a structured plan before implementing. In Plan mode, you can explore the codebase but cannot make modifications. After creating a plan, the user will review and approve it before implementation begins. Set clear_existing=true to discard any existing plan and start fresh."
     }
 
     fn parameters_schema(&self) -> Value {

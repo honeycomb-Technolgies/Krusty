@@ -110,6 +110,53 @@ impl SharedBuildContext {
         Ok(())
     }
 
+    /// Acquire lock with retry and timeout
+    ///
+    /// Retries up to `max_retries` times with `retry_delay` between attempts.
+    /// Records wait time for contention analysis.
+    ///
+    /// Returns Ok(()) on success, Err(holder_id) if lock not acquired within retries.
+    pub async fn acquire_lock_with_timeout(
+        &self,
+        path: PathBuf,
+        agent_id: String,
+        reason: String,
+        max_retries: usize,
+        retry_delay: Duration,
+    ) -> Result<(), String> {
+        let start = std::time::Instant::now();
+
+        for attempt in 0..=max_retries {
+            match self.acquire_lock(path.clone(), agent_id.clone(), reason.clone()) {
+                Ok(()) => {
+                    // Record wait time if we had to retry
+                    if attempt > 0 {
+                        self.record_lock_wait(path, start.elapsed());
+                    }
+                    return Ok(());
+                }
+                Err(holder) => {
+                    if attempt < max_retries {
+                        tracing::debug!(
+                            agent = %agent_id,
+                            path = %path.display(),
+                            holder = %holder,
+                            attempt = attempt + 1,
+                            "Lock contention, retrying"
+                        );
+                        tokio::time::sleep(retry_delay).await;
+                    } else {
+                        // Final failure - record total wait time
+                        self.record_lock_wait(path, start.elapsed());
+                        return Err(holder);
+                    }
+                }
+            }
+        }
+
+        unreachable!()
+    }
+
     /// Release a file lock
     pub fn release_lock(&self, path: &PathBuf, agent_id: &str) {
         if let Some(holder) = self.file_locks.get(path) {
