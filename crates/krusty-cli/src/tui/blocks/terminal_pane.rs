@@ -872,19 +872,12 @@ impl StreamBlock for TerminalPane {
         _clip: Option<ClipContext>,
     ) -> EventResult {
         match event {
-            // Mouse scroll
+            // Mouse scroll - trust hit_test, don't re-check coordinates
             Event::Mouse(MouseEvent {
                 kind: MouseEventKind::ScrollDown,
-                column,
-                row,
                 ..
             }) => {
-                let in_area = *row >= area.y
-                    && *row < area.y + area.height
-                    && *column >= area.x
-                    && *column < area.x + area.width;
-
-                if in_area && !self.collapsed {
+                if !self.collapsed {
                     self.scroll_down(3);
                     return EventResult::Consumed;
                 }
@@ -892,16 +885,9 @@ impl StreamBlock for TerminalPane {
             }
             Event::Mouse(MouseEvent {
                 kind: MouseEventKind::ScrollUp,
-                column,
-                row,
                 ..
             }) => {
-                let in_area = *row >= area.y
-                    && *row < area.y + area.height
-                    && *column >= area.x
-                    && *column < area.x + area.width;
-
-                if in_area && !self.collapsed {
+                if !self.collapsed {
                     self.scroll_up(3);
                     return EventResult::Consumed;
                 }

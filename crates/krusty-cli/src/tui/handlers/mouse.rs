@@ -634,7 +634,8 @@ impl App {
             }
             BlockType::Edit => {
                 if let Some(block) = self.blocks.edit.get_mut(hit.index) {
-                    if block.needs_scrollbar()
+                    if !block.is_collapsed()
+                        && block.needs_scrollbar()
                         && matches!(
                             block.handle_event(&event, hit.area, hit.clip),
                             EventResult::Consumed

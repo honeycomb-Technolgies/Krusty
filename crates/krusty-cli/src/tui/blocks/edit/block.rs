@@ -75,6 +75,11 @@ impl EditBlock {
         self.collapsed = collapsed;
     }
 
+    /// Check if block is collapsed
+    pub fn is_collapsed(&self) -> bool {
+        self.collapsed
+    }
+
     /// Set scroll offset (for session restoration)
     pub fn set_scroll_offset(&mut self, offset: u16) {
         self.scroll_offset = offset;
@@ -503,18 +508,12 @@ impl StreamBlock for EditBlock {
         _clip: Option<ClipContext>,
     ) -> EventResult {
         match event {
+            // Scroll wheel events - trust hit_test, don't re-check coordinates
             Event::Mouse(MouseEvent {
                 kind: MouseEventKind::ScrollDown,
-                column,
-                row,
                 ..
             }) => {
-                let in_area = *row >= area.y
-                    && *row < area.y + area.height
-                    && *column >= area.x
-                    && *column < area.x + area.width;
-
-                if in_area {
+                if !self.collapsed {
                     self.scroll_down();
                     return EventResult::Consumed;
                 }
@@ -522,16 +521,9 @@ impl StreamBlock for EditBlock {
             }
             Event::Mouse(MouseEvent {
                 kind: MouseEventKind::ScrollUp,
-                column,
-                row,
                 ..
             }) => {
-                let in_area = *row >= area.y
-                    && *row < area.y + area.height
-                    && *column >= area.x
-                    && *column < area.x + area.width;
-
-                if in_area {
+                if !self.collapsed {
                     self.scroll_up();
                     return EventResult::Consumed;
                 }

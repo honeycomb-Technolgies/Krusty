@@ -97,10 +97,11 @@ impl App {
         }
 
         let scroll = self.scroll_system.scroll.offset as u16;
-        // MUST match render_messages(): content_width = inner.width - 4, wrap_width = inner.width - 4
-        // inner_width here = area.width - 2, so both should be inner_width - 4
+        // MUST match render_messages():
+        // - content_width = inner.width - 4 (scrollbar gap)
+        // - wrap_width = content_width - 2 (SYMBOL_WIDTH for message prefixes)
         let content_width = inner_width.saturating_sub(4);
-        let wrap_width = inner_width.saturating_sub(4) as usize;
+        let wrap_width = content_width.saturating_sub(2) as usize;
 
         let mut indices = BlockIndices::new();
         let mut current_line: u16 = 0;

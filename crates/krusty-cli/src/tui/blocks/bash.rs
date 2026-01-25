@@ -967,19 +967,12 @@ impl StreamBlock for BashBlock {
         let clip_top = clip.map_or(0, |c| c.clip_top);
 
         match event {
-            // Scroll wheel events
+            // Scroll wheel events - trust hit_test, don't re-check coordinates
             Event::Mouse(MouseEvent {
                 kind: MouseEventKind::ScrollDown,
-                column,
-                row,
                 ..
             }) => {
-                let in_area = *row >= area.y
-                    && *row < area.y + area.height
-                    && *column >= area.x
-                    && *column < area.x + area.width;
-
-                if in_area && !self.collapsed {
+                if !self.collapsed {
                     self.scroll_down();
                     return EventResult::Consumed;
                 }
@@ -987,16 +980,9 @@ impl StreamBlock for BashBlock {
             }
             Event::Mouse(MouseEvent {
                 kind: MouseEventKind::ScrollUp,
-                column,
-                row,
                 ..
             }) => {
-                let in_area = *row >= area.y
-                    && *row < area.y + area.height
-                    && *column >= area.x
-                    && *column < area.x + area.width;
-
-                if in_area && !self.collapsed {
+                if !self.collapsed {
                     self.scroll_up();
                     return EventResult::Consumed;
                 }
