@@ -248,6 +248,72 @@ impl ToolContext {
             .unwrap_or(false)
     }
 
+    /// Resolve a path that may not exist yet (for write operations) with sandbox enforcement.
+    ///
+    /// Unlike `sandboxed_resolve`, this handles paths where parent directories don't exist yet.
+    /// It finds the nearest existing ancestor, canonicalizes it, validates it's within sandbox,
+    /// then appends the remaining path components (which are verified to not contain traversal).
+    pub fn sandboxed_resolve_new_path(&self, path: &str) -> Result<std::path::PathBuf, String> {
+        let resolved = self.resolve_path(path);
+
+        let Some(ref sandbox) = self.sandbox_root else {
+            return Ok(resolved);
+        };
+
+        // Reject any path with traversal components - this is the key security fix
+        for component in resolved.components() {
+            if matches!(component, std::path::Component::ParentDir) {
+                return Err("Path traversal (..) not allowed".into());
+            }
+        }
+
+        // If path exists, just canonicalize and check
+        if resolved.exists() {
+            let canonical = resolved
+                .canonicalize()
+                .map_err(|e| format!("Cannot resolve path: {}", e))?;
+            if !canonical.starts_with(sandbox) {
+                return Err("Access denied: path is outside workspace".into());
+            }
+            return Ok(canonical);
+        }
+
+        // Find nearest existing ancestor and canonicalize it
+        let mut check = resolved;
+        let mut suffix: Vec<std::ffi::OsString> = Vec::new();
+
+        while !check.exists() {
+            if let Some(name) = check.file_name() {
+                suffix.push(name.to_owned());
+            }
+            if !check.pop() {
+                break;
+            }
+        }
+
+        // check is now the nearest existing ancestor (or empty)
+        let canonical_base = if check.as_os_str().is_empty() || !check.exists() {
+            // No existing ancestor found - use sandbox root as base for validation
+            sandbox.clone()
+        } else {
+            check
+                .canonicalize()
+                .map_err(|e| format!("Cannot resolve path: {}", e))?
+        };
+
+        if !canonical_base.starts_with(sandbox) {
+            return Err("Access denied: path is outside workspace".into());
+        }
+
+        // Rebuild path with canonical base + remaining components
+        let mut final_path = canonical_base;
+        for component in suffix.into_iter().rev() {
+            final_path.push(component);
+        }
+
+        Ok(final_path)
+    }
+
     /// Notify LSP about a file change and optionally get diagnostics
     ///
     /// After modifying a file, triggers LSP analysis and waits briefly
@@ -530,5 +596,55 @@ mod tests {
         let err = result.unwrap_err();
         assert!(err.is_error);
         assert!(err.output.contains("Invalid parameters"));
+    }
+
+    #[test]
+    fn test_sandboxed_resolve_new_path_rejects_traversal() {
+        let ctx = ToolContext {
+            working_dir: PathBuf::from("/sandbox/project"),
+            sandbox_root: Some(PathBuf::from("/sandbox")),
+            ..Default::default()
+        };
+
+        // Direct traversal attempt should be rejected
+        let result = ctx.sandboxed_resolve_new_path("../../../etc/passwd");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("traversal"));
+
+        // Traversal in middle of path should be rejected
+        let result = ctx.sandboxed_resolve_new_path("subdir/../../../etc/passwd");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("traversal"));
+    }
+
+    #[test]
+    fn test_sandboxed_resolve_new_path_allows_valid_paths() {
+        // Use /tmp which always exists
+        let ctx = ToolContext {
+            working_dir: PathBuf::from("/tmp"),
+            sandbox_root: Some(PathBuf::from("/tmp")),
+            ..Default::default()
+        };
+
+        // Valid relative path within sandbox
+        let result = ctx.sandboxed_resolve_new_path("newfile.txt");
+        assert!(result.is_ok());
+
+        // Valid nested path within sandbox (parent exists: /tmp)
+        let result = ctx.sandboxed_resolve_new_path("subdir/nested/file.txt");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_sandboxed_resolve_new_path_no_sandbox() {
+        let ctx = ToolContext {
+            working_dir: PathBuf::from("/home/user"),
+            sandbox_root: None,
+            ..Default::default()
+        };
+
+        // Without sandbox, any path should be allowed (including traversal)
+        let result = ctx.sandboxed_resolve_new_path("../other/file.txt");
+        assert!(result.is_ok());
     }
 }

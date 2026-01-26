@@ -14,7 +14,8 @@ use reqwest::Client;
 use serde::Deserialize;
 use tracing::{debug, error, info};
 
-use super::models::{ApiFormat, ModelMetadata};
+use super::format_detection::detect_opencodezen_format;
+use super::models::ModelMetadata;
 use super::providers::{ProviderId, ReasoningFormat};
 
 const OPENCODEZEN_MODELS_URL: &str = "https://opencode.ai/zen/v1/models";
@@ -34,8 +35,25 @@ struct OpenCodeZenModel {
 }
 
 /// Fetch all available models from OpenCode Zen
+///
+/// Optionally accepts a shared HTTP client to avoid creating new connections.
 pub async fn fetch_models(api_key: &str) -> Result<Vec<ModelMetadata>> {
-    let client = Client::new();
+    fetch_models_with_client(api_key, None).await
+}
+
+/// Fetch models with an optional shared HTTP client
+pub async fn fetch_models_with_client(
+    api_key: &str,
+    client: Option<&Client>,
+) -> Result<Vec<ModelMetadata>> {
+    let owned_client;
+    let client = match client {
+        Some(c) => c,
+        None => {
+            owned_client = Client::new();
+            &owned_client
+        }
+    };
 
     info!("Fetching models from OpenCode Zen...");
 
@@ -66,37 +84,6 @@ pub async fn fetch_models(api_key: &str) -> Result<Vec<ModelMetadata>> {
     Ok(models)
 }
 
-/// Determine API format for OpenCode Zen model
-///
-/// Based on OpenCode Zen official documentation:
-/// - Claude models + MiniMax M2.1 → Anthropic format (/v1/messages)
-/// - GPT-5 models → OpenAI Responses format (/v1/responses)
-/// - Gemini models → Google format (/v1/models/{model})
-/// - GLM, Kimi, Qwen, Grok, Big Pickle → OpenAI-compatible (/v1/chat/completions)
-fn detect_api_format(model_id: &str) -> ApiFormat {
-    let id = model_id.to_lowercase();
-
-    // Anthropic format: Claude models AND MiniMax M2.1
-    // From docs: minimax-m2.1-free uses /v1/messages with @ai-sdk/anthropic
-    if id.starts_with("claude") || id.starts_with("minimax") {
-        return ApiFormat::Anthropic;
-    }
-
-    // GPT-5 uses OpenAI Responses format (/v1/responses)
-    if id.starts_with("gpt-5") {
-        return ApiFormat::OpenAIResponses;
-    }
-
-    // Gemini uses Google format (/v1/models/{model})
-    if id.starts_with("gemini") {
-        return ApiFormat::Google;
-    }
-
-    // Everything else uses OpenAI chat/completions:
-    // GLM, Kimi, Qwen, Grok, Big Pickle
-    ApiFormat::OpenAI
-}
-
 /// Parse OpenCode Zen model into our format
 fn parse_model(raw: OpenCodeZenModel) -> ModelMetadata {
     let id = &raw.id;
@@ -112,7 +99,7 @@ fn parse_model(raw: OpenCodeZenModel) -> ModelMetadata {
     let is_free = is_free_model(id);
 
     // Determine API format for routing
-    let api_format = detect_api_format(id);
+    let api_format = detect_opencodezen_format(id);
 
     ModelMetadata {
         id: raw.id,
@@ -278,46 +265,8 @@ fn generate_display_name(id: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::super::models::ApiFormat;
     use super::*;
-
-    #[test]
-    fn test_detect_api_format() {
-        // Anthropic format
-        assert!(matches!(
-            detect_api_format("claude-opus-4-5"),
-            ApiFormat::Anthropic
-        ));
-        assert!(matches!(
-            detect_api_format("claude-sonnet-4"),
-            ApiFormat::Anthropic
-        ));
-        assert!(matches!(
-            detect_api_format("minimax-m2.1-free"),
-            ApiFormat::Anthropic
-        ));
-
-        // OpenAI Responses format
-        assert!(matches!(
-            detect_api_format("gpt-5.1-codex"),
-            ApiFormat::OpenAIResponses
-        ));
-        assert!(matches!(
-            detect_api_format("gpt-5-nano"),
-            ApiFormat::OpenAIResponses
-        ));
-
-        // Google format
-        assert!(matches!(
-            detect_api_format("gemini-3-pro"),
-            ApiFormat::Google
-        ));
-
-        // OpenAI chat format
-        assert!(matches!(detect_api_format("glm-4.6"), ApiFormat::OpenAI));
-        assert!(matches!(detect_api_format("kimi-k2"), ApiFormat::OpenAI));
-        assert!(matches!(detect_api_format("grok-code"), ApiFormat::OpenAI));
-        assert!(matches!(detect_api_format("big-pickle"), ApiFormat::OpenAI));
-    }
 
     #[test]
     fn test_is_free_model() {

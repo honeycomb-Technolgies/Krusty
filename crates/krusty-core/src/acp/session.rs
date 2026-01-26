@@ -9,11 +9,11 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use agent_client_protocol::{McpServer, SessionId};
 use dashmap::DashMap;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
 
 use super::error::AcpError;
@@ -22,6 +22,9 @@ use crate::storage::SessionManager as StorageSessionManager;
 use crate::tools::ToolContext;
 
 /// Thread-safe wrapper for storage session manager
+///
+/// Uses tokio::sync::Mutex to avoid blocking the tokio runtime when
+/// acquiring the lock in async contexts.
 pub type StorageHandle = Arc<Mutex<StorageSessionManager>>;
 
 /// Session state for a single ACP session
@@ -122,10 +125,9 @@ impl SessionState {
                 };
                 match serde_json::to_string(&message.content) {
                     Ok(content_json) => {
-                        if let Ok(storage) = storage.lock() {
-                            if let Err(e) = storage.save_message(session_id, role, &content_json) {
-                                warn!("Failed to persist message to storage: {}", e);
-                            }
+                        let storage = storage.lock().await;
+                        if let Err(e) = storage.save_message(session_id, role, &content_json) {
+                            warn!("Failed to persist message to storage: {}", e);
                         }
                     }
                     Err(e) => {
@@ -141,7 +143,7 @@ impl SessionState {
         if let Some(ref storage) = self.storage {
             let working_dir = self.cwd.to_string_lossy();
             let result = {
-                let storage = storage.lock().ok()?;
+                let storage = storage.lock().await;
                 storage.create_session(title, None, Some(&working_dir))
             };
             match result {
@@ -172,9 +174,7 @@ impl SessionState {
         })?;
 
         let raw_messages = {
-            let storage = storage.lock().map_err(|e| {
-                AcpError::InternalError(format!("Failed to acquire storage lock: {}", e))
-            })?;
+            let storage = storage.lock().await;
             storage
                 .load_session_messages(storage_session_id)
                 .map_err(|e| {
@@ -481,6 +481,7 @@ mod tests {
     async fn test_session_with_storage() {
         use crate::storage::Database;
         use tempfile::tempdir;
+        use tokio::sync::Mutex;
 
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("test.db");
@@ -506,6 +507,7 @@ mod tests {
     async fn test_session_load_from_storage() {
         use crate::storage::Database;
         use tempfile::tempdir;
+        use tokio::sync::Mutex;
 
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("test.db");

@@ -3,7 +3,8 @@
 //! Extracted auth logic to reduce app.rs complexity.
 
 use crate::ai::client::AiClientConfig;
-use crate::ai::models::{ApiFormat, SharedModelRegistry};
+use crate::ai::format_detection::detect_api_format;
+use crate::ai::models::SharedModelRegistry;
 use crate::ai::providers::{get_provider, translate_model_or_default, ProviderId};
 use crate::storage::CredentialStore;
 
@@ -38,17 +39,16 @@ pub fn create_client_config(
         }
     };
 
-    // Determine API format based on provider
-    // - OpenCode Zen: model-specific format routing (Anthropic/OpenAI/Google)
-    // - Kimi: uses OpenAI chat/completions format
-    // - All others: Anthropic-compatible format
-    let api_format = match provider {
-        ProviderId::OpenCodeZen => model_registry
+    // Determine API format based on provider and model
+    // For OpenCodeZen: try registry first (may have richer metadata), fallback to detection
+    // For others: use canonical detection logic
+    let api_format = if provider == ProviderId::OpenCodeZen {
+        model_registry
             .try_get_model(model)
             .map(|m| m.api_format)
-            .unwrap_or(ApiFormat::Anthropic),
-        ProviderId::Kimi => ApiFormat::OpenAI,
-        _ => ApiFormat::Anthropic,
+            .unwrap_or_else(|| detect_api_format(provider, model))
+    } else {
+        detect_api_format(provider, model)
     };
 
     AiClientConfig {

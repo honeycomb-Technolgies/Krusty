@@ -560,7 +560,7 @@ impl Agent for KrustyAgent {
 
         // Check storage for existing messages (scope the lock)
         let has_stored_messages = if let Some(storage) = self.sessions.storage() {
-            let storage_lock = storage.lock().unwrap();
+            let storage_lock = storage.lock().await;
             let messages = storage_lock.load_session_messages(&session_id_str);
             matches!(messages, Ok(ref msgs) if !msgs.is_empty())
         } else {

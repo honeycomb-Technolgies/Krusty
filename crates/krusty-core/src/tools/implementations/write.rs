@@ -63,39 +63,17 @@ impl Tool for WriteTool {
             ));
         }
 
-        // First resolve the path normally
-        let path = ctx.resolve_path(&params.file_path);
+        // Resolve path with sandbox enforcement (handles non-existent parent directories securely)
+        let path = match ctx.sandboxed_resolve_new_path(&params.file_path) {
+            Ok(p) => p,
+            Err(e) => {
+                return ToolResult::error(format!("Access denied: {}", e));
+            }
+        };
         info!(
             "Write tool: resolved path = {:?}, working_dir = {:?}",
             path, ctx.working_dir
         );
-
-        // Validate sandbox if configured (must check before creating directories)
-        if let Some(ref sandbox) = ctx.sandbox_root {
-            // For new files, validate the parent directory is within sandbox
-            let check_path = if path.exists() {
-                path.clone()
-            } else {
-                path.parent()
-                    .map(|p| p.to_path_buf())
-                    .unwrap_or_else(|| path.clone())
-            };
-
-            if let Ok(canonical) = check_path.canonicalize() {
-                if !canonical.starts_with(sandbox) {
-                    return ToolResult::error(format!(
-                        "Access denied: path '{}' is outside workspace",
-                        params.file_path
-                    ));
-                }
-            } else if !check_path.starts_with(sandbox) {
-                // Parent doesn't exist yet - check if it would be within sandbox
-                return ToolResult::error(format!(
-                    "Access denied: path '{}' is outside workspace",
-                    params.file_path
-                ));
-            }
-        }
 
         // Create parent directories if needed
         if let Some(parent) = path.parent().filter(|p| !p.exists()) {

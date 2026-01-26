@@ -53,8 +53,25 @@ struct Architecture {
 }
 
 /// Fetch all available models from OpenRouter
+///
+/// Optionally accepts a shared HTTP client to avoid creating new connections.
 pub async fn fetch_models(api_key: &str) -> Result<Vec<ModelMetadata>> {
-    let client = Client::new();
+    fetch_models_with_client(api_key, None).await
+}
+
+/// Fetch models with an optional shared HTTP client
+pub async fn fetch_models_with_client(
+    api_key: &str,
+    client: Option<&Client>,
+) -> Result<Vec<ModelMetadata>> {
+    let owned_client;
+    let client = match client {
+        Some(c) => c,
+        None => {
+            owned_client = Client::new();
+            &owned_client
+        }
+    };
 
     info!("Fetching models from OpenRouter...");
 

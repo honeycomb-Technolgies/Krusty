@@ -60,10 +60,39 @@ install() {
     echo "Installing Krusty $VERSION for $PLATFORM..."
 
     DOWNLOAD_URL="https://github.com/$REPO/releases/download/$VERSION/krusty-$PLATFORM.$EXT"
+    CHECKSUM_URL="$DOWNLOAD_URL.sha256"
     TMP_DIR="$(mktemp -d)"
 
     echo "Downloading from $DOWNLOAD_URL..."
     curl -fsSL "$DOWNLOAD_URL" -o "$TMP_DIR/krusty.$EXT"
+
+    # Download and verify checksum if available
+    if curl -fsSL "$CHECKSUM_URL" -o "$TMP_DIR/krusty.$EXT.sha256" 2>/dev/null; then
+        echo "Verifying checksum..."
+        cd "$TMP_DIR"
+        if command -v sha256sum >/dev/null 2>&1; then
+            if ! sha256sum -c "krusty.$EXT.sha256" >/dev/null 2>&1; then
+                echo "Error: Checksum verification failed!"
+                echo "The downloaded file may be corrupted. Please try again."
+                rm -rf "$TMP_DIR"
+                exit 1
+            fi
+            echo "Checksum verified."
+        elif command -v shasum >/dev/null 2>&1; then
+            # macOS uses shasum
+            if ! shasum -a 256 -c "krusty.$EXT.sha256" >/dev/null 2>&1; then
+                echo "Error: Checksum verification failed!"
+                echo "The downloaded file may be corrupted. Please try again."
+                rm -rf "$TMP_DIR"
+                exit 1
+            fi
+            echo "Checksum verified."
+        else
+            echo "Warning: No sha256sum or shasum found, skipping verification."
+        fi
+    else
+        echo "Note: No checksum file available for verification."
+    fi
 
     echo "Extracting..."
     cd "$TMP_DIR"

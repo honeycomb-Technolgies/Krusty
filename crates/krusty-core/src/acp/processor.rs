@@ -18,7 +18,7 @@ use anyhow::Result;
 use tracing::{debug, error, info, warn};
 
 use crate::ai::client::{AiClient, AiClientConfig, CallOptions};
-use crate::ai::models::ApiFormat;
+use crate::ai::format_detection::detect_api_format;
 use crate::ai::providers::{get_provider, AuthHeader, ProviderId};
 use crate::ai::streaming::StreamPart;
 use crate::ai::types::{AiToolCall, Content, FinishReason};
@@ -82,12 +82,8 @@ impl PromptProcessor {
             (model, None, AuthHeader::XApiKey, HashMap::new())
         };
 
-        // Determine API format - Kimi uses OpenAI format, others use Anthropic
-        let api_format = if provider == ProviderId::Kimi {
-            ApiFormat::OpenAI
-        } else {
-            ApiFormat::Anthropic
-        };
+        // Determine API format based on provider and model
+        let api_format = detect_api_format(provider, &model);
 
         let config = AiClientConfig {
             model: model.clone(),

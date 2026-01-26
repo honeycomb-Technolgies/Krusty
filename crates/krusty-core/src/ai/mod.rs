@@ -6,6 +6,7 @@
 // Modular architecture
 pub mod client;
 pub mod format;
+pub mod format_detection;
 pub mod retry;
 
 // Provider-specific configuration

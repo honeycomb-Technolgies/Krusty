@@ -3,10 +3,17 @@
 use anyhow::Result;
 use rusqlite::Connection;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use tracing::info;
 
 /// Current schema version
 const SCHEMA_VERSION: i32 = 11;
+
+/// Shared database handle for connection reuse
+///
+/// Wraps a Database in Arc<Mutex> for safe sharing across components.
+/// Use this instead of creating multiple Database instances.
+pub type SharedDatabase = Arc<Mutex<Database>>;
 
 /// SQLite database wrapper
 pub struct Database {
@@ -38,6 +45,13 @@ impl Database {
     /// Get the underlying connection
     pub fn conn(&self) -> &Connection {
         &self.conn
+    }
+
+    /// Create a shared database handle for connection reuse
+    ///
+    /// Use this when multiple components need to share a single connection.
+    pub fn shared(path: &Path) -> Result<SharedDatabase> {
+        Ok(Arc::new(Mutex::new(Self::new(path)?)))
     }
 
     /// Get the current schema version from database

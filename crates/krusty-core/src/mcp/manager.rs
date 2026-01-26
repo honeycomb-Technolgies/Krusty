@@ -87,7 +87,7 @@ impl McpManager {
         Ok(())
     }
 
-    /// Connect to all local servers
+    /// Connect to all local servers in parallel
     pub async fn connect_all(&self) -> Result<()> {
         let configs: Vec<_> = {
             let configs = self.configs.read().await;
@@ -98,10 +98,31 @@ impl McpManager {
                 .collect()
         };
 
-        info!("Connecting to {} local MCP servers", configs.len());
-        for (name, _) in configs {
-            info!("Attempting to connect to MCP server: {}", name);
-            if let Err(e) = self.connect(&name).await {
+        if configs.is_empty() {
+            return Ok(());
+        }
+
+        info!(
+            "Connecting to {} local MCP servers in parallel",
+            configs.len()
+        );
+
+        // Connect to all servers in parallel
+        let connect_futures: Vec<_> = configs
+            .iter()
+            .map(|(name, _)| {
+                let name = name.clone();
+                async move {
+                    info!("Attempting to connect to MCP server: {}", name);
+                    (name.clone(), self.connect(&name).await)
+                }
+            })
+            .collect();
+
+        let results = futures::future::join_all(connect_futures).await;
+
+        for (name, result) in results {
+            if let Err(e) = result {
                 warn!("Failed to connect to MCP server {}: {:?}", name, e);
             }
         }

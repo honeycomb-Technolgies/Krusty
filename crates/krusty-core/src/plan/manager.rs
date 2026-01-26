@@ -12,21 +12,29 @@ use std::path::PathBuf;
 
 use super::file::{PlanFile, PlanStatus};
 use crate::paths;
-use crate::storage::{Database, PlanStore};
+use crate::storage::{Database, PlanStore, SharedDatabase};
 
 /// Manages plans with SQLite storage
 pub struct PlanManager {
     /// Directory where legacy plan files are stored (for migration)
     plans_dir: PathBuf,
-    /// Database path for plan storage
-    db_path: PathBuf,
+    /// Shared database connection for plan storage
+    db: SharedDatabase,
 }
 
 impl PlanManager {
-    /// Create a new plan manager with database path
-    pub fn new(db_path: PathBuf) -> Result<Self> {
+    /// Create a new plan manager with shared database
+    pub fn with_shared_db(db: SharedDatabase) -> Result<Self> {
         let plans_dir = paths::ensure_plans_dir()?;
-        Ok(Self { plans_dir, db_path })
+        Ok(Self { plans_dir, db })
+    }
+
+    /// Create a new plan manager with database path (creates new connection)
+    ///
+    /// Prefer `with_shared_db` when you have a shared database available.
+    pub fn new(db_path: PathBuf) -> Result<Self> {
+        let db = Database::shared(&db_path)?;
+        Self::with_shared_db(db)
     }
 
     /// Get plan for a session (database-backed, no working_dir fallback)
@@ -34,7 +42,10 @@ impl PlanManager {
     /// This is the primary method for loading plans. Plans are strictly
     /// linked to sessions via the database.
     pub fn get_plan(&self, session_id: &str) -> Result<Option<PlanFile>> {
-        let db = Database::new(&self.db_path)?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
         let store = PlanStore::new(&db);
         store.get_plan_for_session(session_id)
     }
@@ -43,7 +54,10 @@ impl PlanManager {
     ///
     /// If session already has a plan, it will be replaced.
     pub fn save_plan_for_session(&self, session_id: &str, plan: &PlanFile) -> Result<()> {
-        let db = Database::new(&self.db_path)?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
         let store = PlanStore::new(&db);
         store.upsert_plan(session_id, plan)?;
         Ok(())
@@ -51,14 +65,17 @@ impl PlanManager {
 
     /// Abandon plan for a session (deletes from database)
     pub fn abandon_plan(&self, session_id: &str) -> Result<bool> {
-        let db = Database::new(&self.db_path)?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
         let store = PlanStore::new(&db);
         store.abandon_plan(session_id)
     }
 
     /// Check if session has an active plan
     pub fn has_plan(&self, session_id: &str) -> bool {
-        let Ok(db) = Database::new(&self.db_path) else {
+        let Ok(db) = self.db.lock() else {
             return false;
         };
         let store = PlanStore::new(&db);
@@ -67,7 +84,10 @@ impl PlanManager {
 
     /// Update plan content for a session
     pub fn update_plan(&self, session_id: &str, plan: &PlanFile) -> Result<()> {
-        let db = Database::new(&self.db_path)?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
         let store = PlanStore::new(&db);
         store.update_content(session_id, plan)
     }
@@ -109,7 +129,10 @@ impl PlanManager {
     /// Queries the database for completed plans where the linked session
     /// is in the specified working directory.
     pub fn list_completed_for_dir(&self, working_dir: &str) -> Result<Vec<PlanSummary>> {
-        let db = Database::new(&self.db_path)?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
         let store = PlanStore::new(&db);
 
         let all_plans = store.list_all()?;
@@ -195,7 +218,10 @@ impl PlanManager {
         let mut migrated = 0;
         let mut skipped = 0;
 
-        let db = Database::new(&self.db_path)?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
         let store = PlanStore::new(&db);
 
         for summary in legacy_plans {
@@ -304,6 +330,7 @@ pub struct LegacyPlanSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
 
     fn setup_test_manager() -> (PlanManager, TempDir) {
@@ -329,9 +356,12 @@ mod tests {
                 rusqlite::params!["session-456", "Test Session 2", &now, &now],
             )
             .unwrap();
-        drop(db);
 
-        let manager = PlanManager { plans_dir, db_path };
+        let shared_db = Arc::new(Mutex::new(db));
+        let manager = PlanManager {
+            plans_dir,
+            db: shared_db,
+        };
         (manager, temp_dir)
     }
 

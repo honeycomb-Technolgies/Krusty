@@ -17,7 +17,7 @@ mod preferences;
 mod sessions;
 
 pub use credentials::CredentialStore;
-pub use database::Database;
+pub use database::{Database, SharedDatabase};
 pub use file_activity::{FileActivityTracker, RankedFile};
 pub use plans::{PlanStore, PlanSummary};
 pub use preferences::Preferences;
