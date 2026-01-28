@@ -616,7 +616,23 @@ impl App {
 
     /// Handle plan confirmation answer
     fn handle_plan_confirm_answer(&mut self, answers: &[crate::tui::components::PromptAnswer]) {
+        use crate::ai::types::{ModelMessage, Role};
         use crate::tui::components::PromptAnswer;
+
+        // Flush any pending tool results that were deferred while prompt was visible
+        let pending_results = std::mem::take(&mut self.pending_tool_results);
+        if !pending_results.is_empty() {
+            tracing::info!(
+                "Flushing {} pending tool results after plan confirmation",
+                pending_results.len()
+            );
+            let msg = ModelMessage {
+                role: Role::User,
+                content: pending_results,
+            };
+            self.chat.conversation.push(msg.clone());
+            self.save_model_message(&msg);
+        }
 
         match answers.first() {
             Some(PromptAnswer::Selected(idx)) => {
@@ -642,6 +658,7 @@ impl App {
                         self.active_plan = None;
                         self.plan_sidebar.reset();
                         self.ui.work_mode = crate::tui::app::WorkMode::Build;
+                        // Don't continue AI conversation - user abandoned
                     }
                     _ => {}
                 }
@@ -707,15 +724,20 @@ impl App {
             is_error: None,
         };
 
+        // Include any pending tool results that were deferred while prompt was visible
+        let mut content = std::mem::take(&mut self.pending_tool_results);
+        content.push(tool_result);
+
         // Add to conversation as user message (tool results are sent as user role)
         let msg = ModelMessage {
             role: Role::User,
-            content: vec![tool_result],
+            content,
         };
 
         tracing::info!(
             tool_use_id = %tool_use_id,
             answer_count = answers.len(),
+            pending_results = msg.content.len() - 1,
             "Sending AskUserQuestion tool result"
         );
 

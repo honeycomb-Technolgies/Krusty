@@ -623,8 +623,28 @@ impl App {
         let dual_mind_tx = if self.dual_mind.is_some() {
             let (tx, rx) = mpsc::unbounded_channel::<DualMindUpdate>();
             self.channels.dual_mind = Some(rx);
+            // DEBUG: Log that dual-mind is active for this execution
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/tmp/dual_mind_dialogue.log")
+            {
+                use std::io::Write;
+                let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+                let _ = writeln!(file, "\n[{}] TOOL EXECUTION: dual_mind is ACTIVE", timestamp);
+            }
             Some(tx)
         } else {
+            // DEBUG: Log that dual-mind is not active
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/tmp/dual_mind_dialogue.log")
+            {
+                use std::io::Write;
+                let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+                let _ = writeln!(file, "\n[{}] TOOL EXECUTION: dual_mind is NONE", timestamp);
+            }
             None
         };
 

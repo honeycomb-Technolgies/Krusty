@@ -24,8 +24,7 @@ use std::{
 use tokio::sync::RwLock;
 
 use crate::agent::{
-    dual_mind::DualMind, AgentCancellation, AgentConfig, AgentEventBus, AgentState,
-    UserHookManager,
+    dual_mind::DualMind, AgentCancellation, AgentConfig, AgentEventBus, AgentState, UserHookManager,
 };
 use crate::ai::client::AiClient;
 use crate::ai::models::SharedModelRegistry;

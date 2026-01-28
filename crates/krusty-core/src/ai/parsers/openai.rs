@@ -45,6 +45,37 @@ impl OpenAIParser {
                 }
             }
 
+            // Reasoning/thinking deltas (OpenAI o1, codex, GPT-5 reasoning models)
+            "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
+                if let Some(delta) = json.get("delta").and_then(|d| d.as_str()) {
+                    if !delta.is_empty() {
+                        tracing::debug!("Reasoning delta: {}...", &delta.chars().take(50).collect::<String>());
+                        return SseEvent::ThinkingDelta {
+                            index: 0,
+                            thinking: delta.to_string(),
+                        };
+                    }
+                }
+            }
+
+            // Reasoning part started - emit ThinkingStart
+            "response.reasoning_summary_part.added" => {
+                tracing::info!("Reasoning block started");
+                return SseEvent::ThinkingStart { index: 0 };
+            }
+
+            // Reasoning complete
+            "response.reasoning_summary_text.done"
+            | "response.reasoning_text.done"
+            | "response.reasoning_summary_part.done" => {
+                tracing::info!("Reasoning block complete");
+                return SseEvent::ThinkingComplete {
+                    index: 0,
+                    thinking: String::new(), // Already sent via deltas
+                    signature: String::new(),
+                };
+            }
+
             // Response completed - check for accumulated tool calls and extract usage
             "response.done" | "response.completed" => {
                 // Extract usage from the response field (Codex API format)

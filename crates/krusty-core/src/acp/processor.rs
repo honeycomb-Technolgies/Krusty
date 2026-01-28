@@ -27,7 +27,6 @@ use tracing::{debug, error, info, warn};
 use crate::agent::dual_mind::{
     DialogueResult, DialogueTurn, DualMind, DualMindConfig, Observation,
 };
-use crate::agent::AgentCancellation;
 use crate::ai::client::{AiClient, AiClientConfig, CallOptions};
 use crate::ai::format_detection::detect_api_format;
 use crate::ai::providers::{get_provider, AuthHeader, ProviderId};
@@ -136,10 +135,8 @@ impl PromptProcessor {
 
         // Initialize dual-mind if enabled
         if self.dual_mind_config.enabled {
-            let cancellation = AgentCancellation::new();
             let dual_mind = DualMind::with_tools(
                 client,
-                cancellation,
                 self.dual_mind_config.clone(),
                 self.tools.clone(),
                 self.cwd.clone(),

@@ -174,6 +174,20 @@ impl App {
     fn init_dual_mind(&mut self) {
         let Some(client) = self.create_ai_client() else {
             self.dual_mind = None;
+            // DEBUG: Log initialization failure
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/tmp/dual_mind_dialogue.log")
+            {
+                use std::io::Write;
+                let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+                let _ = writeln!(
+                    file,
+                    "\n[{}] INIT FAILED: Could not create AI client for Little Claw",
+                    timestamp
+                );
+            }
             return;
         };
 
@@ -186,7 +200,6 @@ impl App {
 
         let dual_mind = DualMind::with_tools(
             client,
-            self.cancellation.clone(),
             config,
             self.services.tool_registry.clone(),
             self.working_dir.clone(),
@@ -194,5 +207,20 @@ impl App {
 
         self.dual_mind = Some(Arc::new(RwLock::new(dual_mind)));
         tracing::info!("Dual-mind system initialized (Big Claw / Little Claw)");
+
+        // DEBUG: Log successful initialization
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/dual_mind_dialogue.log")
+        {
+            use std::io::Write;
+            let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+            let _ = writeln!(
+                file,
+                "\n[{}] INIT SUCCESS: Dual-mind system initialized",
+                timestamp
+            );
+        }
     }
 }

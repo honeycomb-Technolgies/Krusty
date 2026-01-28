@@ -150,12 +150,17 @@ impl DualMind {
     /// Returns the dialogue result.
     pub async fn pre_review(&mut self, intent: &str) -> DialogueResult {
         if !self.config.enabled {
+            Self::log_to_file("[PRE-REVIEW] SKIPPED: dual-mind disabled");
             return DialogueResult::Skipped;
         }
 
         // Check if this is trivial (skip review)
         if self.is_trivial_action(intent) {
             debug!("Skipping pre-review for trivial action");
+            Self::log_to_file(&format!(
+                "[PRE-REVIEW] SKIPPED (trivial): {}",
+                &intent.chars().take(100).collect::<String>()
+            ));
             return DialogueResult::Skipped;
         }
 
@@ -166,9 +171,18 @@ impl DualMind {
                 max = self.config.max_discussion_depth * 2,
                 "Hit max discussion depth, Big Claw proceeds"
             );
+            Self::log_to_file(&format!(
+                "[PRE-REVIEW] SKIPPED (max depth {}): {}",
+                self.dialogue_depth(),
+                &intent.chars().take(100).collect::<String>()
+            ));
             return DialogueResult::Skipped;
         }
 
+        Self::log_to_file(&format!(
+            "[PRE-REVIEW] PROCEEDING with review for: {}",
+            &intent.chars().take(200).collect::<String>()
+        ));
         info!("Little Claw reviewing intent before action");
 
         // Add Big Claw's intent to dialogue
@@ -194,6 +208,7 @@ impl DualMind {
     /// Returns Enhancement if quality issues found.
     pub async fn post_review(&mut self, output: &str) -> DialogueResult {
         if !self.config.enabled {
+            Self::log_to_file("[POST-REVIEW] SKIPPED: dual-mind disabled");
             return DialogueResult::Skipped;
         }
 
@@ -204,9 +219,17 @@ impl DualMind {
                 max = self.config.max_discussion_depth * 2,
                 "Hit max discussion depth, skipping post-review"
             );
+            Self::log_to_file(&format!(
+                "[POST-REVIEW] SKIPPED (max depth {})",
+                self.dialogue_depth()
+            ));
             return DialogueResult::Skipped;
         }
 
+        Self::log_to_file(&format!(
+            "[POST-REVIEW] PROCEEDING with review ({} chars output)",
+            output.len()
+        ));
         info!("Little Claw reviewing output after action");
 
         let result = self.little_claw.review_output(output).await;
@@ -248,6 +271,19 @@ impl DualMind {
         ];
 
         trivial_patterns.iter().any(|p| lower.contains(p))
+    }
+
+    /// DEBUG: Log to /tmp/dual_mind_dialogue.log for verification
+    fn log_to_file(msg: &str) {
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/dual_mind_dialogue.log")
+        {
+            use std::io::Write;
+            let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+            let _ = writeln!(file, "[{}] {}", timestamp, msg);
+        }
     }
 
     /// Get Little Claw reference for direct interaction

@@ -278,6 +278,10 @@ impl App {
             });
         }
 
+        // Fix orphaned tool calls (tool_use without tool_result)
+        // This happens when a session is interrupted mid-tool-execution
+        self.fix_orphaned_tool_calls();
+
         // Build caches and display from conversation
         self.build_tool_results_cache();
         self.build_display_from_conversation();
@@ -767,6 +771,70 @@ impl App {
                     }
                 }
             }
+        }
+    }
+
+    /// Fix orphaned tool calls by injecting placeholder results
+    ///
+    /// When a session is interrupted mid-tool-execution, there may be ToolUse
+    /// content without corresponding ToolResult. This causes API errors like
+    /// "No tool output found for function call". This function detects and
+    /// patches these orphans by inserting placeholder results.
+    fn fix_orphaned_tool_calls(&mut self) {
+        use std::collections::HashSet;
+
+        // Collect all tool_use IDs and tool_result IDs
+        let mut tool_use_ids: HashSet<String> = HashSet::new();
+        let mut tool_result_ids: HashSet<String> = HashSet::new();
+
+        for msg in &self.chat.conversation {
+            for content in &msg.content {
+                match content {
+                    Content::ToolUse { id, .. } => {
+                        tool_use_ids.insert(id.clone());
+                    }
+                    Content::ToolResult { tool_use_id, .. } => {
+                        tool_result_ids.insert(tool_use_id.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Find orphaned tool calls
+        let orphaned: Vec<String> = tool_use_ids
+            .difference(&tool_result_ids)
+            .cloned()
+            .collect();
+
+        if orphaned.is_empty() {
+            return;
+        }
+
+        tracing::warn!(
+            "Found {} orphaned tool calls without results, injecting placeholders: {:?}",
+            orphaned.len(),
+            orphaned
+        );
+
+        // Create placeholder tool results for each orphan
+        let placeholder_results: Vec<Content> = orphaned
+            .into_iter()
+            .map(|id| Content::ToolResult {
+                tool_use_id: id,
+                output: serde_json::Value::String(
+                    "[Session interrupted - tool execution was cancelled]".to_string(),
+                ),
+                is_error: Some(true),
+            })
+            .collect();
+
+        // Append as a user message with tool results (Anthropic style)
+        if !placeholder_results.is_empty() {
+            self.chat.conversation.push(ModelMessage {
+                role: Role::User,
+                content: placeholder_results,
+            });
         }
     }
 }

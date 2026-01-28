@@ -44,6 +44,10 @@ impl FormatHandler for OpenAIFormat {
     /// Some providers (like Kimi) require user/assistant messages to strictly alternate.
     /// If there are consecutive same-role messages, we insert filler messages.
     ///
+    /// ORPHANED TOOL CALLS: If a session was interrupted mid-tool-execution, there may be
+    /// tool_calls without matching tool results. This function detects and handles them
+    /// by adding placeholder results to prevent API errors.
+    ///
     /// THINKING BLOCKS: Preserved as text content prefixed with "[Thinking]" for
     /// providers that support reasoning/thinking models via OpenAI format.
     fn convert_messages(
@@ -51,6 +55,37 @@ impl FormatHandler for OpenAIFormat {
         messages: &[ModelMessage],
         _provider_id: Option<ProviderId>,
     ) -> Vec<Value> {
+        // First pass: collect all tool_use IDs and tool_result IDs
+        let mut tool_use_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut tool_result_ids: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+
+        for msg in messages {
+            for content in &msg.content {
+                match content {
+                    Content::ToolUse { id, .. } => {
+                        tool_use_ids.insert(id.clone());
+                    }
+                    Content::ToolResult { tool_use_id, .. } => {
+                        tool_result_ids.insert(tool_use_id.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Find orphaned tool calls (tool_use without matching tool_result)
+        let orphaned_ids: std::collections::HashSet<&String> =
+            tool_use_ids.difference(&tool_result_ids).collect();
+
+        if !orphaned_ids.is_empty() {
+            debug!(
+                "Found {} orphaned tool calls without results: {:?}",
+                orphaned_ids.len(),
+                orphaned_ids
+            );
+        }
+
         let mut result: Vec<Value> = Vec::new();
         let mut last_role: Option<&str> = None;
 
@@ -119,11 +154,16 @@ impl FormatHandler for OpenAIFormat {
             if has_tool_use && role == "assistant" {
                 let mut tool_calls = Vec::new();
                 let mut text_content = String::new();
+                let mut orphaned_tool_ids: Vec<String> = Vec::new();
 
                 for content in &msg.content {
                     match content {
                         Content::Text { text } => text_content.push_str(text),
                         Content::ToolUse { id, name, input } => {
+                            // Track if this tool call is orphaned (no result)
+                            if orphaned_ids.contains(&id) {
+                                orphaned_tool_ids.push(id.clone());
+                            }
                             tool_calls.push(serde_json::json!({
                                 "id": id,
                                 "type": "function",
@@ -156,6 +196,21 @@ impl FormatHandler for OpenAIFormat {
                     msg_obj["content"] = serde_json::json!(text_content);
                 }
                 result.push(msg_obj);
+
+                // Add placeholder results for orphaned tool calls
+                // This prevents "No tool output found for function call" errors
+                for orphan_id in orphaned_tool_ids {
+                    debug!(
+                        "Adding placeholder result for orphaned tool call: {}",
+                        orphan_id
+                    );
+                    result.push(serde_json::json!({
+                        "role": "tool",
+                        "tool_call_id": orphan_id,
+                        "content": "[Tool execution was interrupted - session resumed]"
+                    }));
+                }
+
                 last_role = Some(role);
                 continue;
             }

@@ -172,6 +172,12 @@ impl App {
 
     /// Send the current conversation to the AI and start streaming response
     pub fn send_to_ai(&mut self) {
+        // Block sending while decision prompt is visible (waiting for user input)
+        if self.decision_prompt.visible {
+            tracing::info!("send_to_ai blocked - waiting for user decision");
+            return;
+        }
+
         if self.is_busy() {
             tracing::warn!("send_to_ai called while already busy - skipping");
             return;

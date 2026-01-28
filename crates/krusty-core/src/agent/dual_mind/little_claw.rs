@@ -185,6 +185,18 @@ impl LittleClaw {
         // Sync any pending observations first
         self.sync_observations().await;
 
+        // DEBUG: Log to file for verification
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/dual_mind_dialogue.log")
+        {
+            use std::io::Write;
+            let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+            let _ = writeln!(file, "\n[{}] === PRE-REVIEW ===", timestamp);
+            let _ = writeln!(file, "[BIG CLAW INTENT]: {}", intent);
+        }
+
         let prompt = format!(
             "Big Claw is about to take this action:\n\n{}\n\n\
             Review this intent. Ask yourself:\n\
@@ -206,6 +218,18 @@ impl LittleClaw {
     pub async fn review_output(&self, output: &str) -> DialogueResult {
         // Sync any pending observations first
         self.sync_observations().await;
+
+        // DEBUG: Log to file for verification
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/dual_mind_dialogue.log")
+        {
+            use std::io::Write;
+            let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+            let _ = writeln!(file, "\n[{}] === POST-REVIEW ===", timestamp);
+            let _ = writeln!(file, "[BIG CLAW OUTPUT]: {}...", &output.chars().take(500).collect::<String>());
+        }
 
         // Truncate very long output
         let truncated_output = if output.len() > 3000 {
@@ -256,10 +280,29 @@ impl LittleClaw {
             );
 
             // Make the streaming API call
+            // DEBUG: Log API call attempt
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/tmp/dual_mind_dialogue.log")
+            {
+                use std::io::Write;
+                let _ = writeln!(file, "[LITTLE CLAW] Making API call (turn {})...", turn);
+            }
+
             let rx = match self.client.call_streaming(messages, &options).await {
                 Ok(rx) => rx,
                 Err(e) => {
                     warn!("Little Claw API call failed: {}", e);
+                    // DEBUG: Log failure
+                    if let Ok(mut file) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open("/tmp/dual_mind_dialogue.log")
+                    {
+                        use std::io::Write;
+                        let _ = writeln!(file, "[LITTLE CLAW] API CALL FAILED: {}", e);
+                    }
                     return DialogueResult::Skipped;
                 }
             };
@@ -300,6 +343,17 @@ impl LittleClaw {
                         text: response.clone(),
                     }],
                 });
+            }
+
+            // DEBUG: Log Little Claw's response
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/tmp/dual_mind_dialogue.log")
+            {
+                use std::io::Write;
+                let _ = writeln!(file, "[LITTLE CLAW RESPONSE]: {}", response);
+                let _ = writeln!(file, "---");
             }
 
             // Determine result type based on response content

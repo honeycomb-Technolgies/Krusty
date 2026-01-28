@@ -19,13 +19,11 @@ pub mod gamepad;
 pub mod kitty_graphics;
 pub mod libretro;
 pub mod retroarch;
-pub mod visualizer;
 
 pub use brick_breaker::BrickBreakerPlugin;
 pub use gamepad::GamepadHandler;
 pub use kitty_graphics::{KittyGraphics, PluginFrame};
 pub use retroarch::RetroArchPlugin;
-pub use visualizer::VisualizerPlugin;
 
 /// Result of plugin event handling
 #[derive(Debug, Clone, PartialEq)]
@@ -102,7 +100,6 @@ pub trait Plugin: Send + Sync {
 /// List of available built-in plugins
 pub fn builtin_plugins() -> Vec<Box<dyn Plugin>> {
     vec![
-        Box::new(VisualizerPlugin::new()),
         Box::new(RetroArchPlugin::new()),
         Box::new(BrickBreakerPlugin::new()),
     ]
@@ -111,7 +108,6 @@ pub fn builtin_plugins() -> Vec<Box<dyn Plugin>> {
 /// Get a plugin by ID
 pub fn get_plugin_by_id(id: &str) -> Option<Box<dyn Plugin>> {
     match id {
-        "visualizer" => Some(Box::new(VisualizerPlugin::new())),
         "retroarch" => Some(Box::new(RetroArchPlugin::new())),
         "brick_breaker" => Some(Box::new(BrickBreakerPlugin::new())),
         _ => None,
