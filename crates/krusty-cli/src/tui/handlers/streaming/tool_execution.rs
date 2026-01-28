@@ -680,8 +680,14 @@ impl App {
                 let tool_name = tool_call.name.clone();
 
                 // Pre-review: Little Claw questions the intent before execution
-                // Only for significant tools, not trivial operations
-                if let Some(ref dm) = dual_mind {
+                // Only review mutating tools - read-only tools don't need quality review
+                let is_mutating_tool = matches!(
+                    tool_name.as_str(),
+                    "edit" | "write" | "bash" | "build" | "Edit" | "Write" | "Bash"
+                );
+
+                if is_mutating_tool && dual_mind.is_some() {
+                    let dm = dual_mind.as_ref().unwrap();
                     // Create concise intent summary (not full JSON dump)
                     let intent = create_intent_summary(&tool_name, &tool_call.arguments);
 
@@ -764,15 +770,17 @@ impl App {
                     }
 
                     // Post-review: Little Claw validates the output
-                    // Only reviews successful, non-trivial outputs
-                    let final_output = if let Some(ref dm) = dual_mind {
-                        if !result.is_error && result.output.len() > 100 {
+                    // Only reviews mutating tools with successful, non-trivial outputs
+                    let final_output = if is_mutating_tool
+                        && !result.is_error
+                        && result.output.len() > 100
+                    {
+                        if let Some(ref dm) = dual_mind {
                             let review_result = {
                                 let mut dm_guard = dm.write().await;
                                 dm_guard.post_review(&result.output).await
                             };
 
-                            // Only act on actual concerns
                             if let DialogueResult::NeedsEnhancement { critique, .. } = review_result
                             {
                                 tracing::info!(
@@ -780,17 +788,14 @@ impl App {
                                     tool_name,
                                     critique
                                 );
-                                // Send enhancement notification with review output for insight extraction
                                 if let Some(ref tx) = dual_mind_tx {
                                     let _ = tx.send(DualMindUpdate {
                                         enhancement: Some(critique.clone()),
                                         review_output: Some(critique.clone()),
                                     });
                                 }
-                                // Append critique to output so Big Claw sees it
                                 format!("{}\n\n[Quality Review]: {}", result.output, critique)
                             } else {
-                                // Send review output for insight extraction even on approval
                                 if let Some(ref tx) = dual_mind_tx {
                                     let _ = tx.send(DualMindUpdate {
                                         enhancement: None,
