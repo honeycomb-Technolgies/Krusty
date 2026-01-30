@@ -307,12 +307,13 @@ pub fn create_insight(
     content: &str,
     session_id: Option<&str>,
     confidence: f64,
+    insight_type: Option<InsightType>,
 ) -> CodebaseInsight {
     let now = Utc::now();
     CodebaseInsight {
         id: uuid::Uuid::new_v4().to_string(),
         codebase_id: codebase_id.to_string(),
-        insight_type: InsightType::classify(content),
+        insight_type: insight_type.unwrap_or_else(|| InsightType::classify(content)),
         content: content.to_string(),
         embedding: None,
         confidence,

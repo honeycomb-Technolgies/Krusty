@@ -10,10 +10,20 @@ use crate::tui::polling::{
 
 /// Split exploration text into individual insight paragraphs
 fn split_into_insights(text: &str) -> Vec<String> {
+    // Strip markdown headers before splitting — they're structural, not content
+    let cleaned: String = text
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            !trimmed.starts_with("## ") && !trimmed.starts_with("### ")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
     let mut insights = Vec::new();
 
     // Split by double newlines (paragraphs) first, then by bullet points
-    for section in text.split("\n\n") {
+    for section in cleaned.split("\n\n") {
         let trimmed = section.trim();
         if trimmed.is_empty() {
             continue;
@@ -89,6 +99,7 @@ impl App {
                                     content,
                                     Some(session_id),
                                     0.6,
+                                    None,
                                 );
                                 if let Err(e) = insight_store.create(&insight) {
                                     tracing::warn!(error = %e, "Failed to save insight");
@@ -192,7 +203,7 @@ impl App {
         let session_id = self.current_session_id.as_deref();
         let mut stored = 0;
 
-        for (content, _label) in [
+        for (content, label) in [
             (architecture, "architecture"),
             (conventions, "conventions"),
             (key_files, "key_files"),
@@ -202,6 +213,20 @@ impl App {
                 continue;
             }
 
+            let (insight_type, confidence) = match label {
+                "architecture" => (
+                    krusty_core::index::insights::InsightType::Architecture,
+                    0.90,
+                ),
+                "conventions" => (krusty_core::index::insights::InsightType::Convention, 0.85),
+                "key_files" => (
+                    krusty_core::index::insights::InsightType::Architecture,
+                    0.80,
+                ),
+                "build_system" => (krusty_core::index::insights::InsightType::Dependency, 0.85),
+                _ => unreachable!(),
+            };
+
             for paragraph in split_into_insights(content) {
                 match insight_store.has_similar(&codebase.id, &paragraph) {
                     Ok(false) => {
@@ -209,7 +234,8 @@ impl App {
                             &codebase.id,
                             &paragraph,
                             session_id,
-                            0.85,
+                            confidence,
+                            Some(insight_type),
                         );
                         if let Err(e) = insight_store.create(&insight) {
                             tracing::warn!(error = %e, "Failed to save /init insight");

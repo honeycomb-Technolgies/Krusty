@@ -296,13 +296,36 @@ impl App {
         let indexing_working_dir = working_dir.clone();
 
         // Spawn indexing in blocking task (opens its own DB connection)
+        // Attempts embeddings first; falls back to sync indexing without embeddings
         tokio::task::spawn_blocking(move || {
             let result = (|| -> Result<(), String> {
                 let db = Database::new(&db_path).map_err(|e| e.to_string())?;
-                let mut indexer = Indexer::new().map_err(|e| e.to_string())?;
-                indexer
-                    .index_codebase_sync(db.conn(), &indexing_working_dir, Some(indexing_tx))
-                    .map_err(|e| e.to_string())?;
+
+                // Try with embeddings first (uses async index_codebase via block_on)
+                match Indexer::new().map_err(|e| e.to_string())?.with_embeddings() {
+                    Ok(mut indexer) => {
+                        tracing::info!("Indexing with embeddings enabled");
+                        let handle = tokio::runtime::Handle::current();
+                        handle
+                            .block_on(indexer.index_codebase(
+                                db.conn(),
+                                &indexing_working_dir,
+                                Some(indexing_tx),
+                            ))
+                            .map_err(|e| e.to_string())?;
+                    }
+                    Err(e) => {
+                        tracing::info!("Embeddings unavailable ({e}), indexing without");
+                        let mut indexer = Indexer::new().map_err(|e| e.to_string())?;
+                        indexer
+                            .index_codebase_sync(
+                                db.conn(),
+                                &indexing_working_dir,
+                                Some(indexing_tx),
+                            )
+                            .map_err(|e| e.to_string())?;
+                    }
+                }
                 Ok(())
             })();
             let _ = indexing_done_tx.send(result);
@@ -805,9 +828,12 @@ fn clean_ai_output(text: &str) -> String {
 
     let mut lines: Vec<&str> = text.lines().collect();
 
-    // Remove lines that start with filler
+    // Remove lines that start with filler or are h2 headers (template already provides those)
     lines.retain(|line| {
         let trimmed = line.trim();
+        if trimmed.starts_with("## ") {
+            return false;
+        }
         !FILLER_STARTS.iter().any(|f| trimmed.starts_with(f))
     });
 
