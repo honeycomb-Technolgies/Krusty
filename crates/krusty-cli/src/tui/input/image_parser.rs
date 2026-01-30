@@ -55,13 +55,16 @@ pub fn parse_input(text: &str, working_dir: &Path) -> Vec<InputSegment> {
             InputSegment::ImageUrl(inner.to_string())
         } else if inner.starts_with("clipboard:") {
             InputSegment::ClipboardImage(inner.to_string())
-        } else {
+        } else if has_supported_extension(inner) {
             let path = if Path::new(inner).is_absolute() {
                 PathBuf::from(inner)
             } else {
                 working_dir.join(inner)
             };
             InputSegment::ImagePath(path)
+        } else {
+            // Not a recognized file type — skip, leave as plain text
+            continue;
         };
 
         matches.push((full_match.start(), full_match.end(), segment));
@@ -134,9 +137,31 @@ pub fn parse_input(text: &str, working_dir: &Path) -> Vec<InputSegment> {
     segments
 }
 
+/// Supported file extensions for attachment
+const SUPPORTED_EXTENSIONS: &[&str] = &["pdf", "png", "jpg", "jpeg", "gif", "webp"];
+
+fn has_supported_extension(s: &str) -> bool {
+    let path = Path::new(s);
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| SUPPORTED_EXTENSIONS.contains(&e.to_lowercase().as_str()))
+        .unwrap_or(false)
+}
+
 /// Check if input contains any file references
 pub fn has_file_references(text: &str) -> bool {
-    BRACKET_PATTERN.is_match(text) || RAW_PATH_PATTERN.is_match(text)
+    if RAW_PATH_PATTERN.is_match(text) {
+        return true;
+    }
+    BRACKET_PATTERN
+        .captures_iter(text)
+        .any(|cap| {
+            let inner = cap.get(1).unwrap().as_str().trim();
+            inner.starts_with("http://")
+                || inner.starts_with("https://")
+                || inner.starts_with("clipboard:")
+                || has_supported_extension(inner)
+        })
 }
 
 /// Backwards compat alias
@@ -199,5 +224,30 @@ mod tests {
         assert!(
             matches!(&segments[0], InputSegment::ImagePath(p) if p.ends_with("docs/report.pdf"))
         );
+    }
+
+    #[test]
+    fn test_brackets_without_file_extension_are_plain_text() {
+        let text = "error [ble: exit 101] happened";
+        let segments = parse_input(text, Path::new("/home"));
+        assert_eq!(segments.len(), 1);
+        assert!(matches!(&segments[0], InputSegment::Text(t) if t == text));
+        assert!(!has_file_references(text));
+    }
+
+    #[test]
+    fn test_brackets_with_supported_extension_are_file_paths() {
+        let segments = parse_input("[screenshot.png]", Path::new("/home"));
+        assert_eq!(segments.len(), 1);
+        assert!(matches!(&segments[0], InputSegment::ImagePath(_)));
+        assert!(has_file_references("[screenshot.png]"));
+    }
+
+    #[test]
+    fn test_mixed_brackets_file_and_non_file() {
+        let segments = parse_input("[note] check [./photo.jpg]", Path::new("/home"));
+        assert_eq!(segments.len(), 2);
+        assert!(matches!(&segments[0], InputSegment::Text(t) if t == "[note] check"));
+        assert!(matches!(&segments[1], InputSegment::ImagePath(p) if p.ends_with("photo.jpg")));
     }
 }
