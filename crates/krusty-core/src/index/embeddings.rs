@@ -27,7 +27,7 @@ impl EmbeddingEngine {
 
         let mut options = InitOptions::default();
         options.model_name = EmbeddingModel::BGESmallENV15;
-        options.show_download_progress = true;
+        options.show_download_progress = false;
 
         let model =
             TextEmbedding::try_new(options).context("Failed to initialize embedding model")?;
@@ -36,6 +36,12 @@ impl EmbeddingEngine {
         Ok(Self {
             model: Arc::new(RwLock::new(model)),
         })
+    }
+
+    /// Spawn initialization on a blocking thread so it doesn't block the event loop.
+    /// Returns a JoinHandle that resolves to the ready engine.
+    pub fn init_async() -> tokio::task::JoinHandle<Result<Self>> {
+        tokio::task::spawn_blocking(Self::new)
     }
 
     /// Generate embedding for a single text

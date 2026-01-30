@@ -17,10 +17,6 @@ impl App {
     /// called in main.rs. If a pending file still exists, it means apply failed,
     /// so we clean it up rather than showing a toast every restart.
     pub fn check_pending_update(&mut self) {
-        if let Ok(version) = std::env::var("KRUSTY_JUST_UPDATED") {
-            self.show_toast(Toast::success(format!("Updated to v{}", version)));
-        }
-
         if has_pending_update() {
             cleanup_pending_update();
             tracing::info!("Cleaned up stale pending update file");

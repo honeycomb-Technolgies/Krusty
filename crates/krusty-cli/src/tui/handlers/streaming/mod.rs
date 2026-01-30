@@ -34,13 +34,22 @@ fn check_file_limit(count: usize) -> anyhow::Result<()> {
 }
 
 impl App {
-    /// Lazily initialize the embedding engine (one-shot, never retries on failure)
+    /// Resolve the embedding engine from the background init handle, or fall back to sync init.
     fn ensure_embedding_engine(&mut self) {
         if self.embedding_engine.is_some() || self.embedding_init_failed {
             return;
         }
 
-        match krusty_core::index::EmbeddingEngine::new() {
+        let result = if let Some(handle) = self.embedding_handle.take() {
+            // Background init was started in run() — wait for it to finish
+            tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(handle))
+                .unwrap_or_else(|e| Err(anyhow::anyhow!("Embedding init task panicked: {e}")))
+        } else {
+            // Fallback: no handle (e.g. ACP mode) — init synchronously
+            krusty_core::index::EmbeddingEngine::new()
+        };
+
+        match result {
             Ok(engine) => {
                 tracing::info!("Embedding engine initialized for semantic search");
                 self.embedding_engine = Some(engine);

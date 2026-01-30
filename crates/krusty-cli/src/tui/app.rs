@@ -231,9 +231,11 @@ pub struct App {
     // Toast notification queue
     pub toasts: crate::tui::components::ToastQueue,
 
-    // Semantic retrieval embedding engine (lazy-initialized)
+    // Semantic retrieval embedding engine (eager background init)
     pub embedding_engine: Option<krusty_core::index::EmbeddingEngine>,
     pub embedding_init_failed: bool,
+    pub embedding_handle:
+        Option<tokio::task::JoinHandle<anyhow::Result<krusty_core::index::EmbeddingEngine>>>,
 
     // Auto-updater state
     pub update_status: Option<krusty_core::updater::UpdateStatus>,
@@ -337,6 +339,7 @@ impl App {
             // Semantic retrieval
             embedding_engine: None,
             embedding_init_failed: false,
+            embedding_handle: None,
 
             // Auto-updater
             update_status: None,
@@ -630,6 +633,9 @@ impl App {
                 self.start_opencodezen_fetch();
             }
         }
+
+        // Eagerly initialize embedding engine in background
+        self.embedding_handle = Some(krusty_core::index::EmbeddingEngine::init_async());
 
         // Register built-in LSPs (downloads if needed)
         let downloader = crate::lsp::LspDownloader::new();
