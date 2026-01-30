@@ -9,7 +9,7 @@ use std::os::unix::io::AsRawFd;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use parking_lot::Mutex;
 use ratatui::{buffer::Buffer, layout::Rect};
-use std::ffi::CString;
+use std::ffi::{c_char, CString};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -384,7 +384,7 @@ extern "C" fn environment(cmd: u32, data: *mut std::ffi::c_void) -> bool {
             // CString that lives for the program lifetime. The libretro API expects
             // a pointer to a C string pointer for GET_SYSTEM_DIRECTORY.
             unsafe {
-                *(data as *mut *const i8) = SYSTEM_DIR.as_ptr();
+                *(data as *mut *const c_char) = SYSTEM_DIR.as_ptr();
             }
             true
         }
@@ -394,7 +394,7 @@ extern "C" fn environment(cmd: u32, data: *mut std::ffi::c_void) -> bool {
             }
             // SAFETY: Same as GetSystemDirectory - SAVE_DIR is a static CString.
             unsafe {
-                *(data as *mut *const i8) = SAVE_DIR.as_ptr();
+                *(data as *mut *const c_char) = SAVE_DIR.as_ptr();
             }
             true
         }
