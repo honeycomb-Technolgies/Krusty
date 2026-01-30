@@ -17,9 +17,11 @@ impl App {
     /// called in main.rs. If a pending file still exists, it means apply failed,
     /// so we clean it up rather than showing a toast every restart.
     pub fn check_pending_update(&mut self) {
+        if let Ok(version) = std::env::var("KRUSTY_JUST_UPDATED") {
+            self.show_toast(Toast::success(format!("Updated to v{}", version)));
+        }
+
         if has_pending_update() {
-            // The pending update wasn't applied (probably failed)
-            // Clean it up - a fresh update check will download again if needed
             cleanup_pending_update();
             tracing::info!("Cleaned up stale pending update file");
         }
@@ -27,6 +29,12 @@ impl App {
 
     /// Start background update check
     pub fn start_update_check(&mut self) {
+        // Skip if we just applied an update this session — the in-memory VERSION
+        // constant is stale and would trigger a redundant re-download loop
+        if std::env::var("KRUSTY_JUST_UPDATED").is_ok() {
+            return;
+        }
+
         // Don't start if already checking
         if self.channels.update_status.is_some() {
             return;

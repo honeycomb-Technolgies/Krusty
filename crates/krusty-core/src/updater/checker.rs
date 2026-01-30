@@ -47,6 +47,11 @@ pub fn pending_update_path() -> PathBuf {
     std::env::temp_dir().join("krusty-pending-update")
 }
 
+/// Path to the version file saved alongside the pending update
+fn pending_version_path() -> PathBuf {
+    std::env::temp_dir().join("krusty-pending-update.version")
+}
+
 /// Check if there's a pending update ready to apply
 pub fn has_pending_update() -> bool {
     pending_update_path().exists()
@@ -249,6 +254,9 @@ async fn download_update_release(
     // Cleanup archive
     let _ = std::fs::remove_file(&archive_path);
 
+    // Save version alongside the pending binary so apply_pending_update() knows what was downloaded
+    let _ = std::fs::write(pending_version_path(), version);
+
     let _ = progress_tx.send(UpdateStatus::Ready {
         version: version.to_string(),
     });
@@ -310,6 +318,9 @@ async fn download_update_dev(
         std::fs::set_permissions(&dest, perms)?;
     }
 
+    // Save version alongside the pending binary so apply_pending_update() knows what was downloaded
+    let _ = std::fs::write(pending_version_path(), version);
+
     let _ = progress_tx.send(UpdateStatus::Ready {
         version: version.to_string(),
     });
@@ -365,8 +376,12 @@ pub fn apply_pending_update() -> Result<Option<String>> {
         info!("Update applied successfully");
     }
 
-    // Try to read version from the new binary (optional)
-    Ok(Some("latest".to_string()))
+    // Read the version that was saved alongside the pending update
+    let version =
+        std::fs::read_to_string(pending_version_path()).unwrap_or_else(|_| "latest".to_string());
+    let _ = std::fs::remove_file(pending_version_path());
+
+    Ok(Some(version))
 }
 
 /// Clean up any pending update (if user wants to cancel)
@@ -374,6 +389,7 @@ pub fn cleanup_pending_update() {
     let pending = pending_update_path();
     if pending.exists() {
         let _ = std::fs::remove_file(&pending);
+        let _ = std::fs::remove_file(pending_version_path());
         info!("Cleaned up pending update");
     }
 }
