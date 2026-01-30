@@ -16,16 +16,47 @@ use crate::tui::themes::Theme;
 
 pub mod brick_breaker;
 pub mod galaga;
+#[cfg(unix)]
 pub mod gamepad;
 pub mod kitty_graphics;
+#[cfg(unix)]
 pub mod libretro;
+#[cfg(unix)]
 pub mod retroarch;
 
 pub use brick_breaker::BrickBreakerPlugin;
 pub use galaga::GalagaPlugin;
+#[cfg(unix)]
 pub use gamepad::GamepadHandler;
 pub use kitty_graphics::{KittyGraphics, PluginFrame};
+#[cfg(unix)]
 pub use retroarch::RetroArchPlugin;
+
+/// No-op gamepad handler for non-Unix platforms
+#[cfg(not(unix))]
+pub struct GamepadHandler;
+
+#[cfg(not(unix))]
+impl GamepadHandler {
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub fn poll(&mut self) -> bool {
+        false
+    }
+
+    pub fn pressed_buttons(&self) -> std::iter::Empty<u8> {
+        std::iter::empty()
+    }
+}
+
+#[cfg(not(unix))]
+impl Default for GamepadHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Result of plugin event handling
 #[derive(Debug, Clone, PartialEq)]
@@ -101,16 +132,19 @@ pub trait Plugin: Send + Sync {
 
 /// List of available built-in plugins
 pub fn builtin_plugins() -> Vec<Box<dyn Plugin>> {
-    vec![
-        Box::new(RetroArchPlugin::new()),
+    let mut plugins: Vec<Box<dyn Plugin>> = vec![
         Box::new(BrickBreakerPlugin::new()),
         Box::new(GalagaPlugin::new()),
-    ]
+    ];
+    #[cfg(unix)]
+    plugins.insert(0, Box::new(RetroArchPlugin::new()));
+    plugins
 }
 
 /// Get a plugin by ID
 pub fn get_plugin_by_id(id: &str) -> Option<Box<dyn Plugin>> {
     match id {
+        #[cfg(unix)]
         "retroarch" => Some(Box::new(RetroArchPlugin::new())),
         "brick_breaker" => Some(Box::new(BrickBreakerPlugin::new())),
         "galaga" => Some(Box::new(GalagaPlugin::new())),

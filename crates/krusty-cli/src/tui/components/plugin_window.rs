@@ -258,7 +258,8 @@ impl PluginWindowState {
             needs_redraw = true;
         }
 
-        // Pass gamepad button states to RetroArch plugin
+        // Pass gamepad button states to RetroArch plugin (Unix only)
+        #[cfg(unix)]
         if let Some(ref mut plugin) = self.active_plugin {
             if plugin.id() == "retroarch" {
                 if let Some(retroarch) = plugin

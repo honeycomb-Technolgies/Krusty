@@ -116,9 +116,6 @@ libloading = "0.8"
 parking_lot = "0.12"
 moka = { version = "0.12", features = ["sync"] }
 
-# Gamepad support
-gilrs = "0.11"
-
 # File System
 ignore = "0.4"
 
@@ -128,6 +125,10 @@ pulldown-cmark = "0.13.0"
 
 # Syntax Highlighting
 syntect = { version = "5.2", default-features = false, features = ["default-fancy"] }
+
+# Gamepad support (Unix only — libudev on Linux, IOKit on macOS)
+[target.'cfg(unix)'.dependencies]
+gilrs = "0.11"
 
 [dev-dependencies]
 tempfile = "3.14"
