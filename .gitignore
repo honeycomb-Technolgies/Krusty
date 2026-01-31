@@ -8,8 +8,8 @@ CLAUDE.md
 target/
 .fastembed_cache/
 
-# MCP server overrides (user preferences)
-# This file stores which MCP servers are enabled/disabled per project
+# MCP configuration (user-specific)
+.mcp.json
 .mcp_overrides.json
 
 # IDE and editor files
