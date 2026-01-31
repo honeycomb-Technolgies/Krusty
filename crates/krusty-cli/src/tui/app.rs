@@ -238,6 +238,7 @@ pub struct App {
         Option<tokio::task::JoinHandle<anyhow::Result<krusty_core::index::EmbeddingEngine>>>,
 
     // Auto-updater state
+    pub just_updated: bool,
     pub update_status: Option<krusty_core::updater::UpdateStatus>,
     /// Path to the krusty repo (for self-update)
     #[allow(dead_code)] // Infrastructure for future auto-update feature
@@ -342,6 +343,7 @@ impl App {
             embedding_handle: None,
 
             // Auto-updater
+            just_updated: false,
             update_status: None,
             update_repo_path: krusty_core::updater::detect_repo_path(),
 
@@ -579,13 +581,13 @@ impl App {
     pub async fn run(&mut self) -> Result<()> {
         let _ = self.try_load_auth().await;
 
-        // Check if we just applied an update (set by main.rs)
-        if let Ok(version) = std::env::var("KRUSTY_JUST_UPDATED") {
-            std::env::remove_var("KRUSTY_JUST_UPDATED");
+        // Check if we just applied an update (marker file written by apply_pending_update)
+        if let Some(version) = krusty_core::updater::read_update_marker() {
             self.show_toast(crate::tui::components::Toast::success(format!(
                 "Updated to v{}",
                 version
             )));
+            self.just_updated = true;
         }
 
         // Check for pending update from previous session (cleans up stale files)

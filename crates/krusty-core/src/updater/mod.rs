@@ -7,6 +7,6 @@ mod checker;
 
 pub use checker::{
     apply_pending_update, check_for_updates, cleanup_pending_update, detect_repo_path,
-    download_update, has_pending_update, is_dev_mode, pending_update_path, UpdateInfo,
-    UpdateStatus, VERSION,
+    download_update, has_pending_update, is_dev_mode, pending_update_path, read_update_marker,
+    UpdateInfo, UpdateStatus, VERSION,
 };

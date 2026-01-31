@@ -27,7 +27,7 @@ impl App {
     pub fn start_update_check(&mut self) {
         // Skip if we just applied an update this session — the in-memory VERSION
         // constant is stale and would trigger a redundant re-download loop
-        if std::env::var("KRUSTY_JUST_UPDATED").is_ok() {
+        if self.just_updated {
             return;
         }
 

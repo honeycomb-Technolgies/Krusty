@@ -103,10 +103,8 @@ async fn main() -> Result<()> {
         .init();
 
     // Apply any pending update before starting TUI
-    // This ensures updates are applied silently on restart
+    // This writes a persistent marker file that the TUI reads to show a toast
     if let Ok(Some(version)) = krusty_core::updater::apply_pending_update() {
-        // Set env var so TUI can show success toast
-        std::env::set_var("KRUSTY_JUST_UPDATED", &version);
         tracing::info!("Applied pending update to v{}", version);
     }
 

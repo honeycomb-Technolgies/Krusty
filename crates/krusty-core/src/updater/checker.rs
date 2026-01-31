@@ -10,7 +10,7 @@ use tracing::{debug, info};
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// GitHub repo for releases
-const GITHUB_REPO: &str = "BurgessTG/Krusty";
+const GITHUB_REPO: &str = "honeycomb-Technologies/Krusty";
 
 /// Update status
 #[derive(Debug, Clone, PartialEq)]
@@ -50,6 +50,11 @@ pub fn pending_update_path() -> PathBuf {
 /// Path to the version file saved alongside the pending update
 fn pending_version_path() -> PathBuf {
     std::env::temp_dir().join("krusty-pending-update.version")
+}
+
+/// Path to the persistent marker written after a successful update apply
+fn update_marker_path() -> PathBuf {
+    crate::paths::config_dir().join("last-update-version")
 }
 
 /// Check if there's a pending update ready to apply
@@ -381,7 +386,22 @@ pub fn apply_pending_update() -> Result<Option<String>> {
         std::fs::read_to_string(pending_version_path()).unwrap_or_else(|_| "latest".to_string());
     let _ = std::fs::remove_file(pending_version_path());
 
+    // Write persistent marker so the TUI can show a toast after restart
+    let _ = std::fs::create_dir_all(crate::paths::config_dir());
+    let _ = std::fs::write(update_marker_path(), &version);
+
     Ok(Some(version))
+}
+
+/// Read and consume the update marker file left by `apply_pending_update()`.
+/// Returns `Some(version)` if an update was just applied, `None` otherwise.
+/// The marker is deleted on read so the toast only shows once.
+pub fn read_update_marker() -> Option<String> {
+    let path = update_marker_path();
+    let version = std::fs::read_to_string(&path).ok()?;
+    let _ = std::fs::remove_file(&path);
+    let trimmed = version.trim().to_string();
+    (!trimmed.is_empty() && trimmed != "latest").then_some(trimmed)
 }
 
 /// Clean up any pending update (if user wants to cancel)
