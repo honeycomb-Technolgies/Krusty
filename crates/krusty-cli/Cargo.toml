@@ -52,9 +52,6 @@ portable-pty = "0.8"
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }
 
-# LSP
-lsp-types = "0.97"
-
 # WASM Extensions (Zed compatibility) - must match Zed's versions exactly
 wasmtime = { version = "29", default-features = false, features = [
     "async",

@@ -31,7 +31,6 @@ use crate::ai::models::SharedModelRegistry;
 use crate::ai::providers::ProviderId;
 use crate::ai::types::{AiTool, AiToolCall, Content};
 use crate::extensions::WasmHost;
-use crate::lsp::LspManager;
 use crate::plan::{PlanFile, PlanManager};
 use crate::process::ProcessRegistry;
 use crate::storage::{CredentialStore, Preferences, SessionManager};
@@ -65,8 +64,6 @@ pub enum Popup {
     ThemeSelect,
     Help,
     SessionList,
-    LspBrowser,
-    LspInstall,
     McpBrowser,
     ProcessList,
     Pinch,
@@ -107,10 +104,7 @@ pub struct AppServices {
     pub cached_ai_tools: Vec<AiTool>,
     pub user_hook_manager: Arc<RwLock<UserHookManager>>,
 
-    // LSP/Extensions
-    pub lsp_manager: Arc<LspManager>,
-    pub lsp_skip_list: std::collections::HashSet<String>,
-    pub pending_lsp_install: Option<crate::lsp::manager::MissingLspInfo>,
+    // Extensions
     pub wasm_host: Option<Arc<WasmHost>>,
 
     // Skills/MCP
@@ -174,7 +168,7 @@ pub struct App {
     // Title editing state
     pub title_editor: TitleEditor,
 
-    // Async channel receivers (LSP, tool results, bash output)
+    // Async channel receivers (tool results, bash output)
     pub channels: AsyncChannels,
 
     // /init exploration tracking
@@ -208,9 +202,6 @@ pub struct App {
 
     // Clipboard images pending resolution (id -> RGBA bytes)
     pub pending_clipboard_images: std::collections::HashMap<String, (usize, usize, Vec<u8>)>,
-
-    // Extensions installed mid-session that need LSP registration
-    pub pending_extension_paths: Vec<PathBuf>,
 
     // Block manager - owns all block types and their state
     // NOTE: Being phased out in favor of conversation-based rendering
@@ -315,9 +306,6 @@ impl App {
 
             // Clipboard images
             pending_clipboard_images: std::collections::HashMap::new(),
-
-            // Extensions to register
-            pending_extension_paths: Vec::new(),
 
             // Block manager (owns all block types)
             blocks: BlockManager::new(),
@@ -555,28 +543,6 @@ impl App {
         }
     }
 
-    /// Initialize language servers from loaded WASM extensions
-    pub async fn initialize_extension_servers(&self) -> Result<()> {
-        crate::tui::extensions::initialize_extension_servers(
-            self.services.wasm_host.as_ref(),
-            &self.services.lsp_manager,
-            &self.working_dir,
-        )
-        .await
-    }
-
-    /// Register language servers for a single extension
-    /// Used after installing extensions mid-session
-    pub async fn register_extension_servers(&self, extension_path: &Path) -> Result<()> {
-        crate::tui::extensions::register_extension_servers(
-            self.services.wasm_host.as_ref(),
-            &self.services.lsp_manager,
-            &self.working_dir,
-            extension_path,
-        )
-        .await
-    }
-
     /// Run the application
     pub async fn run(&mut self) -> Result<()> {
         let _ = self.try_load_auth().await;
@@ -638,18 +604,6 @@ impl App {
 
         // Eagerly initialize embedding engine in background
         self.embedding_handle = Some(krusty_core::index::EmbeddingEngine::init_async());
-
-        // Register built-in LSPs (downloads if needed)
-        let downloader = crate::lsp::LspDownloader::new();
-        self.services
-            .lsp_manager
-            .register_all_builtins(&downloader)
-            .await;
-
-        // Then extension LSPs (can override built-ins)
-        if let Err(e) = self.initialize_extension_servers().await {
-            tracing::warn!("Failed to initialize extension servers: {}", e);
-        }
 
         enable_raw_mode()?;
         let mut stdout = io::stdout();
@@ -774,26 +728,10 @@ impl App {
             }
 
             // Poll async operations
-            self.poll_lsp_install();
-            self.poll_builtin_lsp_install();
-            self.poll_extension_lsp_install();
-            self.poll_extensions_fetch();
             self.poll_openrouter_fetch();
             self.poll_opencodezen_fetch();
             self.poll_title_generation();
             self.poll_summarization();
-
-            // Check for missing LSP notifications from tools (populates pending_lsp_install)
-            self.poll_missing_lsp();
-            // Then check if we should show the install prompt popup
-            self.poll_pending_lsp_install();
-
-            // Register language servers for newly installed extensions
-            for path in std::mem::take(&mut self.pending_extension_paths) {
-                if let Err(e) = self.register_extension_servers(&path).await {
-                    tracing::error!("Failed to register extension servers: {}", e);
-                }
-            }
 
             // Update menu animations (only when on start menu for efficiency)
             if self.ui.view == View::StartMenu {

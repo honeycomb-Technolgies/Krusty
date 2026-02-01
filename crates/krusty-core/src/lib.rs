@@ -3,7 +3,6 @@
 //! This crate provides the core functionality for the Krusty TUI:
 //! - Multi-provider AI clients (Anthropic, OpenRouter, etc.)
 //! - Tool execution framework
-//! - LSP integration via Zed's WASM extension system
 //! - Session and preference storage
 //! - MCP (Model Context Protocol) support
 //! - ACP (Agent Client Protocol) server for editor integration
@@ -15,7 +14,6 @@ pub mod auth;
 pub mod constants;
 pub mod extensions;
 pub mod index;
-pub mod lsp;
 pub mod mcp;
 pub mod paths;
 pub mod plan;

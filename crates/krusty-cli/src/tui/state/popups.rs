@@ -4,10 +4,9 @@
 
 use crate::tui::popups::{
     auth::AuthPopup, file_preview::FilePreviewPopup, help::HelpPopup, hooks::HooksPopup,
-    lsp_browser::LspBrowserPopup, lsp_install::LspInstallPopup, mcp_browser::McpBrowserPopup,
-    model_select::ModelSelectPopup, pinch::PinchPopup, process_list::ProcessListPopup,
-    session_list::SessionListPopup, skills_browser::SkillsBrowserPopup,
-    theme_select::ThemeSelectPopup,
+    mcp_browser::McpBrowserPopup, model_select::ModelSelectPopup, pinch::PinchPopup,
+    process_list::ProcessListPopup, session_list::SessionListPopup,
+    skills_browser::SkillsBrowserPopup, theme_select::ThemeSelectPopup,
 };
 
 /// All popup controller states grouped together
@@ -17,8 +16,6 @@ pub struct PopupState {
     pub model: ModelSelectPopup,
     pub session: SessionListPopup,
     pub auth: AuthPopup,
-    pub lsp: LspBrowserPopup,
-    pub lsp_install: LspInstallPopup,
     pub mcp: McpBrowserPopup,
     pub process: ProcessListPopup,
     pub pinch: PinchPopup,
@@ -38,8 +35,6 @@ impl PopupState {
             model: ModelSelectPopup::new(),
             session: SessionListPopup::new(),
             auth: AuthPopup::new(),
-            lsp: LspBrowserPopup::new(),
-            lsp_install: LspInstallPopup::new(),
             mcp: McpBrowserPopup::new(),
             process: ProcessListPopup::new(),
             pinch: PinchPopup::new(),

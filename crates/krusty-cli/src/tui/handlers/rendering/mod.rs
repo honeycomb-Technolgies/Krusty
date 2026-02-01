@@ -40,8 +40,6 @@ impl App {
             ),
             Popup::SessionList => self.popups.session.render(f, &self.ui.theme),
             Popup::Auth => self.popups.auth.render(f, &self.ui.theme),
-            Popup::LspBrowser => self.popups.lsp.render(f, &self.ui.theme),
-            Popup::LspInstall => self.popups.lsp_install.render(f, &self.ui.theme),
             Popup::ProcessList => self.popups.process.render(f, &self.ui.theme),
             Popup::Pinch => self.popups.pinch.render(f, &self.ui.theme),
             Popup::FilePreview => self.popups.file_preview.render(f, &self.ui.theme),

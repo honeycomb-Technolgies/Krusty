@@ -279,7 +279,6 @@ impl App {
         self.ensure_embedding_engine();
 
         // Build context
-        let diagnostics_context = self.build_diagnostics_context();
         let plan_context = self.build_plan_context();
         let skills_context = self.build_skills_context();
         let project_context = self.build_project_context();
@@ -312,10 +311,6 @@ impl App {
                 "Context: search"
             );
         }
-        if !diagnostics_context.is_empty() {
-            tracing::info!(chars = diagnostics_context.len(), "Context: diagnostics");
-        }
-
         let has_thinking_conversation = self.thinking_enabled
             && self.chat.conversation.iter().any(|msg| {
                 msg.role == Role::Assistant
@@ -390,34 +385,6 @@ impl App {
                     role: Role::System,
                     content: vec![Content::Text {
                         text: search_context,
-                    }],
-                },
-            );
-        }
-
-        // Inject diagnostics as user/assistant pair
-        if !diagnostics_context.is_empty() && !has_thinking_conversation {
-            let system_count = conversation
-                .iter()
-                .take_while(|m| m.role == Role::System)
-                .count();
-            let insert_pos = system_count;
-            conversation.insert(
-                insert_pos,
-                ModelMessage {
-                    role: Role::User,
-                    content: vec![Content::Text {
-                        text: diagnostics_context,
-                    }],
-                },
-            );
-            conversation.insert(
-                insert_pos + 1,
-                ModelMessage {
-                    role: Role::Assistant,
-                    content: vec![Content::Text {
-                        text: "I understand the current diagnostics. I'll take them into account."
-                            .to_string(),
                     }],
                 },
             );

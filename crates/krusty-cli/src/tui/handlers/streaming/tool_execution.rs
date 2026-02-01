@@ -613,11 +613,6 @@ impl App {
             None
         };
 
-        // Create missing LSP channel
-        let (missing_lsp_tx, missing_lsp_rx) =
-            mpsc::unbounded_channel::<crate::lsp::manager::MissingLspInfo>();
-        self.channels.missing_lsp = Some(missing_lsp_rx);
-
         // Create dual-mind dialogue channel if dual-mind is active
         let dual_mind_tx = if self.dual_mind.is_some() {
             let (tx, rx) = mpsc::unbounded_channel::<DualMindUpdate>();
@@ -662,7 +657,6 @@ impl App {
 
         // Clone what we need for the spawned task
         let tool_registry = self.services.tool_registry.clone();
-        let lsp_manager = self.services.lsp_manager.clone();
         let process_registry = self.process_registry.clone();
         let skills_manager = self.services.skills_manager.clone();
         let cancel_token = self.cancellation.child_token();
@@ -717,14 +711,10 @@ impl App {
                 let working_dir =
                     std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 
-                let mut ctx = ToolContext::with_lsp_and_processes(
-                    working_dir,
-                    lsp_manager.clone(),
-                    process_registry.clone(),
-                )
-                .with_skills_manager(skills_manager.clone())
-                .with_missing_lsp_channel(missing_lsp_tx.clone())
-                .with_current_model(current_model.clone());
+                let mut ctx =
+                    ToolContext::with_process_registry(working_dir, process_registry.clone())
+                        .with_skills_manager(skills_manager.clone())
+                        .with_current_model(current_model.clone());
                 ctx.plan_mode = plan_mode;
 
                 if tool_name == "bash" {

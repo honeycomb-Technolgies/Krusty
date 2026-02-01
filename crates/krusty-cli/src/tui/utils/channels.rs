@@ -2,16 +2,13 @@
 //!
 //! Groups all async channel receivers used by the App for background tasks.
 
-use std::path::PathBuf;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::agent::subagent::AgentProgress;
 use crate::agent::SummarizationResult;
 use crate::ai::models::ModelMetadata;
 use crate::ai::types::Content;
-use crate::lsp::manager::MissingLspInfo;
 use crate::tools::ToolOutputChunk;
-use crate::tui::popups::lsp_browser::ZedApiExtension;
 use krusty_core::index::IndexProgress;
 
 /// AI-generated title update
@@ -87,12 +84,8 @@ pub struct DeviceCodeInfo {
 /// Container for all async channel receivers
 #[derive(Default)]
 pub struct AsyncChannels {
-    /// LSP installation result receiver
-    pub lsp_install: Option<oneshot::Receiver<Result<PathBuf, String>>>,
     /// MCP status updates from background connection tasks
     pub mcp_status: Option<mpsc::UnboundedReceiver<McpStatusUpdate>>,
-    /// LSP extension fetch result receiver
-    pub lsp_fetch: Option<oneshot::Receiver<Result<Vec<ZedApiExtension>, String>>>,
     /// Streaming bash output receiver
     pub bash_output: Option<mpsc::UnboundedReceiver<ToolOutputChunk>>,
     /// Pending tool execution results receiver
@@ -109,12 +102,6 @@ pub struct AsyncChannels {
     pub openrouter_models: Option<oneshot::Receiver<Result<Vec<ModelMetadata>, String>>>,
     /// OpenCode Zen model fetch result receiver
     pub opencodezen_models: Option<oneshot::Receiver<Result<Vec<ModelMetadata>, String>>>,
-    /// Built-in LSP install result (from prompt popup)
-    pub builtin_lsp_install: Option<oneshot::Receiver<Result<String, String>>>,
-    /// Extension LSP install result (from prompt popup)
-    pub extension_lsp_install: Option<oneshot::Receiver<Result<String, String>>>,
-    /// Missing LSP notifications from tools (to trigger install popup)
-    pub missing_lsp: Option<mpsc::UnboundedReceiver<MissingLspInfo>>,
     /// /init codebase exploration result receiver
     pub init_exploration: Option<oneshot::Receiver<InitExplorationResult>>,
     /// /init exploration progress updates

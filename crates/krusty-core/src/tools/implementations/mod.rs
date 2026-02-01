@@ -54,12 +54,11 @@ pub use write::WriteTool;
 
 use crate::agent::AgentCancellation;
 use crate::ai::client::AiClient;
-use crate::lsp::LspManager;
 use crate::tools::registry::ToolRegistry;
 use std::sync::Arc;
 
 /// Register all built-in tools (except explore which needs client)
-pub async fn register_all_tools(registry: &ToolRegistry, _lsp_manager: Option<Arc<LspManager>>) {
+pub async fn register_all_tools(registry: &ToolRegistry) {
     registry.register(Arc::new(ReadTool)).await;
     registry.register(Arc::new(WriteTool)).await;
     registry.register(Arc::new(EditTool)).await;

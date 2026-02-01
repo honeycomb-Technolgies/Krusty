@@ -255,11 +255,6 @@ pub fn get_all_commands() -> Vec<CommandSuggestion> {
             description: "Manage API providers",
         },
         CommandSuggestion {
-            primary: "/lsp",
-            aliases: vec![],
-            description: "Browse LSP extensions",
-        },
-        CommandSuggestion {
             primary: "/init",
             aliases: vec![],
             description: "Initialize project (create KRAB.md)",

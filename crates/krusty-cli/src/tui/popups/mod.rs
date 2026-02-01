@@ -12,8 +12,6 @@ pub mod common;
 pub mod file_preview;
 pub mod help;
 pub mod hooks;
-pub mod lsp_browser;
-pub mod lsp_install;
 pub mod mcp_browser;
 pub mod model_select;
 pub mod pinch;

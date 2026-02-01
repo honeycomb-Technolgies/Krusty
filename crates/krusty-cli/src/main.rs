@@ -1,7 +1,6 @@
 //! Krusty - The most elegant coding CLI to ever exist
 //!
 //! A terminal-based AI coding assistant with:
-//! - Zed's LSP extension ecosystem for 100+ language servers
 //! - Multi-provider AI with API key authentication
 //! - Single-mode Chat UI with slash commands
 //! - Clean architecture from day one
@@ -10,9 +9,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 // Re-export core modules for TUI usage
-use krusty_core::{
-    acp, agent, ai, constants, extensions, lsp, paths, plan, process, storage, tools,
-};
+use krusty_core::{acp, agent, ai, constants, extensions, paths, plan, process, storage, tools};
 
 mod tui;
 

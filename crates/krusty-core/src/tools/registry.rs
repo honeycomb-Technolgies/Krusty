@@ -12,8 +12,6 @@ use tokio::sync::{mpsc, RwLock};
 use crate::agent::hooks::{HookResult, PostToolHook, PreToolHook};
 use crate::agent::subagent::AgentProgress;
 use crate::ai::types::AiTool;
-use crate::lsp::manager::MissingLspInfo;
-use crate::lsp::LspManager;
 use crate::mcp::McpManager;
 use crate::process::ProcessRegistry;
 use crate::skills::SkillsManager;
@@ -69,7 +67,6 @@ pub struct ToolContext {
     pub sandbox_root: Option<std::path::PathBuf>,
     /// User ID for multi-tenant operation scoping (processes, etc.)
     pub user_id: Option<String>,
-    pub lsp_manager: Option<Arc<LspManager>>,
     pub process_registry: Option<Arc<ProcessRegistry>>,
     pub skills_manager: Option<Arc<RwLock<SkillsManager>>>,
     pub mcp_manager: Option<Arc<McpManager>>,
@@ -85,8 +82,6 @@ pub struct ToolContext {
     pub explore_progress_tx: Option<mpsc::UnboundedSender<AgentProgress>>,
     /// Channel for build tool builder agent progress updates
     pub build_progress_tx: Option<mpsc::UnboundedSender<AgentProgress>>,
-    /// Channel for signaling missing LSP to prompt user for installation
-    pub missing_lsp_tx: Option<mpsc::UnboundedSender<MissingLspInfo>>,
     /// Current user-selected model (for non-Anthropic providers, subagents use this)
     pub current_model: Option<String>,
 }
@@ -97,7 +92,6 @@ impl Default for ToolContext {
             working_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
             sandbox_root: None,
             user_id: None,
-            lsp_manager: None,
             process_registry: None,
             skills_manager: None,
             mcp_manager: None,
@@ -107,35 +101,21 @@ impl Default for ToolContext {
             plan_mode: false,
             explore_progress_tx: None,
             build_progress_tx: None,
-            missing_lsp_tx: None,
             current_model: None,
         }
     }
 }
 
 impl ToolContext {
-    /// Create a new tool context with LSP manager and process registry
-    pub fn with_lsp_and_processes(
+    /// Create a new tool context with process registry
+    pub fn with_process_registry(
         working_dir: std::path::PathBuf,
-        lsp_manager: Arc<LspManager>,
         process_registry: Arc<ProcessRegistry>,
     ) -> Self {
         Self {
             working_dir,
-            sandbox_root: None,
-            user_id: None,
-            lsp_manager: Some(lsp_manager),
             process_registry: Some(process_registry),
-            skills_manager: None,
-            mcp_manager: None,
-            timeout: None,
-            output_tx: None,
-            tool_use_id: None,
-            plan_mode: false,
-            explore_progress_tx: None,
-            build_progress_tx: None,
-            missing_lsp_tx: None,
-            current_model: None,
+            ..Default::default()
         }
     }
 
@@ -160,12 +140,6 @@ impl ToolContext {
     /// Add skills manager to context
     pub fn with_skills_manager(mut self, skills_manager: Arc<RwLock<SkillsManager>>) -> Self {
         self.skills_manager = Some(skills_manager);
-        self
-    }
-
-    /// Add missing LSP notification channel to context
-    pub fn with_missing_lsp_channel(mut self, tx: mpsc::UnboundedSender<MissingLspInfo>) -> Self {
-        self.missing_lsp_tx = Some(tx);
         self
     }
 
@@ -312,39 +286,6 @@ impl ToolContext {
         }
 
         Ok(final_path)
-    }
-
-    /// Notify LSP about a file change and optionally get diagnostics
-    ///
-    /// After modifying a file, triggers LSP analysis and waits briefly
-    /// for diagnostics to be updated.
-    ///
-    /// If no LSP is available for this file type and a suggestion exists,
-    /// sends the info through the missing_lsp_tx channel for user prompting.
-    pub async fn touch_file(&self, path: &std::path::Path, wait_for_diagnostics: bool) {
-        if let Some(ref lsp) = self.lsp_manager {
-            match lsp.touch_file(path, wait_for_diagnostics).await {
-                Ok(Some(missing)) => {
-                    // No LSP for this file - send through channel for user prompting
-                    if let Some(ref tx) = self.missing_lsp_tx {
-                        let _ = tx.send(missing);
-                    }
-                }
-                Ok(None) => {
-                    // LSP handled the file or no suggestion available
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to touch file {:?}: {}", path, e);
-                }
-            }
-        }
-    }
-
-    /// Get formatted diagnostics for a file
-    ///
-    /// Returns XML-formatted diagnostics block if the file has errors.
-    pub fn get_file_diagnostics(&self, path: &std::path::Path) -> Option<String> {
-        self.lsp_manager.as_ref()?.get_file_diagnostics(path)
     }
 }
 
@@ -509,20 +450,7 @@ mod tests {
     fn create_test_context() -> ToolContext {
         ToolContext {
             working_dir: PathBuf::from("/tmp"),
-            sandbox_root: None,
-            user_id: None,
-            lsp_manager: None,
-            process_registry: None,
-            skills_manager: None,
-            mcp_manager: None,
-            timeout: None,
-            output_tx: None,
-            tool_use_id: None,
-            plan_mode: false,
-            explore_progress_tx: None,
-            build_progress_tx: None,
-            missing_lsp_tx: None,
-            current_model: None,
+            ..Default::default()
         }
     }
 
@@ -540,7 +468,6 @@ mod tests {
     async fn test_tool_context_defaults() {
         let ctx = ToolContext::default();
 
-        assert!(ctx.lsp_manager.is_none());
         assert!(ctx.process_registry.is_none());
         assert!(ctx.timeout.is_none());
         assert!(!ctx.plan_mode);

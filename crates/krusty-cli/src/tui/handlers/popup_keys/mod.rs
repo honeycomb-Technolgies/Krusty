@@ -5,7 +5,6 @@
 
 mod auth;
 mod hooks;
-mod lsp;
 mod mcp;
 mod pinch;
 mod process;
@@ -64,17 +63,11 @@ impl App {
             Popup::Auth => {
                 self.handle_auth_popup_key(code, modifiers);
             }
-            Popup::LspBrowser => {
-                self.handle_lsp_popup_key(code);
-            }
             Popup::ProcessList => {
                 self.handle_process_popup_key(code);
             }
             Popup::Pinch => {
                 self.handle_pinch_popup_key(code, modifiers);
-            }
-            Popup::LspInstall => {
-                self.handle_lsp_install_popup_key(code);
             }
             Popup::FilePreview => {
                 self.handle_file_preview_popup_key(code);
