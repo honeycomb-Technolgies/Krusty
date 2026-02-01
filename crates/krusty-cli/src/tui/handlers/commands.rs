@@ -92,12 +92,6 @@ impl App {
                 self.popups.auth.set_configured_providers(configured);
                 self.ui.popup = Popup::Auth;
             }
-            "/lsp" => {
-                self.ui.popup = Popup::LspBrowser;
-                if self.popups.lsp.needs_fetch() {
-                    self.start_extensions_fetch();
-                }
-            }
             "/ps" | "/processes" => {
                 self.refresh_process_popup();
                 self.ui.popup = Popup::ProcessList;

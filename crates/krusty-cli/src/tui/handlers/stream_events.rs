@@ -42,14 +42,7 @@ impl App {
     /// This is the main streaming event loop that handles all StreamEvent variants.
     /// Returns true if any events were processed.
     ///
-    /// IMPORTANT: Processing is paused when LSP install popup is shown.
-    /// This allows the popup to interrupt the conversation and wait for user input.
     pub fn process_stream_events(&mut self) -> bool {
-        // Pause streaming while LSP popup is shown (waiting for user decision)
-        if self.ui.popup == crate::tui::app::Popup::LspInstall {
-            return false;
-        }
-
         let mut processed_any = false;
 
         while let Some(event) = self.streaming.poll() {

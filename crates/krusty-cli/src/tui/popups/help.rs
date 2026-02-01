@@ -154,7 +154,6 @@ impl HelpPopup {
             ("/plan", "View/manage active plan"),
             ("/mcp", "Browse and manage MCP servers"),
             ("/skills", "Browse skills"),
-            ("/lsp", "Browse LSP extensions"),
             ("/ps", "View background processes"),
             ("/terminal", "Open interactive terminal"),
             ("/init", "Generate KRAB.md"),

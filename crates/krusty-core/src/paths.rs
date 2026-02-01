@@ -28,12 +28,6 @@ pub fn tokens_dir() -> PathBuf {
     config_dir().join("tokens")
 }
 
-/// Get the LSP binaries directory (~/.krusty/bin)
-/// Used for auto-downloaded language servers
-pub fn lsp_bin_dir() -> PathBuf {
-    config_dir().join("bin")
-}
-
 /// Get the plans directory (~/.krusty/plans)
 /// Used for storing plan files in plan mode
 pub fn plans_dir() -> PathBuf {

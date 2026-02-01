@@ -10,7 +10,6 @@ use crate::agent::{UserHookManager, UserPostToolHook, UserPreToolHook};
 use crate::ai::models::{create_model_registry, ModelMetadata, SharedModelRegistry};
 use crate::ai::providers::{builtin_providers, ProviderId};
 use crate::extensions::WasmHost;
-use crate::lsp::LspManager;
 use crate::paths;
 use crate::plan::PlanManager;
 use crate::process::ProcessRegistry;
@@ -21,7 +20,7 @@ use crate::tui::themes::{Theme, THEME_REGISTRY};
 use crate::tui::utils::{AsyncChannels, McpStatusUpdate};
 use krusty_core::skills::SkillsManager;
 
-/// Initialize core services (LSP, tools, extensions, etc.)
+/// Initialize core services (tools, extensions, etc.)
 pub async fn init_services(
     working_dir: &Path,
 ) -> (
@@ -33,7 +32,6 @@ pub async fn init_services(
     String,
     ProviderId,
 ) {
-    let lsp_manager = Arc::new(LspManager::new(working_dir.to_path_buf()));
     let process_registry = Arc::new(ProcessRegistry::new());
 
     // WASM extension host
@@ -49,7 +47,7 @@ pub async fn init_services(
     let user_hook_manager = init_user_hooks(&db_path).await;
 
     // Tool registry with hooks
-    let tool_registry = init_tool_registry(&user_hook_manager, &lsp_manager).await;
+    let tool_registry = init_tool_registry(&user_hook_manager).await;
     let cached_ai_tools = tool_registry.get_ai_tools().await;
 
     // Preferences and theme
@@ -108,9 +106,6 @@ pub async fn init_services(
         tool_registry,
         cached_ai_tools,
         user_hook_manager,
-        lsp_manager,
-        lsp_skip_list: std::collections::HashSet::new(),
-        pending_lsp_install: None,
         wasm_host,
         skills_manager,
         mcp_manager,
@@ -148,10 +143,7 @@ async fn init_user_hooks(db_path: &Path) -> Arc<RwLock<UserHookManager>> {
 }
 
 /// Initialize tool registry with safety hooks
-async fn init_tool_registry(
-    user_hook_manager: &Arc<RwLock<UserHookManager>>,
-    lsp_manager: &Arc<LspManager>,
-) -> Arc<ToolRegistry> {
+async fn init_tool_registry(user_hook_manager: &Arc<RwLock<UserHookManager>>) -> Arc<ToolRegistry> {
     let mut tool_registry = ToolRegistry::new();
     tool_registry.add_pre_hook(Arc::new(crate::agent::SafetyHook::new()));
     tool_registry.add_pre_hook(Arc::new(crate::agent::PlanModeHook::new()));
@@ -159,7 +151,7 @@ async fn init_tool_registry(
     tool_registry.add_pre_hook(Arc::new(UserPreToolHook::new(user_hook_manager.clone())));
     tool_registry.add_post_hook(Arc::new(UserPostToolHook::new(user_hook_manager.clone())));
     let tool_registry = Arc::new(tool_registry);
-    register_all_tools(&tool_registry, Some(lsp_manager.clone())).await;
+    register_all_tools(&tool_registry).await;
     tool_registry
 }
 

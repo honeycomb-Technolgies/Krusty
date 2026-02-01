@@ -2,7 +2,7 @@
 name = "krusty-core"
 version = "0.3.5"
 edition = "2021"
-description = "Core library for Krusty - AI, storage, tools, LSP, and extensions"
+description = "Core library for Krusty - AI, storage, tools, and extensions"
 
 [dependencies]
 # Async Runtime
@@ -35,9 +35,6 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 
 # Database (SQLite for local storage)
 rusqlite = { version = "0.32", features = ["bundled"] }
-
-# LSP
-lsp-types = "0.97"
 
 # WASM Extensions (Zed compatibility)
 wasmtime = { version = "29", default-features = false, features = [

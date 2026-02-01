@@ -1,7 +1,6 @@
 //! Context building for AI conversations
 //!
 //! Builds various context sections that get injected into AI conversations:
-//! - LSP diagnostics
 //! - Active plans
 //! - Available skills
 //! - Project instructions
@@ -20,24 +19,6 @@ pub fn sanitize_plan_title(title: &str) -> String {
 }
 
 impl App {
-    /// Build diagnostics context for AI from LSP
-    pub fn build_diagnostics_context(&self) -> String {
-        let cache = self.services.lsp_manager.diagnostics_cache();
-        let error_count = cache.error_count();
-        let warning_count = cache.warning_count();
-
-        if error_count == 0 && warning_count == 0 {
-            return String::new();
-        }
-
-        let diagnostics_str = cache.format_for_display();
-
-        format!(
-            "[SYSTEM CONTEXT] Current LSP Diagnostics ({} errors, {} warnings):\n{}",
-            error_count, warning_count, diagnostics_str
-        )
-    }
-
     /// Build plan context for AI - shown in both PLAN and BUILD modes when a plan is active
     pub fn build_plan_context(&self) -> String {
         match self.ui.work_mode {

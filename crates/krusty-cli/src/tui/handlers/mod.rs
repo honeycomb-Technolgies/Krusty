@@ -6,7 +6,6 @@ pub mod commands;
 pub mod event_loop;
 pub mod hit_test;
 pub mod keyboard;
-pub mod lsp;
 pub mod models;
 pub mod mouse;
 pub mod pinch;

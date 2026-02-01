@@ -234,20 +234,8 @@ pub(crate) async fn execute_agent_loop<C: AgentConfig>(
 
     let ctx = ToolContext {
         working_dir: task.working_dir.clone(),
-        sandbox_root: None,
-        user_id: None,
-        lsp_manager: None,
-        process_registry: None,
-        skills_manager: None,
-        mcp_manager: None,
         timeout: Some(Duration::from_secs(config.timeout_secs())),
-        output_tx: None,
-        tool_use_id: None,
-        plan_mode: false,
-        explore_progress_tx: None,
-        build_progress_tx: None,
-        missing_lsp_tx: None,
-        current_model: None,
+        ..Default::default()
     };
 
     let mut messages: Vec<ModelMessage> = vec![ModelMessage {
