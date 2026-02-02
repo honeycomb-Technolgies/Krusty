@@ -41,6 +41,43 @@ use super::tools::{
     text_to_tool_content, tool_name_to_kind,
 };
 
+/// Tracks cumulative read-only exploration volume for review triggers
+struct ExplorationTracker {
+    read_count: std::sync::atomic::AtomicUsize,
+    total_read_bytes: std::sync::atomic::AtomicUsize,
+}
+
+impl ExplorationTracker {
+    fn new() -> Self {
+        Self {
+            read_count: std::sync::atomic::AtomicUsize::new(0),
+            total_read_bytes: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    fn record_read(&self, bytes: usize) {
+        self.read_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.total_read_bytes
+            .fetch_add(bytes, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn should_review(&self) -> bool {
+        let count = self.read_count.load(std::sync::atomic::Ordering::Relaxed);
+        let bytes = self
+            .total_read_bytes
+            .load(std::sync::atomic::Ordering::Relaxed);
+        count > 0 && (count.is_multiple_of(5) || bytes > 10_000)
+    }
+
+    fn reset(&self) {
+        self.read_count
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        self.total_read_bytes
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// Prompt processor that connects ACP to Krusty's AI and tools
 pub struct PromptProcessor {
     /// AI client for making inference calls
@@ -53,6 +90,8 @@ pub struct PromptProcessor {
     dual_mind: Option<Arc<RwLock<DualMind>>>,
     /// Dual-mind configuration
     dual_mind_config: DualMindConfig,
+    /// Cumulative exploration tracking for review triggers
+    exploration_tracker: ExplorationTracker,
 }
 
 impl PromptProcessor {
@@ -64,6 +103,7 @@ impl PromptProcessor {
             cwd,
             dual_mind: None,
             dual_mind_config: DualMindConfig::default(),
+            exploration_tracker: ExplorationTracker::new(),
         }
     }
 
@@ -450,6 +490,17 @@ impl PromptProcessor {
                     .add_tool_result(&tool_call.id, output.clone(), is_error_for_history)
                     .await;
 
+                // Track cumulative exploration for review triggers
+                let is_readonly = matches!(
+                    tool_call.name.as_str(),
+                    "Read" | "read" | "Glob" | "glob" | "Grep" | "grep" | "search_codebase"
+                );
+                if is_readonly {
+                    self.exploration_tracker.record_read(output.len());
+                } else {
+                    self.exploration_tracker.reset();
+                }
+
                 // Sync observation to Little Claw
                 if let Some(dual_mind) = &self.dual_mind {
                     let observation =
@@ -461,7 +512,7 @@ impl PromptProcessor {
                 // Little Claw post-review: Validate the output
                 if let Some(dual_mind) = &self.dual_mind {
                     // Only review significant outputs (not trivial reads)
-                    if should_post_review(&tool_call.name, output) {
+                    if should_post_review(&tool_call.name, output, &self.exploration_tracker) {
                         let (review_result, dialogue) = {
                             let mut dm = dual_mind.write().await;
                             let result = dm.post_review(output).await;
@@ -471,6 +522,9 @@ impl PromptProcessor {
 
                         // Stream the dialogue as thought chunks
                         stream_dialogue_turns(session, connection, &dialogue).await;
+
+                        // Reset cumulative tracker after review
+                        self.exploration_tracker.reset();
 
                         // Handle review result - trigger enhancement sweep if needed
                         if let DialogueResult::NeedsEnhancement { critique, .. } = review_result {
@@ -570,12 +624,11 @@ fn create_observation(tool_name: &str, output: &str, success: bool) -> Observati
 }
 
 /// Determine if a tool output warrants post-review
-fn should_post_review(tool_name: &str, output: &str) -> bool {
-    // Skip review for read-only operations with small output
+fn should_post_review(tool_name: &str, output: &str, tracker: &ExplorationTracker) -> bool {
     match tool_name {
-        "Read" | "read" | "Glob" | "glob" | "Grep" | "grep" => {
-            // Only review if output is substantial (might indicate complexity)
-            output.len() > 2000
+        "Read" | "read" | "Glob" | "glob" | "Grep" | "grep" | "search_codebase" => {
+            // Individual large output OR cumulative exploration threshold
+            output.len() > 2000 || tracker.should_review()
         }
         "Edit" | "edit" | "Write" | "write" => {
             // Always review file modifications
@@ -710,16 +763,24 @@ mod tests {
 
     #[test]
     fn test_should_post_review() {
+        let tracker = ExplorationTracker::new();
+
         // Read operations with small output should not trigger review
-        assert!(!should_post_review("Read", "small content"));
+        assert!(!should_post_review("Read", "small content", &tracker));
 
         // Edit operations should always trigger review
-        assert!(should_post_review("Edit", "any content"));
-        assert!(should_post_review("Write", ""));
+        assert!(should_post_review("Edit", "any content", &tracker));
+        assert!(should_post_review("Write", "", &tracker));
 
         // Bash with output should trigger review
-        assert!(should_post_review("Bash", "command output"));
-        assert!(!should_post_review("Bash", ""));
+        assert!(should_post_review("Bash", "command output", &tracker));
+        assert!(!should_post_review("Bash", "", &tracker));
+
+        // Cumulative reads should trigger review after threshold
+        for _ in 0..5 {
+            tracker.record_read(100);
+        }
+        assert!(should_post_review("Read", "small", &tracker));
     }
 
     #[test]

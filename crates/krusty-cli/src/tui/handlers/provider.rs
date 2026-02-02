@@ -10,7 +10,7 @@ use tokio::sync::RwLock;
 use crate::agent::dual_mind::{DualMind, DualMindConfig};
 use crate::ai::client::AiClient;
 use crate::ai::providers::ProviderId;
-use crate::tools::{register_build_tool, register_explore_tool};
+use crate::tools::{register_build_tool, register_explore_tool, register_search_tool};
 use crate::tui::app::App;
 
 impl App {
@@ -56,10 +56,17 @@ impl App {
             )
             .await;
 
-            // Update cached tools so API knows about explore and build
+            // Register search_codebase tool (keyword search over indexed symbols)
+            // Semantic search is handled passively via build_search_context;
+            // this tool gives the AI an explicit way to query the index.
+            let db_path = crate::paths::config_dir().join("krusty.db");
+            let codebase_path = self.working_dir.to_string_lossy().to_string();
+            register_search_tool(&self.services.tool_registry, db_path, None, codebase_path).await;
+
+            // Update cached tools so API knows about explore, build, and search
             self.services.cached_ai_tools = self.services.tool_registry.get_ai_tools().await;
             tracing::info!(
-                "Registered explore and build tools, total tools: {}",
+                "Registered explore, build, and search tools, total tools: {}",
                 self.services.cached_ai_tools.len()
             );
         }

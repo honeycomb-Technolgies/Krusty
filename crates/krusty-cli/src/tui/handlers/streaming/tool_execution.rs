@@ -195,10 +195,26 @@ impl App {
             }
 
             let (completed, total) = plan.progress();
-            let msg = format!(
+            let mut msg = format!(
                 "Completed task {}. Progress: {}/{}",
                 task_id, completed, total
             );
+
+            if completed == total {
+                msg.push_str("\n\nAll tasks complete. Plan finished.");
+            } else {
+                let ready = plan.get_ready_tasks();
+                if !ready.is_empty() {
+                    msg.push_str("\n\nReady to work on next:");
+                    for task in &ready {
+                        msg.push_str(&format!("\n  → Task {}: {}", task.id, task.description));
+                    }
+                    msg.push_str("\n\nPick one and call task_start immediately.");
+                } else {
+                    msg.push_str("\n\nNo tasks currently unblocked. Check dependencies.");
+                }
+            }
+
             tracing::info!("{}", msg);
 
             results.push(Content::ToolResult {
@@ -475,6 +491,25 @@ impl App {
             tool_calls.len(),
             tool_names
         );
+
+        // Track exploration budget: count consecutive read-only tool calls
+        let all_readonly = tool_calls.iter().all(|t| {
+            matches!(
+                t.name.as_str(),
+                "read" | "glob" | "grep" | "search_codebase"
+            )
+        });
+        let has_action = tool_calls.iter().any(|t| {
+            matches!(
+                t.name.as_str(),
+                "edit" | "write" | "bash" | "build" | "task_start" | "task_complete"
+            )
+        });
+        if has_action {
+            self.exploration_budget_count = 0;
+        } else if all_readonly {
+            self.exploration_budget_count += tool_calls.len();
+        }
 
         if tool_calls.is_empty() {
             return;
@@ -856,7 +891,7 @@ impl App {
                     .push(("bash".to_string(), tool_call.id.clone()));
             }
 
-            if tool_name == "grep" || tool_name == "glob" {
+            if tool_name == "grep" || tool_name == "glob" || tool_name == "search_codebase" {
                 let pattern = tool_call
                     .arguments
                     .get("pattern")
@@ -1060,6 +1095,32 @@ impl App {
             self.pending_tool_results = all_results;
             self.stop_tool_execution();
             return;
+        }
+
+        // Inject exploration budget warning if threshold exceeded
+        const EXPLORATION_BUDGET_SOFT: usize = 15;
+        const EXPLORATION_BUDGET_HARD: usize = 30;
+        if self.exploration_budget_count >= EXPLORATION_BUDGET_HARD {
+            let warning = format!(
+                "[EXPLORATION BUDGET EXCEEDED]\n\
+                You have made {} consecutive read-only operations without taking action.\n\
+                STOP exploring and take action NOW.\n\
+                If you are working on a plan, call task_start and begin implementation.\n\
+                If you need more context, use search_codebase for targeted results.\n\
+                Further exploration without action is unacceptable.",
+                self.exploration_budget_count
+            );
+            all_results.push(Content::Text { text: warning });
+        } else if self.exploration_budget_count >= EXPLORATION_BUDGET_SOFT {
+            let warning = format!(
+                "[EXPLORATION BUDGET]\n\
+                You have made {} consecutive read-only operations without taking action.\n\
+                If you are working on a plan, call task_start and begin implementation.\n\
+                If you need more context, use search_codebase for targeted results.\n\
+                Continued exploration without action is wasteful. Act now or explain why you need more context.",
+                self.exploration_budget_count
+            );
+            all_results.push(Content::Text { text: warning });
         }
 
         // Add tool results to conversation

@@ -265,7 +265,7 @@ You MUST follow this disciplined workflow. Do NOT batch-complete tasks or skip s
             tracing::debug!("Failed to update insight access counts: {e}");
         }
 
-        let mut context = String::from("[CODEBASE INSIGHTS]\nThese are accumulated learnings about this codebase. Use them to stay consistent with established patterns.\n\n");
+        let mut context = String::from("[CODEBASE RULES]\nIMPORTANT: These are verified patterns and conventions for this codebase. You MUST follow them.\nViolating these will introduce inconsistencies and bugs.\n\n");
         for insight in &insights {
             context.push_str(&format!(
                 "- [{}] {} (confidence: {:.0}%)\n",

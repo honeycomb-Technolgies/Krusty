@@ -228,6 +228,9 @@ pub struct App {
     pub embedding_handle:
         Option<tokio::task::JoinHandle<anyhow::Result<krusty_core::index::EmbeddingEngine>>>,
 
+    // Exploration budget tracking (consecutive read-only tool calls)
+    pub exploration_budget_count: usize,
+
     // Auto-updater state
     pub just_updated: bool,
     pub update_status: Option<krusty_core::updater::UpdateStatus>,
@@ -324,6 +327,9 @@ impl App {
 
             // Toast notifications
             toasts: crate::tui::components::ToastQueue::new(),
+
+            // Exploration budget
+            exploration_budget_count: 0,
 
             // Semantic retrieval
             embedding_engine: None,

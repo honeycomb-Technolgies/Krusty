@@ -5,6 +5,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::fs;
 
+use similar::TextDiff;
+
 use crate::tools::registry::Tool;
 use crate::tools::{parse_params, ToolContext, ToolResult};
 
@@ -102,6 +104,8 @@ impl Tool for EditTool {
             content.replacen(&params.old_string, &params.new_string, 1)
         };
 
+        let diff = generate_compact_diff(&content, &new_content, &path);
+
         match fs::write(&path, &new_content).await {
             Ok(_) => {
                 ctx.touch_file(&path, true).await;
@@ -114,6 +118,11 @@ impl Tool for EditTool {
                 })
                 .to_string();
 
+                if !diff.is_empty() {
+                    output.push_str("\n\n[DIFF]\n");
+                    output.push_str(&diff);
+                }
+
                 if let Some(diagnostics) = ctx.get_file_diagnostics(&path) {
                     output.push_str("\n\n");
                     output.push_str(&diagnostics);
@@ -125,4 +134,16 @@ impl Tool for EditTool {
             Err(e) => ToolResult::error(format!("Failed to write file: {}", e)),
         }
     }
+}
+
+fn generate_compact_diff(old: &str, new: &str, path: &std::path::Path) -> String {
+    let diff = TextDiff::from_lines(old, new);
+    let mut output = String::new();
+    for hunk in diff.unified_diff().context_radius(3).iter_hunks() {
+        output.push_str(&format!("{}", hunk));
+    }
+    if output.is_empty() {
+        return String::new();
+    }
+    format!("--- {}\n+++ {}\n{}", path.display(), path.display(), output)
 }
