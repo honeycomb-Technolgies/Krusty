@@ -24,10 +24,11 @@ impl App {
     /// 4. Returns structured summary for user review
     pub fn start_pinch_summarization(&mut self) {
         // Move popup to summarizing state
-        self.popups.pinch.start_summarizing();
+        self.ui.popups.pinch.start_summarizing();
 
         // Get preservation hints from first stage
         let preservation_hints = self
+            .ui
             .popups
             .pinch
             .get_preservation_input()
@@ -43,16 +44,17 @@ impl App {
         let project_context = self.read_project_context();
 
         // Clone conversation for the async task
-        let conversation = self.chat.conversation.clone();
+        let conversation = self.runtime.chat.conversation.clone();
 
         // Capture current model for summarization
-        let current_model = self.current_model.clone();
+        let current_model = self.runtime.current_model.clone();
 
         // Create AI client for summarization
         let client = match self.create_summarization_client() {
             Some(c) => c,
             None => {
-                self.popups
+                self.ui
+                    .popups
                     .pinch
                     .set_error("No AI client available for summarization".to_string());
                 return;
@@ -61,7 +63,7 @@ impl App {
 
         // Set up channel for results
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.channels.summarization = Some(rx);
+        self.runtime.channels.summarization = Some(rx);
 
         // Log before moving into async block
         let msg_count = conversation.len();
@@ -102,7 +104,7 @@ impl App {
                 let path = if std::path::Path::new(&file.path).is_absolute() {
                     PathBuf::from(&file.path)
                 } else {
-                    self.working_dir.join(&file.path)
+                    self.runtime.working_dir.join(&file.path)
                 };
                 std::fs::read_to_string(&path)
                     .ok()
@@ -129,7 +131,7 @@ impl App {
             "gemini.md",
         ];
         for filename in PROJECT_FILES {
-            let path = self.working_dir.join(filename);
+            let path = self.runtime.working_dir.join(filename);
             if let Ok(content) = std::fs::read_to_string(&path) {
                 tracing::debug!("Loaded project context from {}", filename);
                 return Some(content);
@@ -145,14 +147,14 @@ impl App {
 
     /// Poll for summarization results
     pub fn poll_summarization(&mut self) {
-        let rx = match self.channels.summarization.as_mut() {
+        let rx = match self.runtime.channels.summarization.as_mut() {
             Some(rx) => rx,
             None => return,
         };
 
         match rx.try_recv() {
             Ok(update) => {
-                self.channels.summarization = None;
+                self.runtime.channels.summarization = None;
 
                 match update.result {
                     Ok(summary) => {
@@ -162,17 +164,18 @@ impl App {
                         );
 
                         // Show summary in popup and move to direction input
-                        self.popups.pinch.show_summary(
+                        self.ui.popups.pinch.show_summary(
                             summary.work_summary.clone(),
                             summary.important_files.clone(),
                         );
 
                         // Store the full result for use when completing pinch
-                        self.popups.pinch.set_summarization_result(summary);
+                        self.ui.popups.pinch.set_summarization_result(summary);
                     }
                     Err(e) => {
                         tracing::error!("Summarization failed: {}", e);
-                        self.popups
+                        self.ui
+                            .popups
                             .pinch
                             .set_error(format!("Summarization failed: {}", e));
                     }
@@ -183,8 +186,9 @@ impl App {
             }
             Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
                 // Task failed/cancelled
-                self.channels.summarization = None;
-                self.popups
+                self.runtime.channels.summarization = None;
+                self.ui
+                    .popups
                     .pinch
                     .set_error("Summarization task cancelled".to_string());
             }
@@ -193,9 +197,10 @@ impl App {
 
     /// Get ranked files for summarization context
     fn get_ranked_files_for_summarization(&self) -> Vec<RankedFile> {
-        if let (Some(sm), Some(session_id)) =
-            (&self.services.session_manager, &self.current_session_id)
-        {
+        if let (Some(sm), Some(session_id)) = (
+            &self.services.session_manager,
+            &self.runtime.current_session_id,
+        ) {
             let tracker = FileActivityTracker::new(sm.db(), session_id.clone());
             return tracker.get_ranked_files(20).unwrap_or_default();
         }
@@ -206,25 +211,25 @@ impl App {
     ///
     /// Directly starts summarization without popup interaction.
     pub fn start_auto_pinch(&mut self) {
-        self.auto_pinch_in_progress = true;
+        self.runtime.auto_pinch_in_progress = true;
 
         let ranked_files = self.get_ranked_files_for_summarization();
         let file_contents = self.read_key_file_contents(&ranked_files);
         let project_context = self.read_project_context();
-        let conversation = self.chat.conversation.clone();
-        let current_model = self.current_model.clone();
+        let conversation = self.runtime.chat.conversation.clone();
+        let current_model = self.runtime.current_model.clone();
 
         let client = match self.create_summarization_client() {
             Some(c) => c,
             None => {
                 tracing::error!("Auto-pinch: no AI client for summarization");
-                self.auto_pinch_in_progress = false;
+                self.runtime.auto_pinch_in_progress = false;
                 return;
             }
         };
 
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.channels.summarization = Some(rx);
+        self.runtime.channels.summarization = Some(rx);
 
         let msg_count = conversation.len();
         let file_count = file_contents.len();
@@ -256,18 +261,18 @@ impl App {
 
     /// Poll auto-pinch summarization and complete when ready
     pub fn poll_auto_pinch(&mut self) {
-        if !self.auto_pinch_in_progress {
+        if !self.runtime.auto_pinch_in_progress {
             return;
         }
 
-        let rx = match self.channels.summarization.as_mut() {
+        let rx = match self.runtime.channels.summarization.as_mut() {
             Some(rx) => rx,
             None => return,
         };
 
         match rx.try_recv() {
             Ok(update) => {
-                self.channels.summarization = None;
+                self.runtime.channels.summarization = None;
                 match update.result {
                     Ok(summary) => {
                         tracing::info!(
@@ -278,8 +283,9 @@ impl App {
                     }
                     Err(e) => {
                         tracing::error!("Auto-pinch: summarization failed: {}", e);
-                        self.auto_pinch_in_progress = false;
-                        self.chat
+                        self.runtime.auto_pinch_in_progress = false;
+                        self.runtime
+                            .chat
                             .messages
                             .push(("system".to_string(), format!("Auto-pinch failed: {}", e)));
                     }
@@ -289,8 +295,8 @@ impl App {
                 // Still summarizing
             }
             Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                self.channels.summarization = None;
-                self.auto_pinch_in_progress = false;
+                self.runtime.channels.summarization = None;
+                self.runtime.auto_pinch_in_progress = false;
                 tracing::error!("Auto-pinch: summarization task cancelled");
             }
         }
@@ -305,14 +311,15 @@ impl App {
             .into_iter()
             .take(5)
             .collect();
-        let active_plan = self.active_plan.as_ref().map(|p| p.to_markdown());
+        let active_plan = self.runtime.active_plan.as_ref().map(|p| p.to_markdown());
 
         // Extract summary text before consuming summary_result
         let summary_text = summary_result.work_summary.clone();
 
         let pinch_ctx = PinchContext::new(
-            self.current_session_id.clone().unwrap_or_default(),
-            self.session_title
+            self.runtime.current_session_id.clone().unwrap_or_default(),
+            self.runtime
+                .session_title
                 .clone()
                 .unwrap_or_else(|| "Untitled".to_string()),
             summary_result,
@@ -326,17 +333,18 @@ impl App {
 
         let Some(sm) = &self.services.session_manager else {
             tracing::error!("Auto-pinch: no session manager");
-            self.auto_pinch_in_progress = false;
+            self.runtime.auto_pinch_in_progress = false;
             return;
         };
 
-        let Some(parent_id) = &self.current_session_id else {
+        let Some(parent_id) = &self.runtime.current_session_id else {
             tracing::error!("Auto-pinch: no current session");
-            self.auto_pinch_in_progress = false;
+            self.runtime.auto_pinch_in_progress = false;
             return;
         };
 
         let parent_title = self
+            .runtime
             .session_title
             .clone()
             .unwrap_or_else(|| "Session".to_string());
@@ -349,8 +357,8 @@ impl App {
             &fallback_title,
             parent_id,
             &pinch_ctx,
-            Some(&self.current_model),
-            Some(&self.working_dir.to_string_lossy()),
+            Some(&self.runtime.current_model),
+            Some(&self.runtime.working_dir.to_string_lossy()),
         ) {
             Ok(new_id) => {
                 // Save pinch context as first message
@@ -360,7 +368,7 @@ impl App {
                 }
 
                 // Carry over active plan
-                if let Some(ref plan) = self.active_plan {
+                if let Some(ref plan) = self.runtime.active_plan {
                     if let Err(e) = self
                         .services
                         .plan_manager
@@ -387,7 +395,7 @@ impl App {
                 self.save_block_ui_states();
                 if let Err(e) = self.load_session(&new_id) {
                     tracing::error!("Auto-pinch: failed to load new session: {}", e);
-                    self.auto_pinch_in_progress = false;
+                    self.runtime.auto_pinch_in_progress = false;
                     return;
                 }
 
@@ -395,13 +403,14 @@ impl App {
                     "Auto-pinch: complete, resuming AI in new session {}",
                     new_id
                 );
-                self.auto_pinch_in_progress = false;
+                self.runtime.auto_pinch_in_progress = false;
                 self.send_to_ai();
             }
             Err(e) => {
                 tracing::error!("Auto-pinch: failed to create session: {}", e);
-                self.auto_pinch_in_progress = false;
-                self.chat
+                self.runtime.auto_pinch_in_progress = false;
+                self.runtime
+                    .chat
                     .messages
                     .push(("system".to_string(), format!("Auto-pinch failed: {}", e)));
             }
@@ -413,27 +422,30 @@ impl App {
         use crate::tui::popups::pinch::PinchStage;
 
         // Get summary from popup stage
-        let summary = match &self.popups.pinch.stage {
+        let summary = match &self.ui.popups.pinch.stage {
             PinchStage::DirectionInput { summary, .. } => summary.clone(),
             _ => return,
         };
 
         let direction = self
+            .ui
             .popups
             .pinch
             .get_direction_input()
             .map(|s| s.to_string());
         let preservation_hints = self
+            .ui
             .popups
             .pinch
             .get_preservation_input()
             .map(|s| s.to_string());
 
         // Move to creating state
-        self.popups.pinch.start_creating();
+        self.ui.popups.pinch.start_creating();
 
         // Get the full AI summarization result (includes key_decisions, pending_tasks, etc.)
         let summary_result = self
+            .ui
             .popups
             .pinch
             .get_summarization_result()
@@ -459,11 +471,12 @@ impl App {
             .collect();
 
         // Get active plan markdown if one exists
-        let active_plan = self.active_plan.as_ref().map(|p| p.to_markdown());
+        let active_plan = self.runtime.active_plan.as_ref().map(|p| p.to_markdown());
 
         let pinch_ctx = PinchContext::new(
-            self.current_session_id.clone().unwrap_or_default(),
-            self.session_title
+            self.runtime.current_session_id.clone().unwrap_or_default(),
+            self.runtime
+                .session_title
                 .clone()
                 .unwrap_or_else(|| "Untitled".to_string()),
             summary_result,
@@ -477,14 +490,16 @@ impl App {
 
         // Create linked session
         let Some(sm) = &self.services.session_manager else {
-            self.popups
+            self.ui
+                .popups
                 .pinch
                 .set_error("No session manager".to_string());
             return;
         };
 
-        let Some(parent_id) = &self.current_session_id else {
-            self.popups
+        let Some(parent_id) = &self.runtime.current_session_id else {
+            self.ui
+                .popups
                 .pinch
                 .set_error("No current session".to_string());
             return;
@@ -492,6 +507,7 @@ impl App {
 
         // Use fallback title initially, spawn AI generation
         let parent_title = self
+            .runtime
             .session_title
             .clone()
             .unwrap_or_else(|| "Session".to_string());
@@ -504,8 +520,8 @@ impl App {
             &fallback_title,
             parent_id,
             &pinch_ctx,
-            Some(&self.current_model),
-            Some(&self.working_dir.to_string_lossy()),
+            Some(&self.runtime.current_model),
+            Some(&self.runtime.working_dir.to_string_lossy()),
         ) {
             Ok(new_id) => {
                 // Save pinch context as first message
@@ -515,7 +531,7 @@ impl App {
                 }
 
                 // Carry over active plan to new session
-                if let Some(ref plan) = self.active_plan {
+                if let Some(ref plan) = self.runtime.active_plan {
                     if let Err(e) = self
                         .services
                         .plan_manager
@@ -567,12 +583,14 @@ impl App {
                 self.spawn_pinch_title_generation(new_id.clone(), parent_title, summary, direction);
 
                 // Show completion - auto_continue triggers AI response after switch
-                self.popups
+                self.ui
+                    .popups
                     .pinch
                     .complete(new_id, fallback_title, auto_continue);
             }
             Err(e) => {
-                self.popups
+                self.ui
+                    .popups
                     .pinch
                     .set_error(format!("Failed to create session: {}", e));
             }
@@ -596,7 +614,7 @@ impl App {
         };
 
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.channels.title_update = Some(rx);
+        self.runtime.channels.title_update = Some(rx);
 
         tokio::spawn(async move {
             let title = crate::ai::generate_pinch_title(

@@ -12,17 +12,17 @@ impl App {
 
         match command.as_str() {
             "/home" => {
-                self.current_session_id = None;
-                self.chat.messages.clear();
-                self.chat.streaming_assistant_idx = None;
-                self.chat.conversation.clear();
+                self.runtime.current_session_id = None;
+                self.runtime.chat.messages.clear();
+                self.runtime.chat.streaming_assistant_idx = None;
+                self.runtime.chat.conversation.clear();
                 self.clear_plan();
                 self.ui.view = View::StartMenu;
             }
             "/load" => {
                 // Set current directory for the popup title
-                let current_dir = self.working_dir.to_string_lossy().into_owned();
-                self.popups.session.set_current_directory(&current_dir);
+                let current_dir = self.runtime.working_dir.to_string_lossy().into_owned();
+                self.ui.popups.session.set_current_directory(&current_dir);
 
                 // Get sessions for current directory only
                 let sessions: Vec<_> = self
@@ -35,7 +35,7 @@ impl App {
                     })
                     .collect();
 
-                self.popups.session.set_sessions(sessions);
+                self.ui.popups.session.set_sessions(sessions);
                 self.ui.popup = Popup::SessionList;
             }
             "/model" => {
@@ -58,7 +58,7 @@ impl App {
                         })
                         .collect();
 
-                    self.popups.model.set_models(recent_models, models_vec);
+                    self.ui.popups.model.set_models(recent_models, models_vec);
                 }
 
                 self.ui.popup = Popup::ModelSelect;
@@ -86,10 +86,10 @@ impl App {
                 }
             }
             "/auth" => {
-                self.popups.auth.reset();
+                self.ui.popups.auth.reset();
                 // Set configured providers to show checkmarks
                 let configured = self.configured_providers();
-                self.popups.auth.set_configured_providers(configured);
+                self.ui.popups.auth.set_configured_providers(configured);
                 self.ui.popup = Popup::Auth;
             }
             "/ps" | "/processes" => {
@@ -97,13 +97,13 @@ impl App {
                 self.ui.popup = Popup::ProcessList;
             }
             "/theme" => {
-                self.popups.theme.open(&self.ui.theme_name);
+                self.ui.popups.theme.open(&self.ui.theme_name);
                 self.ui.popup = Popup::ThemeSelect;
             }
             "/clear" => {
-                self.chat.messages.clear();
-                self.chat.streaming_assistant_idx = None;
-                self.blocks = crate::tui::state::BlockManager::new();
+                self.runtime.chat.messages.clear();
+                self.runtime.chat.streaming_assistant_idx = None;
+                self.runtime.blocks = crate::tui::state::BlockManager::new();
             }
             "/cmd" => self.ui.popup = Popup::Help,
             "/init" => {
@@ -131,7 +131,8 @@ impl App {
                 self.start_update_check();
             }
             _ => {
-                self.chat
+                self.runtime
+                    .chat
                     .messages
                     .push(("system".to_string(), format!("Unknown command: {}", cmd)));
             }
@@ -150,8 +151,8 @@ impl App {
         }
 
         // Check if already exploring
-        if self.channels.init_exploration.is_some() {
-            self.chat.messages.push((
+        if self.runtime.channels.init_exploration.is_some() {
+            self.runtime.chat.messages.push((
                 "system".to_string(),
                 "Exploration already in progress...".to_string(),
             ));
@@ -164,12 +165,13 @@ impl App {
         }
 
         // Create session if none exists
-        if self.current_session_id.is_none() {
+        if self.runtime.current_session_id.is_none() {
             self.create_session("/init - Codebase Analysis");
         }
 
         // Add /init as user message (like a natural conversation)
-        self.chat
+        self.runtime
+            .chat
             .messages
             .push(("user".to_string(), "/init".to_string()));
 
@@ -181,15 +183,16 @@ impl App {
             "Analyzing codebase for KRAB.md...".to_string(),
             explore_id.clone(),
         );
-        self.blocks.explore.push(explore_block);
+        self.runtime.blocks.explore.push(explore_block);
 
         // Add to message timeline so it renders in chat
-        self.chat
+        self.runtime
+            .chat
             .messages
             .push(("explore".to_string(), explore_id.clone()));
 
         // Store the explore ID for completion
-        self.init_explore_id = Some(explore_id);
+        self.runtime.init_explore_id = Some(explore_id);
 
         // Start async exploration
         self.start_init_exploration();
@@ -197,10 +200,10 @@ impl App {
 
     /// Generate a basic KRAB.md template without AI (fallback)
     fn generate_basic_krab_template(&mut self) {
-        let krab_path = self.working_dir.join("KRAB.md");
+        let krab_path = self.runtime.working_dir.join("KRAB.md");
         let is_regenerate = krab_path.exists();
 
-        let project_name = self.working_dir.file_name().map_or_else(
+        let project_name = self.runtime.working_dir.file_name().map_or_else(
             || "Project".to_string(),
             |n| n.to_string_lossy().into_owned(),
         );
@@ -217,7 +220,7 @@ impl App {
                 } else {
                     "Created"
                 };
-                self.chat.messages.push((
+                self.runtime.chat.messages.push((
                     "system".to_string(),
                     format!(
                         "{} KRAB.md ({} bytes) - basic template\n\n\
@@ -228,7 +231,7 @@ impl App {
                 ));
             }
             Err(e) => {
-                self.chat.messages.push((
+                self.runtime.chat.messages.push((
                     "system".to_string(),
                     format!("Failed to write KRAB.md: {}", e),
                 ));
@@ -254,7 +257,7 @@ impl App {
         let client = match self.create_ai_client() {
             Some(c) => Arc::new(c),
             None => {
-                self.chat.messages.push((
+                self.runtime.chat.messages.push((
                     "system".to_string(),
                     "Failed to create AI client for exploration".to_string(),
                 ));
@@ -262,16 +265,16 @@ impl App {
             }
         };
 
-        let working_dir = self.working_dir.clone();
-        let cancellation = self.cancellation.clone();
-        let current_model = self.current_model.clone();
+        let working_dir = self.runtime.working_dir.clone();
+        let cancellation = self.runtime.cancellation.clone();
+        let current_model = self.runtime.current_model.clone();
 
         // Cache languages once at /init start (used during polling)
-        self.cached_init_languages = Some(self.detect_project_languages());
+        self.runtime.cached_init_languages = Some(self.detect_project_languages());
 
         // Create indexing progress channel
         let (indexing_tx, indexing_rx) = tokio::sync::mpsc::unbounded_channel();
-        self.channels.indexing_progress = Some(indexing_rx);
+        self.runtime.channels.indexing_progress = Some(indexing_rx);
 
         // Create indexing completion channel (exploration waits on this)
         let (indexing_done_tx, indexing_done_rx) = tokio::sync::oneshot::channel();
@@ -279,11 +282,11 @@ impl App {
 
         // Create exploration result channel
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
-        self.channels.init_exploration = Some(result_rx);
+        self.runtime.channels.init_exploration = Some(result_rx);
 
         // Create exploration progress channel
         let (progress_tx, progress_rx) = tokio::sync::mpsc::unbounded_channel();
-        self.channels.init_progress = Some(progress_rx);
+        self.runtime.channels.init_progress = Some(progress_rx);
 
         // Get database path for spawned thread
         let db_path = paths::config_dir().join("krusty.db");
@@ -434,29 +437,29 @@ impl App {
         let mut languages = Vec::new();
 
         // Check for common project indicators
-        if self.working_dir.join("Cargo.toml").exists() {
+        if self.runtime.working_dir.join("Cargo.toml").exists() {
             languages.push("Rust".to_string());
         }
-        if self.working_dir.join("package.json").exists() {
+        if self.runtime.working_dir.join("package.json").exists() {
             languages.push("JavaScript/TypeScript".to_string());
         }
-        if self.working_dir.join("pyproject.toml").exists()
-            || self.working_dir.join("setup.py").exists()
+        if self.runtime.working_dir.join("pyproject.toml").exists()
+            || self.runtime.working_dir.join("setup.py").exists()
         {
             languages.push("Python".to_string());
         }
-        if self.working_dir.join("go.mod").exists() {
+        if self.runtime.working_dir.join("go.mod").exists() {
             languages.push("Go".to_string());
         }
-        if self.working_dir.join("pom.xml").exists()
-            || self.working_dir.join("build.gradle").exists()
+        if self.runtime.working_dir.join("pom.xml").exists()
+            || self.runtime.working_dir.join("build.gradle").exists()
         {
             languages.push("Java".to_string());
         }
-        if self.working_dir.join("Gemfile").exists() {
+        if self.runtime.working_dir.join("Gemfile").exists() {
             languages.push("Ruby".to_string());
         }
-        if self.working_dir.join("mix.exs").exists() {
+        if self.runtime.working_dir.join("mix.exs").exists() {
             languages.push("Elixir".to_string());
         }
 
@@ -484,7 +487,7 @@ impl App {
         ];
 
         for (dir, desc) in common_dirs {
-            if self.working_dir.join(dir).is_dir() {
+            if self.runtime.working_dir.join(dir).is_dir() {
                 structure.push((dir.to_string(), desc.to_string()));
             }
         }
@@ -494,8 +497,8 @@ impl App {
 
     /// Handle /pinch command - open pinch popup
     fn handle_pinch_command(&mut self) {
-        if self.chat.messages.is_empty() {
-            self.chat.messages.push((
+        if self.runtime.chat.messages.is_empty() {
+            self.runtime.chat.messages.push((
                 "system".to_string(),
                 "No conversation to summarize. Start a chat first.".to_string(),
             ));
@@ -505,7 +508,7 @@ impl App {
         // Calculate context usage percentage
         let max_tokens = self.max_context_tokens();
         let usage_percent = if max_tokens > 0 {
-            ((self.context_tokens_used as f64 / max_tokens as f64) * 100.0) as u8
+            ((self.runtime.context_tokens_used as f64 / max_tokens as f64) * 100.0) as u8
         } else {
             0
         };
@@ -514,16 +517,17 @@ impl App {
         let top_files = self.get_top_files_preview(5);
 
         // Start the pinch popup
-        self.popups.pinch.start(usage_percent, top_files);
+        self.ui.popups.pinch.start(usage_percent, top_files);
         self.ui.popup = Popup::Pinch;
     }
 
     /// Get top N files by activity for preview
     pub(crate) fn get_top_files_preview(&self, n: usize) -> Vec<(String, f64)> {
         // Get file activity from database if we have a session
-        if let (Some(sm), Some(session_id)) =
-            (&self.services.session_manager, &self.current_session_id)
-        {
+        if let (Some(sm), Some(session_id)) = (
+            &self.services.session_manager,
+            &self.runtime.current_session_id,
+        ) {
             use crate::storage::FileActivityTracker;
             let db = sm.db();
             let tracker = FileActivityTracker::new(db, session_id.clone());
@@ -545,8 +549,8 @@ impl App {
                 pane.set_process_id(process_id.clone());
 
                 // Register as Krusty process (async, spawn task)
-                let registry = self.process_registry.clone();
-                let working_dir = self.working_dir.clone();
+                let registry = self.runtime.process_registry.clone();
+                let working_dir = self.runtime.working_dir.clone();
                 let cmd = shell_cmd.to_string();
                 tokio::spawn(async move {
                     registry
@@ -560,18 +564,19 @@ impl App {
                         .await;
                 });
 
-                self.blocks.terminal.push(pane);
+                self.runtime.blocks.terminal.push(pane);
 
                 // Add to message timeline (store process_id for reliable lookup)
-                self.chat
+                self.runtime
+                    .chat
                     .messages
                     .push(("terminal".to_string(), process_id_clone));
 
                 // Auto-scroll to show the new terminal
-                self.scroll_system.scroll.request_scroll_to_bottom();
+                self.ui.scroll_system.scroll.request_scroll_to_bottom();
             }
             Err(e) => {
-                self.chat.messages.push((
+                self.runtime.chat.messages.push((
                     "system".to_string(),
                     format!("Failed to spawn terminal: {}", e),
                 ));
@@ -585,7 +590,7 @@ impl App {
 
         match subcommand {
             Some("clear") | Some("abandon") => {
-                if let Some(ref mut plan) = self.active_plan {
+                if let Some(ref mut plan) = self.runtime.active_plan {
                     // Mark as abandoned and save
                     plan.status = PlanStatus::Abandoned;
                     if let Err(e) = self.services.plan_manager.save_plan(plan) {
@@ -603,23 +608,24 @@ impl App {
                     } else {
                         format!("Plan '{}' abandoned. Saved at: {}", title, file_path)
                     };
-                    self.chat.messages.push(("system".to_string(), msg));
+                    self.runtime.chat.messages.push(("system".to_string(), msg));
                 } else {
-                    self.chat
+                    self.runtime
+                        .chat
                         .messages
                         .push(("system".to_string(), "No active plan to clear.".to_string()));
                 }
             }
             Some("list") | Some("history") => {
                 // Show completed plans for this working directory
-                let working_dir_str = self.working_dir.to_string_lossy().into_owned();
+                let working_dir_str = self.runtime.working_dir.to_string_lossy().into_owned();
                 match self
                     .services
                     .plan_manager
                     .list_completed_for_dir(&working_dir_str)
                 {
                     Ok(plans) if plans.is_empty() => {
-                        self.chat.messages.push((
+                        self.runtime.chat.messages.push((
                             "system".to_string(),
                             "No completed plans for this directory.".to_string(),
                         ));
@@ -636,20 +642,21 @@ impl App {
                         if plans.len() > 5 {
                             msg.push_str(&format!("  ... and {} more", plans.len() - 5));
                         }
-                        self.chat.messages.push(("system".to_string(), msg));
+                        self.runtime.chat.messages.push(("system".to_string(), msg));
                     }
                     Err(e) => {
-                        self.chat
+                        self.runtime
+                            .chat
                             .messages
                             .push(("system".to_string(), format!("Failed to list plans: {}", e)));
                     }
                 }
             }
             Some("show") | None => {
-                if let Some(ref plan) = self.active_plan {
+                if let Some(ref plan) = self.runtime.active_plan {
                     let (completed, total) = plan.progress();
                     let status_icon = if completed == total { "✓" } else { "◐" };
-                    self.chat.messages.push((
+                    self.runtime.chat.messages.push((
                         "system".to_string(),
                         format!(
                             "{} '{}' ({}/{} tasks)\nUse Ctrl+T to toggle sidebar, /plan clear to abandon.",
@@ -657,11 +664,11 @@ impl App {
                         ),
                     ));
                     // Show sidebar if not visible
-                    if !self.plan_sidebar.visible {
-                        self.plan_sidebar.toggle();
+                    if !self.ui.plan_sidebar.visible {
+                        self.ui.plan_sidebar.toggle();
                     }
                 } else {
-                    self.chat.messages.push((
+                    self.runtime.chat.messages.push((
                         "system".to_string(),
                         "No active plan.\n\
                         • Enter PLAN mode (Ctrl+B) and ask the AI to create a plan\n\
@@ -671,7 +678,7 @@ impl App {
                 }
             }
             Some(unknown) => {
-                self.chat.messages.push((
+                self.runtime.chat.messages.push((
                     "system".to_string(),
                     format!(
                         "Unknown: /plan {}. Use: /plan, /plan list, /plan clear",
@@ -688,7 +695,7 @@ impl App {
         let skills = match self.services.skills_manager.try_write() {
             Ok(mut guard) => guard.list_skills(),
             Err(_) => {
-                self.chat.messages.push((
+                self.runtime.chat.messages.push((
                     "system".to_string(),
                     "Skills manager is busy, try again.".to_string(),
                 ));
@@ -696,7 +703,7 @@ impl App {
             }
         };
 
-        self.popups.skills.set_skills(skills);
+        self.ui.popups.skills.set_skills(skills);
         self.ui.popup = Popup::SkillsBrowser;
     }
 
@@ -709,7 +716,7 @@ impl App {
             }
             Err(_) => return,
         };
-        self.popups.skills.set_skills(skills);
+        self.ui.popups.skills.set_skills(skills);
     }
 
     /// Open MCP server browser popup
@@ -723,7 +730,7 @@ impl App {
     pub fn refresh_mcp_popup(&mut self) {
         let mcp = self.services.mcp_manager.clone();
         let servers = futures::executor::block_on(mcp.list_servers());
-        self.popups.mcp.update(servers);
+        self.ui.popups.mcp.update(servers);
     }
 
     /// Open hooks configuration popup
@@ -736,7 +743,7 @@ impl App {
                 .hooks()
                 .to_vec()
         });
-        self.popups.hooks.set_hooks(hooks);
+        self.ui.popups.hooks.set_hooks(hooks);
         self.ui.popup = Popup::Hooks;
     }
 }

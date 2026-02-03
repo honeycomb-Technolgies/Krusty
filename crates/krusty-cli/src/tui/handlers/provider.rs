@@ -20,11 +20,11 @@ impl App {
         if let Some(key) = self
             .services
             .credential_store
-            .get_auth(&self.active_provider)
+            .get_auth(&self.runtime.active_provider)
         {
             let config = self.create_client_config();
-            self.ai_client = Some(AiClient::with_api_key(config, key.clone()));
-            self.api_key = Some(key);
+            self.runtime.ai_client = Some(AiClient::with_api_key(config, key.clone()));
+            self.runtime.api_key = Some(key);
             self.init_dual_mind();
             self.register_explore_tool_if_client().await;
             return Ok(());
@@ -44,7 +44,7 @@ impl App {
             register_explore_tool(
                 &self.services.tool_registry,
                 client.clone(),
-                self.cancellation.clone(),
+                self.runtime.cancellation.clone(),
             )
             .await;
 
@@ -52,18 +52,18 @@ impl App {
             register_build_tool(
                 &self.services.tool_registry,
                 client,
-                self.cancellation.clone(),
+                self.runtime.cancellation.clone(),
             )
             .await;
 
             // Register search_codebase tool (keyword + semantic search over indexed symbols)
             // Shares the embedding engine ref so the tool gets semantic search once initialized.
             let db_path = crate::paths::config_dir().join("krusty.db");
-            let codebase_path = self.working_dir.to_string_lossy().to_string();
+            let codebase_path = self.runtime.working_dir.to_string_lossy().to_string();
             register_search_tool(
                 &self.services.tool_registry,
                 db_path,
-                self.embedding_engine.clone(),
+                self.runtime.embedding_engine.clone(),
                 codebase_path,
             )
             .await;
@@ -80,8 +80,8 @@ impl App {
     /// Create AiClientConfig for the current active provider
     pub fn create_client_config(&self) -> crate::ai::client::AiClientConfig {
         crate::tui::auth::create_client_config(
-            self.active_provider,
-            &self.current_model,
+            self.runtime.active_provider,
+            &self.runtime.current_model,
             &self.services.credential_store,
             &self.services.model_registry,
         )
@@ -90,7 +90,8 @@ impl App {
     /// Create an AI client with the current provider configuration
     pub fn create_ai_client(&self) -> Option<AiClient> {
         let config = self.create_client_config();
-        self.api_key
+        self.runtime
+            .api_key
             .as_ref()
             .map(|key| AiClient::with_api_key(config, key.clone()))
     }
@@ -99,14 +100,14 @@ impl App {
     pub fn set_api_key(&mut self, key: String) {
         // Create client with provider config
         let config = self.create_client_config();
-        self.ai_client = Some(AiClient::with_api_key(config, key.clone()));
-        self.api_key = Some(key.clone());
+        self.runtime.ai_client = Some(AiClient::with_api_key(config, key.clone()));
+        self.runtime.api_key = Some(key.clone());
         self.init_dual_mind();
 
         // Save to credential store (unified storage for all providers)
         self.services
             .credential_store
-            .set(self.active_provider, key);
+            .set(self.runtime.active_provider, key);
         if let Err(e) = self.services.credential_store.save() {
             tracing::warn!("Failed to save credential store: {}", e);
         }
@@ -117,8 +118,8 @@ impl App {
     pub fn switch_provider(&mut self, provider_id: ProviderId) {
         use crate::tui::auth::{translate_model_for_provider, validate_model_for_provider};
 
-        let previous_provider = self.active_provider;
-        self.active_provider = provider_id;
+        let previous_provider = self.runtime.active_provider;
+        self.runtime.active_provider = provider_id;
 
         // Save active provider selection
         if let Err(e) = crate::storage::credentials::ActiveProviderStore::save(provider_id) {
@@ -126,10 +127,13 @@ impl App {
         }
 
         // Translate model ID to the new provider's format
-        let (translated, changed) =
-            translate_model_for_provider(&self.current_model, previous_provider, provider_id);
+        let (translated, changed) = translate_model_for_provider(
+            &self.runtime.current_model,
+            previous_provider,
+            provider_id,
+        );
         if changed {
-            self.current_model = translated.clone();
+            self.runtime.current_model = translated.clone();
             if let Some(ref prefs) = self.services.preferences {
                 if let Err(e) = prefs.set_current_model(&translated) {
                     tracing::warn!("Failed to save current model: {}", e);
@@ -139,9 +143,9 @@ impl App {
 
         // Validate the model exists for this provider (fallback to default if not)
         let (validated, was_fallback) =
-            validate_model_for_provider(&self.current_model, provider_id);
+            validate_model_for_provider(&self.runtime.current_model, provider_id);
         if was_fallback {
-            self.current_model = validated.clone();
+            self.runtime.current_model = validated.clone();
             if let Some(ref prefs) = self.services.preferences {
                 if let Err(e) = prefs.set_current_model(&validated) {
                     tracing::warn!("Failed to save current model: {}", e);
@@ -152,8 +156,8 @@ impl App {
         // Try to load credentials for the new provider (API key or OAuth token)
         if let Some(key) = self.services.credential_store.get_auth(&provider_id) {
             let config = self.create_client_config();
-            self.ai_client = Some(AiClient::with_api_key(config, key.clone()));
-            self.api_key = Some(key);
+            self.runtime.ai_client = Some(AiClient::with_api_key(config, key.clone()));
+            self.runtime.api_key = Some(key);
             self.init_dual_mind();
             tracing::info!(
                 "Switched to provider {} (loaded existing auth)",
@@ -161,9 +165,9 @@ impl App {
             );
         } else {
             // No stored credentials - user will need to authenticate
-            self.ai_client = None;
-            self.api_key = None;
-            self.dual_mind = None;
+            self.runtime.ai_client = None;
+            self.runtime.api_key = None;
+            self.runtime.dual_mind = None;
             tracing::info!(
                 "Switched to provider {} (requires authentication)",
                 provider_id
@@ -179,14 +183,14 @@ impl App {
 
     /// Check if authenticated
     pub fn is_authenticated(&self) -> bool {
-        self.ai_client.is_some()
+        self.runtime.ai_client.is_some()
     }
 
     /// Initialize dual-mind system when AI client is available
     /// Public because it's called when model changes in popup handlers
     pub fn init_dual_mind(&mut self) {
         let Some(client) = self.create_ai_client() else {
-            self.dual_mind = None;
+            self.runtime.dual_mind = None;
             // DEBUG: Log initialization failure
             if let Ok(mut file) = std::fs::OpenOptions::new()
                 .create(true)
@@ -215,10 +219,10 @@ impl App {
             client,
             config,
             self.services.tool_registry.clone(),
-            self.working_dir.clone(),
+            self.runtime.working_dir.clone(),
         );
 
-        self.dual_mind = Some(Arc::new(RwLock::new(dual_mind)));
+        self.runtime.dual_mind = Some(Arc::new(RwLock::new(dual_mind)));
         tracing::info!("Dual-mind system initialized (Big Claw / Little Claw)");
 
         // DEBUG: Log successful initialization

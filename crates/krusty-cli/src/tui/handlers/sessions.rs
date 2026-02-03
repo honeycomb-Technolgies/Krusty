@@ -23,17 +23,17 @@ impl App {
 
         // Use fallback title immediately for responsiveness
         let fallback_title = SessionManager::generate_title_from_content(first_message);
-        let working_dir_str = self.working_dir.to_string_lossy().into_owned();
+        let working_dir_str = self.runtime.working_dir.to_string_lossy().into_owned();
 
         match sm.create_session(
             &fallback_title,
-            Some(&self.current_model),
+            Some(&self.runtime.current_model),
             Some(&working_dir_str),
         ) {
             Ok(id) => {
                 tracing::info!("Created new session: {}", id);
-                self.current_session_id = Some(id.clone());
-                self.session_title = Some(fallback_title);
+                self.runtime.current_session_id = Some(id.clone());
+                self.runtime.session_title = Some(fallback_title);
 
                 // Clear any active plan when starting a new session
                 self.clear_plan();
@@ -62,7 +62,7 @@ impl App {
         };
 
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.channels.title_update = Some(rx);
+        self.runtime.channels.title_update = Some(rx);
 
         tokio::spawn(async move {
             let title = crate::ai::generate_title(&client, &first_message).await;
@@ -77,19 +77,19 @@ impl App {
 
     /// Poll for AI-generated title updates
     pub fn poll_title_generation(&mut self) {
-        let rx = match self.channels.title_update.as_mut() {
+        let rx = match self.runtime.channels.title_update.as_mut() {
             Some(rx) => rx,
             None => return,
         };
 
         match rx.try_recv() {
             Ok(update) => {
-                self.channels.title_update = None;
+                self.runtime.channels.title_update = None;
                 tracing::info!("AI generated title: {}", update.title);
 
                 // Update in-memory title if this is the current session
-                if self.current_session_id.as_ref() == Some(&update.session_id) {
-                    self.session_title = Some(update.title.clone());
+                if self.runtime.current_session_id.as_ref() == Some(&update.session_id) {
+                    self.runtime.session_title = Some(update.title.clone());
                 }
 
                 // Persist to database
@@ -104,7 +104,7 @@ impl App {
             }
             Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
                 // Task failed/cancelled
-                self.channels.title_update = None;
+                self.runtime.channels.title_update = None;
             }
         }
     }
@@ -114,11 +114,11 @@ impl App {
         let Some(sm) = &self.services.session_manager else {
             return;
         };
-        let Some(session_id) = &self.current_session_id else {
+        let Some(session_id) = &self.runtime.current_session_id else {
             return;
         };
 
-        if let Err(e) = sm.update_token_count(session_id, self.context_tokens_used) {
+        if let Err(e) = sm.update_token_count(session_id, self.runtime.context_tokens_used) {
             tracing::warn!("Failed to update token count: {}", e);
         }
     }
@@ -130,7 +130,7 @@ impl App {
             tracing::warn!("Cannot save message: no session manager");
             return;
         };
-        let Some(session_id) = &self.current_session_id else {
+        let Some(session_id) = &self.runtime.current_session_id else {
             tracing::warn!("Cannot save message: no current session");
             return;
         };
@@ -185,17 +185,17 @@ impl App {
         tracing::info!("Loaded {} raw messages from database", messages.len());
 
         // Set session info
-        self.session_title = session_info.as_ref().map(|i| i.title.clone());
+        self.runtime.session_title = session_info.as_ref().map(|i| i.title.clone());
         let stored_token_count = session_info.as_ref().and_then(|i| i.token_count);
 
         // Clear current state
-        self.chat.messages.clear();
-        self.chat.conversation.clear();
-        self.blocks = BlockManager::new();
-        self.block_ui.clear();
-        self.tool_results.clear();
-        self.chat.streaming_assistant_idx = None;
-        self.current_session_id = Some(session_id.to_string());
+        self.runtime.chat.messages.clear();
+        self.runtime.chat.conversation.clear();
+        self.runtime.blocks = BlockManager::new();
+        self.ui.block_ui.clear();
+        self.runtime.tool_results.clear();
+        self.runtime.chat.streaming_assistant_idx = None;
+        self.runtime.current_session_id = Some(session_id.to_string());
 
         // Load plan for this session (strict 1:1 linkage, no working_dir fallback)
         match self.services.plan_manager.get_plan(session_id) {
@@ -215,8 +215,8 @@ impl App {
                 };
                 self.set_plan(plan);
                 self.ui.work_mode = resume_mode;
-                if !self.plan_sidebar.visible {
-                    self.plan_sidebar.toggle();
+                if !self.ui.plan_sidebar.visible {
+                    self.ui.plan_sidebar.toggle();
                 }
             }
             Ok(None) => {
@@ -270,7 +270,7 @@ impl App {
                     }]
                 });
 
-            self.chat.conversation.push(ModelMessage {
+            self.runtime.chat.conversation.push(ModelMessage {
                 role: api_role,
                 content,
             });
@@ -291,23 +291,23 @@ impl App {
                 .into_iter()
                 .map(|s| (s.block_id, s.collapsed, s.scroll_offset))
                 .collect();
-            self.block_ui.import(states);
+            self.ui.block_ui.import(states);
         }
 
         // Use stored token count if available, otherwise estimate
-        self.context_tokens_used = stored_token_count
-            .unwrap_or_else(|| Self::estimate_conversation_tokens(&self.chat.conversation));
+        self.runtime.context_tokens_used = stored_token_count
+            .unwrap_or_else(|| Self::estimate_conversation_tokens(&self.runtime.chat.conversation));
 
         tracing::info!(
             "Loaded session {} with {} messages, {} blocks, ~{} tokens",
             session_id,
-            self.chat.messages.len(),
-            self.blocks.thinking.len()
-                + self.blocks.bash.len()
-                + self.blocks.read.len()
-                + self.blocks.edit.len()
-                + self.blocks.write.len(),
-            self.context_tokens_used
+            self.runtime.chat.messages.len(),
+            self.runtime.blocks.thinking.len()
+                + self.runtime.blocks.bash.len()
+                + self.runtime.blocks.read.len()
+                + self.runtime.blocks.edit.len()
+                + self.runtime.blocks.write.len(),
+            self.runtime.context_tokens_used
         );
         Ok(())
     }
@@ -347,11 +347,11 @@ impl App {
         let Some(sm) = &self.services.session_manager else {
             return;
         };
-        let Some(session_id) = &self.current_session_id else {
+        let Some(session_id) = &self.runtime.current_session_id else {
             return;
         };
 
-        let states = self.block_ui.export();
+        let states = self.ui.block_ui.export();
         for (block_id, collapsed, scroll_offset) in states {
             if let Err(e) = sm.save_block_ui_state(session_id, &block_id, collapsed, scroll_offset)
             {
@@ -372,18 +372,18 @@ impl App {
         } else {
             tracing::info!("Deleted session: {}", session_id);
             // If we deleted the current session, clear it
-            if self.current_session_id.as_deref() == Some(session_id) {
-                self.current_session_id = None;
-                self.session_title = None;
+            if self.runtime.current_session_id.as_deref() == Some(session_id) {
+                self.runtime.current_session_id = None;
+                self.runtime.session_title = None;
             }
         }
     }
 
     /// Build tool results cache from conversation
     fn build_tool_results_cache(&mut self) {
-        self.tool_results.clear();
+        self.runtime.tool_results.clear();
 
-        for msg in &self.chat.conversation {
+        for msg in &self.runtime.chat.conversation {
             for content in &msg.content {
                 if let Content::ToolResult {
                     tool_use_id,
@@ -402,7 +402,7 @@ impl App {
                         tool_name,
                         is_error
                     );
-                    self.tool_results.insert_raw(
+                    self.runtime.tool_results.insert_raw(
                         tool_use_id.clone(),
                         &tool_name,
                         &output_str,
@@ -415,7 +415,7 @@ impl App {
 
     /// Find the tool name for a given tool_use_id by searching conversation
     fn find_tool_name_for_id(&self, tool_use_id: &str) -> String {
-        for msg in &self.chat.conversation {
+        for msg in &self.runtime.chat.conversation {
             for content in &msg.content {
                 if let Content::ToolUse { id, name, .. } = content {
                     if id == tool_use_id {
@@ -436,11 +436,11 @@ impl App {
     /// - "read" / "edit" / "write" → respective block types
     /// - "tool_result" → ToolResultBlock (grep/glob/unknown tools)
     fn build_display_from_conversation(&mut self) {
-        self.chat.messages.clear();
-        self.chat.streaming_assistant_idx = None;
-        self.blocks = BlockManager::new();
+        self.runtime.chat.messages.clear();
+        self.runtime.chat.streaming_assistant_idx = None;
+        self.runtime.blocks = BlockManager::new();
 
-        for msg in &self.chat.conversation {
+        for msg in &self.runtime.chat.conversation {
             let base_role = match msg.role {
                 Role::User => "user",
                 Role::Assistant => "assistant",
@@ -457,7 +457,8 @@ impl App {
                             continue;
                         }
                         // Text messages use the API role
-                        self.chat
+                        self.runtime
+                            .chat
                             .messages
                             .push((base_role.to_string(), text.clone()));
                     }
@@ -467,7 +468,8 @@ impl App {
                         signature,
                     } => {
                         // Thinking gets its own message entry with "thinking" role
-                        self.chat
+                        self.runtime
+                            .chat
                             .messages
                             .push(("thinking".to_string(), String::new()));
 
@@ -484,13 +486,14 @@ impl App {
                         } else {
                             signature.clone()
                         };
-                        self.block_ui.set_collapsed(&block_id, true);
-                        self.blocks.thinking.push(block);
+                        self.ui.block_ui.set_collapsed(&block_id, true);
+                        self.runtime.blocks.thinking.push(block);
                     }
 
                     Content::RedactedThinking { .. } => {
                         // Redacted thinking - create a placeholder thinking block
-                        self.chat
+                        self.runtime
+                            .chat
                             .messages
                             .push(("thinking".to_string(), String::new()));
 
@@ -498,14 +501,17 @@ impl App {
                         block.append("[Redacted]");
                         block.complete();
                         block.set_collapsed(true);
-                        self.blocks.thinking.push(block);
+                        self.runtime.blocks.thinking.push(block);
                     }
 
                     Content::ToolUse { id, name, input } => {
                         // Each tool use gets its own message entry with tool-specific role
                         match name.to_lowercase().as_str() {
                             "bash" => {
-                                self.chat.messages.push(("bash".to_string(), id.clone()));
+                                self.runtime
+                                    .chat
+                                    .messages
+                                    .push(("bash".to_string(), id.clone()));
 
                                 let command = input
                                     .get("command")
@@ -514,17 +520,20 @@ impl App {
                                     .to_string();
 
                                 let mut block = BashBlock::with_tool_id(command, id.clone());
-                                if let Some(result) = self.tool_results.get(id) {
+                                if let Some(result) = self.runtime.tool_results.get(id) {
                                     block.append(&result.output);
                                     block.complete(result.exit_code);
                                 }
                                 block.set_collapsed(false);
-                                self.block_ui.set_collapsed(id, false);
-                                self.blocks.bash.push(block);
+                                self.ui.block_ui.set_collapsed(id, false);
+                                self.runtime.blocks.bash.push(block);
                             }
 
                             "read" => {
-                                self.chat.messages.push(("read".to_string(), id.clone()));
+                                self.runtime
+                                    .chat
+                                    .messages
+                                    .push(("read".to_string(), id.clone()));
 
                                 let file_path = input
                                     .get("file_path")
@@ -533,7 +542,7 @@ impl App {
                                     .to_string();
 
                                 let mut block = ReadBlock::new(id.clone(), file_path);
-                                if let Some(result) = self.tool_results.get(id) {
+                                if let Some(result) = self.runtime.tool_results.get(id) {
                                     let line_count = result.output.lines().count();
                                     block.set_content(
                                         result.output.clone(),
@@ -543,17 +552,18 @@ impl App {
                                     block.complete();
                                 }
                                 block.set_collapsed(true);
-                                self.block_ui.set_collapsed(id, true);
-                                self.blocks.read.push(block);
+                                self.ui.block_ui.set_collapsed(id, true);
+                                self.runtime.blocks.read.push(block);
                             }
 
                             "edit" => {
-                                let result = self.tool_results.get(id);
+                                let result = self.runtime.tool_results.get(id);
                                 let is_error = result.map(|r| r.is_error).unwrap_or(false);
 
                                 if is_error {
                                     // Failed edit - show as tool_result with error
-                                    self.chat
+                                    self.runtime
+                                        .chat
                                         .messages
                                         .push(("tool_result".to_string(), id.clone()));
 
@@ -571,11 +581,14 @@ impl App {
                                     }
                                     block.complete();
                                     block.set_collapsed(false);
-                                    self.block_ui.set_collapsed(id, false);
-                                    self.blocks.tool_result.push(block);
+                                    self.ui.block_ui.set_collapsed(id, false);
+                                    self.runtime.blocks.tool_result.push(block);
                                 } else {
                                     // Successful edit - show as edit block
-                                    self.chat.messages.push(("edit".to_string(), id.clone()));
+                                    self.runtime
+                                        .chat
+                                        .messages
+                                        .push(("edit".to_string(), id.clone()));
 
                                     let file_path = input
                                         .get("file_path")
@@ -598,13 +611,13 @@ impl App {
                                     block.set_diff_data(file_path, old_string, new_string, 1);
                                     block.complete();
                                     block.set_collapsed(false);
-                                    self.block_ui.set_collapsed(id, false);
-                                    self.blocks.edit.push(block);
+                                    self.ui.block_ui.set_collapsed(id, false);
+                                    self.runtime.blocks.edit.push(block);
                                 }
                             }
 
                             "write" => {
-                                let result = self.tool_results.get(id);
+                                let result = self.runtime.tool_results.get(id);
                                 let is_error = result.map(|r| r.is_error).unwrap_or(false);
                                 tracing::info!(
                                     "Write tool {} - has_result={}, is_error={}",
@@ -615,7 +628,8 @@ impl App {
 
                                 if is_error {
                                     // Failed write - show as tool_result with error
-                                    self.chat
+                                    self.runtime
+                                        .chat
                                         .messages
                                         .push(("tool_result".to_string(), id.clone()));
 
@@ -633,11 +647,14 @@ impl App {
                                     }
                                     block.complete();
                                     block.set_collapsed(false); // Show errors expanded
-                                    self.block_ui.set_collapsed(id, false);
-                                    self.blocks.tool_result.push(block);
+                                    self.ui.block_ui.set_collapsed(id, false);
+                                    self.runtime.blocks.tool_result.push(block);
                                 } else {
                                     // Successful write - show as write block
-                                    self.chat.messages.push(("write".to_string(), id.clone()));
+                                    self.runtime
+                                        .chat
+                                        .messages
+                                        .push(("write".to_string(), id.clone()));
 
                                     let file_path = input
                                         .get("file_path")
@@ -655,13 +672,14 @@ impl App {
                                     block.set_content(file_path, file_content);
                                     block.complete();
                                     block.set_collapsed(true);
-                                    self.block_ui.set_collapsed(id, true);
-                                    self.blocks.write.push(block);
+                                    self.ui.block_ui.set_collapsed(id, true);
+                                    self.runtime.blocks.write.push(block);
                                 }
                             }
 
                             "grep" | "glob" => {
-                                self.chat
+                                self.runtime
+                                    .chat
                                     .messages
                                     .push(("tool_result".to_string(), id.clone()));
 
@@ -673,13 +691,13 @@ impl App {
 
                                 let mut block =
                                     ToolResultBlock::new(id.clone(), name.clone(), pattern);
-                                if let Some(result) = self.tool_results.get(id) {
+                                if let Some(result) = self.runtime.tool_results.get(id) {
                                     block.set_results(&result.output);
                                     block.complete();
                                 }
                                 block.set_collapsed(true);
-                                self.block_ui.set_collapsed(id, true);
-                                self.blocks.tool_result.push(block);
+                                self.ui.block_ui.set_collapsed(id, true);
+                                self.runtime.blocks.tool_result.push(block);
                             }
 
                             // Silent tools - don't create any visual element
@@ -690,19 +708,20 @@ impl App {
 
                             _ => {
                                 // Unknown tools go to tool_result
-                                self.chat
+                                self.runtime
+                                    .chat
                                     .messages
                                     .push(("tool_result".to_string(), id.clone()));
 
                                 let mut block =
                                     ToolResultBlock::new(id.clone(), name.clone(), String::new());
-                                if let Some(result) = self.tool_results.get(id) {
+                                if let Some(result) = self.runtime.tool_results.get(id) {
                                     block.set_results(&result.output);
                                     block.complete();
                                 }
                                 block.set_collapsed(true);
-                                self.block_ui.set_collapsed(id, true);
-                                self.blocks.tool_result.push(block);
+                                self.ui.block_ui.set_collapsed(id, true);
+                                self.runtime.blocks.tool_result.push(block);
                             }
                         }
                     }
@@ -713,11 +732,12 @@ impl App {
                         is_error,
                     } => {
                         // Check if this result has a matching ToolUse in the conversation
-                        let has_matching_tool_use = self.chat.conversation.iter().any(|m| {
-                            m.content.iter().any(
+                        let has_matching_tool_use =
+                            self.runtime.chat.conversation.iter().any(|m| {
+                                m.content.iter().any(
                                 |c| matches!(c, Content::ToolUse { id, .. } if id == tool_use_id),
                             )
-                        });
+                            });
 
                         if !has_matching_tool_use {
                             // Orphan ToolResult - create a visible block so it's not lost
@@ -726,7 +746,8 @@ impl App {
                                 tool_use_id
                             );
 
-                            self.chat
+                            self.runtime
+                                .chat
                                 .messages
                                 .push(("tool_result".to_string(), tool_use_id.clone()));
 
@@ -747,23 +768,26 @@ impl App {
                                 block.set_collapsed(true);
                             }
                             block.complete();
-                            self.block_ui
+                            self.ui
+                                .block_ui
                                 .set_collapsed(tool_use_id, is_error.unwrap_or(false));
-                            self.blocks.tool_result.push(block);
+                            self.runtime.blocks.tool_result.push(block);
                         }
                         // Otherwise: handled via the cache when creating ToolUse blocks
                     }
 
                     Content::Image { .. } => {
                         // Images displayed as text for now
-                        self.chat
+                        self.runtime
+                            .chat
                             .messages
                             .push((base_role.to_string(), "[Image]".to_string()));
                     }
 
                     Content::Document { .. } => {
                         // Documents (PDFs) displayed as text for now
-                        self.chat
+                        self.runtime
+                            .chat
                             .messages
                             .push((base_role.to_string(), "[PDF]".to_string()));
                     }
@@ -785,7 +809,7 @@ impl App {
         let mut tool_use_ids: HashSet<String> = HashSet::new();
         let mut tool_result_ids: HashSet<String> = HashSet::new();
 
-        for msg in &self.chat.conversation {
+        for msg in &self.runtime.chat.conversation {
             for content in &msg.content {
                 match content {
                     Content::ToolUse { id, .. } => {
@@ -826,7 +850,7 @@ impl App {
 
         // Append as a user message with tool results (Anthropic style)
         if !placeholder_results.is_empty() {
-            self.chat.conversation.push(ModelMessage {
+            self.runtime.chat.conversation.push(ModelMessage {
                 role: Role::User,
                 content: placeholder_results,
             });

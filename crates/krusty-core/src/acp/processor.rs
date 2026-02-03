@@ -32,6 +32,7 @@ use crate::ai::format_detection::detect_api_format;
 use crate::ai::providers::{get_provider, AuthHeader, ProviderId};
 use crate::ai::streaming::StreamPart;
 use crate::ai::types::{AiToolCall, Content, FinishReason};
+use crate::tools::git_identity::{GitIdentity, GitIdentityMode};
 use crate::tools::{ToolContext, ToolRegistry, ToolResult};
 
 use super::error::AcpError;
@@ -92,6 +93,8 @@ pub struct PromptProcessor {
     dual_mind_config: DualMindConfig,
     /// Cumulative exploration tracking for review triggers
     exploration_tracker: ExplorationTracker,
+    /// Git identity for commit attribution
+    git_identity: Option<GitIdentity>,
 }
 
 impl PromptProcessor {
@@ -104,6 +107,7 @@ impl PromptProcessor {
             dual_mind: None,
             dual_mind_config: DualMindConfig::default(),
             exploration_tracker: ExplorationTracker::new(),
+            git_identity: Some(GitIdentity::default()),
         }
     }
 
@@ -129,6 +133,11 @@ impl PromptProcessor {
     /// Update the working directory (called when session cwd changes)
     pub fn set_cwd(&mut self, cwd: PathBuf) {
         self.cwd = cwd;
+    }
+
+    /// Set git identity for commit attribution
+    pub fn set_git_identity(&mut self, identity: GitIdentity) {
+        self.git_identity = Some(identity);
     }
 
     /// Initialize the AI client with an API key and optional model override
@@ -415,10 +424,16 @@ impl PromptProcessor {
         tool_calls: Vec<AiToolCall>,
         connection: &C,
     ) -> Result<StopReason, AcpError> {
-        let ctx = ToolContext {
+        let mut ctx = ToolContext {
             working_dir: self.cwd.clone(),
             ..Default::default()
         };
+
+        if let Some(ref identity) = self.git_identity {
+            if identity.mode != GitIdentityMode::Disabled {
+                ctx = ctx.with_git_identity(identity.clone());
+            }
+        }
 
         for tool_call in tool_calls {
             if session.is_cancelled() {

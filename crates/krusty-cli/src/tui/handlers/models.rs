@@ -9,7 +9,7 @@ impl App {
     /// Start async fetch of OpenRouter models
     pub fn start_openrouter_fetch(&mut self) {
         // Don't start if already fetching
-        if self.channels.openrouter_models.is_some() {
+        if self.runtime.channels.openrouter_models.is_some() {
             return;
         }
 
@@ -23,10 +23,10 @@ impl App {
         };
 
         // Mark popup as loading (only if popup is open)
-        self.popups.model.set_loading(true);
+        self.ui.popups.model.set_loading(true);
 
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.channels.openrouter_models = Some(rx);
+        self.runtime.channels.openrouter_models = Some(rx);
 
         // Clone registry for async task
         let registry = self.services.model_registry.clone();
@@ -54,7 +54,7 @@ impl App {
     /// Start async fetch of OpenCode Zen models
     pub fn start_opencodezen_fetch(&mut self) {
         // Don't start if already fetching
-        if self.channels.opencodezen_models.is_some() {
+        if self.runtime.channels.opencodezen_models.is_some() {
             return;
         }
 
@@ -68,10 +68,10 @@ impl App {
         };
 
         // Mark popup as loading (only if popup is open)
-        self.popups.model.set_loading(true);
+        self.ui.popups.model.set_loading(true);
 
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.channels.opencodezen_models = Some(rx);
+        self.runtime.channels.opencodezen_models = Some(rx);
 
         // Clone registry for async task
         let registry = self.services.model_registry.clone();
@@ -98,7 +98,7 @@ impl App {
 
     /// Poll for OpenRouter model fetch completion
     pub fn poll_openrouter_fetch(&mut self) {
-        if let Some(rx) = &mut self.channels.openrouter_models {
+        if let Some(rx) = &mut self.runtime.channels.openrouter_models {
             match rx.try_recv() {
                 Ok(result) => {
                     match result {
@@ -117,17 +117,18 @@ impl App {
                             );
                         }
                         Err(e) => {
-                            self.popups.model.set_error(e);
+                            self.ui.popups.model.set_error(e);
                         }
                     }
-                    self.channels.openrouter_models = None;
+                    self.runtime.channels.openrouter_models = None;
                 }
                 Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
                 Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                    self.popups
+                    self.ui
+                        .popups
                         .model
                         .set_error("Fetch task closed unexpectedly".to_string());
-                    self.channels.openrouter_models = None;
+                    self.runtime.channels.openrouter_models = None;
                 }
             }
         }
@@ -135,7 +136,7 @@ impl App {
 
     /// Poll for OpenCode Zen model fetch completion
     pub fn poll_opencodezen_fetch(&mut self) {
-        if let Some(rx) = &mut self.channels.opencodezen_models {
+        if let Some(rx) = &mut self.runtime.channels.opencodezen_models {
             match rx.try_recv() {
                 Ok(result) => {
                     match result {
@@ -154,17 +155,18 @@ impl App {
                             );
                         }
                         Err(e) => {
-                            self.popups.model.set_error(e);
+                            self.ui.popups.model.set_error(e);
                         }
                     }
-                    self.channels.opencodezen_models = None;
+                    self.runtime.channels.opencodezen_models = None;
                 }
                 Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
                 Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                    self.popups
+                    self.ui
+                        .popups
                         .model
                         .set_error("Fetch task closed unexpectedly".to_string());
-                    self.channels.opencodezen_models = None;
+                    self.runtime.channels.opencodezen_models = None;
                 }
             }
         }
@@ -190,7 +192,7 @@ impl App {
                 })
                 .collect();
 
-            self.popups.model.set_models(recent_models, models_vec);
+            self.ui.popups.model.set_models(recent_models, models_vec);
         }
     }
 }

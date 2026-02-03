@@ -37,40 +37,41 @@ impl App {
     /// Poll bash output channel and update BashBlock with streaming output
     pub(crate) fn poll_bash_output(&mut self) -> PollResult {
         poll_bash_output(
-            &mut self.channels,
-            &mut self.blocks.bash,
-            &mut self.scroll_system.scroll,
-            &self.process_registry,
+            &mut self.runtime.channels,
+            &mut self.runtime.blocks.bash,
+            &mut self.ui.scroll_system.scroll,
+            &self.runtime.process_registry,
         )
     }
 
     /// Poll explore progress channel and update ExploreBlock with agent progress
     pub(crate) fn poll_explore_progress(&mut self) -> PollResult {
-        poll_explore_progress(&mut self.channels, &mut self.blocks.explore)
+        poll_explore_progress(&mut self.runtime.channels, &mut self.runtime.blocks.explore)
     }
 
     /// Poll build progress channel and update BuildBlock with builder progress
     pub(crate) fn poll_build_progress(&mut self) -> PollResult {
         poll_build_progress(
-            &mut self.channels,
-            &mut self.blocks.build,
-            &mut self.active_plan,
+            &mut self.runtime.channels,
+            &mut self.runtime.blocks.build,
+            &mut self.runtime.active_plan,
             &self.services.plan_manager,
         )
     }
 
     /// Poll dual-mind dialogue channel for Big Claw / Little Claw updates
     pub(crate) fn poll_dual_mind(&mut self) -> PollResult {
-        let (result, extracted_insights) = poll_dual_mind(&mut self.channels);
+        let (result, extracted_insights) = poll_dual_mind(&mut self.runtime.channels);
 
         // Save extracted insights if we have database access and a codebase
         if let Some(insights) = extracted_insights {
-            if let (Some(sm), Some(session_id)) =
-                (&self.services.session_manager, &self.current_session_id)
-            {
+            if let (Some(sm), Some(session_id)) = (
+                &self.services.session_manager,
+                &self.runtime.current_session_id,
+            ) {
                 let conn = sm.db().conn();
                 // Get codebase_id for current working directory
-                let working_dir_str = self.working_dir.to_string_lossy().to_string();
+                let working_dir_str = self.runtime.working_dir.to_string_lossy().to_string();
                 if let Ok(Some(codebase)) =
                     krusty_core::index::CodebaseStore::new(conn).get_by_path(&working_dir_str)
                 {
@@ -113,14 +114,14 @@ impl App {
 
     /// Poll terminal panes for PTY output and update cursor animations
     pub(crate) fn poll_terminal_panes(&mut self) {
-        self.blocks.poll_terminals();
+        self.runtime.blocks.poll_terminals();
     }
 
     /// Process actions returned from polling operations
     pub(crate) fn process_poll_actions(&mut self, result: PollResult) {
         // Add messages
         for (role, content) in result.messages {
-            self.chat.messages.push((role, content));
+            self.runtime.chat.messages.push((role, content));
         }
 
         // Execute actions
@@ -170,7 +171,7 @@ impl App {
         };
 
         let conn = sm.db().conn();
-        let working_dir_str = self.working_dir.to_string_lossy().to_string();
+        let working_dir_str = self.runtime.working_dir.to_string_lossy().to_string();
 
         let codebase =
             match krusty_core::index::CodebaseStore::new(conn).get_by_path(&working_dir_str) {
@@ -201,7 +202,7 @@ impl App {
             _ => {}
         }
 
-        let session_id = self.current_session_id.as_deref();
+        let session_id = self.runtime.current_session_id.as_deref();
         let mut stored = 0;
 
         for (content, label) in [
@@ -259,19 +260,19 @@ impl App {
 
     /// Tick all animations. Returns true if any animation is still running.
     pub(crate) fn tick_blocks(&mut self) -> bool {
-        let blocks = self.blocks.tick_all();
-        self.popups.pinch.tick();
-        let sidebar = self.plan_sidebar.tick();
-        let plugin_window = self.plugin_window.tick();
+        let blocks = self.runtime.blocks.tick_all();
+        self.ui.popups.pinch.tick();
+        let sidebar = self.ui.plan_sidebar.tick();
+        let plugin_window = self.ui.plugin_window.tick();
 
-        if self.plan_sidebar.should_clear_plan() {
+        if self.ui.plan_sidebar.should_clear_plan() {
             self.clear_plan();
             tracing::info!("Plan cleared after sidebar collapse");
         }
 
         use crate::tui::popups::pinch::PinchStage;
         let pinch_active = matches!(
-            self.popups.pinch.stage,
+            self.ui.popups.pinch.stage,
             PinchStage::Summarizing { .. } | PinchStage::Creating
         );
 

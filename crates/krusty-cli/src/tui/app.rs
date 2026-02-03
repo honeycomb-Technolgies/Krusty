@@ -37,7 +37,7 @@ use crate::tui::polling::{
     poll_background_processes, poll_init_exploration, poll_mcp_status, poll_oauth_status,
 };
 use crate::tui::state::{
-    BlockManager, BlockUiStates, ChatState, PopupState, ScrollSystem, ToolResultCache, UiState,
+    BlockManager, BlockUiStates, ChatState, PopupState, ScrollSystem, ToolResultCache,
 };
 use crate::tui::streaming::StreamingManager;
 use crate::tui::utils::{AsyncChannels, TitleEditor};
@@ -110,136 +110,221 @@ pub struct AppServices {
     pub oauth_status_tx: tokio::sync::mpsc::UnboundedSender<crate::tui::utils::OAuthStatusUpdate>,
 }
 
-/// Application state
-pub struct App {
-    /// UI state (view, popup, theme, work_mode)
-    pub ui: UiState,
+/// UI-only state (view, popups, inputs, rendering, animations)
+pub struct AppUi {
+    /// Current view (StartMenu, Chat)
+    pub view: View,
+    /// Current active popup
+    pub popup: Popup,
+    /// Current work mode (Build, Plan)
+    pub work_mode: WorkMode,
+    /// Active theme
+    pub theme: Arc<crate::tui::themes::Theme>,
+    /// Theme name for display/saving
+    pub theme_name: String,
+    /// Pending view change to apply at end of event loop
     pub pending_view_change: Option<View>,
-    pub active_plan: Option<PlanFile>,
-    pub services: AppServices,
-
+    /// Plan sidebar component state
     pub plan_sidebar: crate::tui::components::PlanSidebarState,
+    /// Plugin window (Kitty graphics) state
     pub plugin_window: crate::tui::components::PluginWindowState,
+    /// Decision prompt component state
     pub decision_prompt: crate::tui::components::DecisionPrompt,
-    pub should_quit: bool,
+    /// Multi-line text input
     pub input: MultiLineInput,
+    /// Autocomplete popup
     pub autocomplete: AutocompletePopup,
+    /// File search popup
     pub file_search: crate::tui::input::FileSearchPopup,
+    /// Scroll and layout system
+    pub scroll_system: ScrollSystem,
+    /// All popup states
+    pub popups: PopupState,
+    /// Menu animation state
+    pub menu_animator: MenuAnimator,
+    /// ID-based UI state for blocks
+    pub block_ui: BlockUiStates,
+    /// Markdown rendering cache
+    pub markdown_cache: MarkdownCache,
+    /// Toast notification queue
+    pub toasts: crate::tui::components::ToastQueue,
+    /// Dirty-tracking flag for render optimization
+    pub needs_redraw: bool,
+}
 
+impl AppUi {
+    pub fn new(
+        theme: Arc<crate::tui::themes::Theme>,
+        theme_name: String,
+        working_dir: PathBuf,
+    ) -> Self {
+        Self {
+            view: View::StartMenu,
+            popup: Popup::None,
+            work_mode: WorkMode::Build,
+            theme,
+            theme_name,
+            pending_view_change: None,
+            plan_sidebar: crate::tui::components::PlanSidebarState::default(),
+            plugin_window: crate::tui::components::PluginWindowState::default(),
+            decision_prompt: crate::tui::components::DecisionPrompt::default(),
+            input: MultiLineInput::new(5),
+            autocomplete: AutocompletePopup::new(),
+            file_search: crate::tui::input::FileSearchPopup::new(working_dir),
+            scroll_system: ScrollSystem::new(),
+            popups: PopupState::new(),
+            menu_animator: MenuAnimator::new(),
+            block_ui: BlockUiStates::new(),
+            markdown_cache: MarkdownCache::new(),
+            toasts: crate::tui::components::ToastQueue::new(),
+            needs_redraw: true,
+        }
+    }
+}
+
+/// Runtime state (AI, streaming, processes, sessions, plans, agents, embeddings)
+pub struct AppRuntime {
+    /// Active plan file
+    pub active_plan: Option<PlanFile>,
     /// Chat state (messages, conversation, streaming flags)
     pub chat: ChatState,
-
-    /// Scroll/layout system (scroll, layout, selection, hover, edge_scroll)
-    pub scroll_system: ScrollSystem,
-
+    /// Current model identifier
     pub current_model: String,
-
-    // Token tracking
+    /// Token usage tracking
     pub context_tokens_used: usize,
-    /// Flag to trigger auto-pinch after current response completes
+    /// Flag to trigger auto-pinch after response completes
     pub pending_auto_pinch: bool,
     /// Auto-pinch in progress (bypasses popup when AI is busy)
     pub auto_pinch_in_progress: bool,
-
-    // AI client
+    /// AI client
     pub ai_client: Option<AiClient>,
+    /// API key
     pub api_key: Option<String>,
-
-    // Dual-mind quality control (Big Claw / Little Claw)
+    /// Dual-mind quality control
     pub dual_mind: Option<Arc<RwLock<DualMind>>>,
-
-    // Multi-provider support
+    /// Active AI provider
     pub active_provider: ProviderId,
-
-    // Process Registry for background processes
+    /// Background process registry
     pub process_registry: Arc<ProcessRegistry>,
+    /// Running process count (cached for status bar)
     pub running_process_count: usize,
+    /// Oldest running process elapsed time
     pub running_process_elapsed: Option<std::time::Duration>,
-
-    // Working directory
+    /// Working directory
     pub working_dir: PathBuf,
-
-    // Session management
+    /// Current session ID
     pub current_session_id: Option<String>,
+    /// Session title
     pub session_title: Option<String>,
-
-    // Title editing state
+    /// Title editing state
     pub title_editor: TitleEditor,
-
-    // Async channel receivers (tool results, bash output)
+    /// Async channel receivers
     pub channels: AsyncChannels,
-
-    // /init exploration tracking
+    /// /init exploration ID
     pub init_explore_id: Option<String>,
-    /// Cached languages for /init (set once at start, reused during polling)
+    /// Cached languages for /init
     pub cached_init_languages: Option<Vec<String>>,
-
-    // Queued tool calls waiting for explore to complete
+    /// Queued tool calls waiting for explore
     pub queued_tools: Vec<AiToolCall>,
-
-    // Pending tool results waiting to be combined with queued tool results
+    /// Pending tool results to combine
     pub pending_tool_results: Vec<Content>,
-
-    // Popup states (grouped into component)
-    pub popups: PopupState,
-
-    // Menu animation
-    pub menu_animator: MenuAnimator,
-
-    // Agent system
+    /// Agent event bus
     pub event_bus: AgentEventBus,
+    /// Agent state
     pub agent_state: AgentState,
+    /// Agent config
     pub agent_config: AgentConfig,
+    /// Agent cancellation token
     pub cancellation: AgentCancellation,
-
-    // Extended thinking mode (Tab to toggle)
+    /// Extended thinking mode enabled
     pub thinking_enabled: bool,
-
-    // Streaming state machine (replaces flag-based state)
+    /// Streaming state machine
     pub streaming: StreamingManager,
-
-    // Clipboard images pending resolution (id -> RGBA bytes)
+    /// Clipboard images pending resolution
     pub pending_clipboard_images: std::collections::HashMap<String, (usize, usize, Vec<u8>)>,
-
-    // Block manager - owns all block types and their state
-    // NOTE: Being phased out in favor of conversation-based rendering
+    /// Block manager (owns all block types)
     pub blocks: BlockManager,
-
-    // NEW: ID-based UI state (replaces state in block structs)
-    pub block_ui: BlockUiStates,
-
-    // NEW: Tool result cache for rendering (keyed by tool_use_id)
+    /// Tool result cache for rendering
     pub tool_results: ToolResultCache,
-
-    // Markdown rendering cache
-    pub markdown_cache: MarkdownCache,
-
-    // Attached files mapping (display_name -> file_path)
+    /// Attached files mapping
     pub attached_files: std::collections::HashMap<String, PathBuf>,
-
-    // Toast notification queue
-    pub toasts: crate::tui::components::ToastQueue,
-
-    // Semantic retrieval embedding engine (shared with search_codebase tool)
+    /// Semantic retrieval embedding engine
     pub embedding_engine:
         Arc<tokio::sync::RwLock<Option<Arc<krusty_core::index::EmbeddingEngine>>>>,
+    /// Embedding init failed flag
     pub embedding_init_failed: bool,
+    /// Embedding init handle
     pub embedding_handle:
         Option<tokio::task::JoinHandle<anyhow::Result<krusty_core::index::EmbeddingEngine>>>,
-
-    // Exploration budget tracking (consecutive read-only tool calls)
+    /// Exploration budget tracking
     pub exploration_budget_count: usize,
-
-    // Auto-updater state
+    /// Just updated flag
     pub just_updated: bool,
+    /// Update status
     pub update_status: Option<krusty_core::updater::UpdateStatus>,
-    /// Path to the krusty repo (for self-update)
-    #[allow(dead_code)] // Infrastructure for future auto-update feature
-    pub update_repo_path: Option<PathBuf>,
+    /// Should quit flag
+    pub should_quit: bool,
+}
 
-    // Dirty-tracking for render optimization
-    // When false, skip rendering to save CPU
-    needs_redraw: bool,
+impl AppRuntime {
+    pub fn new(
+        current_model: String,
+        active_provider: ProviderId,
+        working_dir: PathBuf,
+        process_registry: Arc<ProcessRegistry>,
+    ) -> Self {
+        Self {
+            active_plan: None,
+            chat: ChatState::new(),
+            current_model,
+            context_tokens_used: 0,
+            pending_auto_pinch: false,
+            auto_pinch_in_progress: false,
+            ai_client: None,
+            api_key: None,
+            dual_mind: None,
+            active_provider,
+            process_registry,
+            running_process_count: 0,
+            running_process_elapsed: None,
+            working_dir,
+            current_session_id: None,
+            session_title: None,
+            title_editor: TitleEditor::new(),
+            channels: AsyncChannels::new(),
+            init_explore_id: None,
+            cached_init_languages: None,
+            queued_tools: Vec::new(),
+            pending_tool_results: Vec::new(),
+            event_bus: AgentEventBus::new(),
+            agent_state: AgentState::new(),
+            agent_config: AgentConfig::default(),
+            cancellation: AgentCancellation::new(),
+            thinking_enabled: false,
+            streaming: StreamingManager::new(),
+            pending_clipboard_images: std::collections::HashMap::new(),
+            blocks: BlockManager::new(),
+            tool_results: ToolResultCache::new(),
+            attached_files: std::collections::HashMap::new(),
+            embedding_engine: Arc::new(tokio::sync::RwLock::new(None)),
+            embedding_init_failed: false,
+            embedding_handle: None,
+            exploration_budget_count: 0,
+            just_updated: false,
+            update_status: None,
+            should_quit: false,
+        }
+    }
+}
+
+/// Application state
+pub struct App {
+    /// UI-only state
+    pub ui: AppUi,
+    /// Runtime state
+    pub runtime: AppRuntime,
+    /// Application services
+    pub services: AppServices,
 }
 
 impl App {
@@ -258,91 +343,24 @@ impl App {
             active_provider,
         ) = crate::tui::app_builder::init_services(&working_dir).await;
 
-        Self {
-            ui: UiState::new(theme, theme_name),
-            pending_view_change: None,
-            active_plan: None,
-            services,
-            plan_sidebar: crate::tui::components::PlanSidebarState::default(),
-            plugin_window: crate::tui::components::PluginWindowState::default(),
-            decision_prompt: crate::tui::components::DecisionPrompt::default(),
-            should_quit: false,
-            input: MultiLineInput::new(5),
-            autocomplete: AutocompletePopup::new(),
-            file_search: crate::tui::input::FileSearchPopup::new(working_dir.clone()),
-            chat: ChatState::new(),
-            scroll_system: ScrollSystem::new(),
+        let ui = AppUi::new(theme, theme_name, working_dir.clone());
+        let runtime = AppRuntime::new(
             current_model,
-            context_tokens_used: 0,
-            pending_auto_pinch: false,
-            auto_pinch_in_progress: false,
-            ai_client: None,
-            api_key: None,
-            dual_mind: None,
             active_provider,
-            process_registry,
-            running_process_count: 0,
-            running_process_elapsed: None,
             working_dir,
-            current_session_id: None,
-            session_title: None,
-            title_editor: TitleEditor::new(),
+            process_registry,
+        );
+
+        // Manually set channels that were initialized in init_services
+        let runtime = AppRuntime {
             channels,
-            init_explore_id: None,
-            cached_init_languages: None,
-            queued_tools: Vec::new(),
-            pending_tool_results: Vec::new(),
-            popups: PopupState::new(),
-            menu_animator: MenuAnimator::new(),
+            ..runtime
+        };
 
-            // Agent system
-            event_bus: AgentEventBus::new(),
-            agent_state: AgentState::new(),
-            agent_config: AgentConfig::default(),
-            cancellation: AgentCancellation::new(),
-
-            // Extended thinking mode (Tab to toggle)
-            thinking_enabled: false,
-
-            // Streaming state machine
-            streaming: StreamingManager::new(),
-
-            // Clipboard images
-            pending_clipboard_images: std::collections::HashMap::new(),
-
-            // Block manager (owns all block types)
-            blocks: BlockManager::new(),
-
-            // NEW: ID-based UI state
-            block_ui: BlockUiStates::new(),
-
-            // NEW: Tool result cache
-            tool_results: ToolResultCache::new(),
-
-            // Markdown rendering cache
-            markdown_cache: MarkdownCache::new(),
-
-            // Attached files for preview lookup
-            attached_files: std::collections::HashMap::new(),
-
-            // Toast notifications
-            toasts: crate::tui::components::ToastQueue::new(),
-
-            // Exploration budget
-            exploration_budget_count: 0,
-
-            // Semantic retrieval
-            embedding_engine: Arc::new(tokio::sync::RwLock::new(None)),
-            embedding_init_failed: false,
-            embedding_handle: None,
-
-            // Auto-updater
-            just_updated: false,
-            update_status: None,
-            update_repo_path: krusty_core::updater::detect_repo_path(),
-
-            // Start with dirty to ensure first frame renders
-            needs_redraw: true,
+        Self {
+            ui,
+            runtime,
+            services,
         }
     }
 
@@ -353,14 +371,18 @@ impl App {
         if let Some(metadata) = self
             .services
             .model_registry
-            .try_get_model(&self.current_model)
+            .try_get_model(&self.runtime.current_model)
         {
             return metadata.context_window;
         }
 
         // Fall back to static provider config (Anthropic, Z.ai, etc.)
-        if let Some(provider) = crate::ai::providers::get_provider(self.active_provider) {
-            if let Some(model) = provider.models.iter().find(|m| m.id == self.current_model) {
+        if let Some(provider) = crate::ai::providers::get_provider(self.runtime.active_provider) {
+            if let Some(model) = provider
+                .models
+                .iter()
+                .find(|m| m.id == self.runtime.current_model)
+            {
                 return model.context_window;
             }
         }
@@ -371,9 +393,9 @@ impl App {
 
     /// Clear the active plan and sync UI state
     pub fn clear_plan(&mut self) {
-        self.active_plan = None;
+        self.runtime.active_plan = None;
         self.ui.work_mode = WorkMode::Build;
-        self.plan_sidebar.reset();
+        self.ui.plan_sidebar.reset();
     }
 
     /// Set the active plan without changing work mode
@@ -382,7 +404,7 @@ impl App {
     /// - New plan from AI: set WorkMode::Plan
     /// - Session resume: choose based on plan progress
     pub fn set_plan(&mut self, plan: PlanFile) {
-        self.active_plan = Some(plan);
+        self.runtime.active_plan = Some(plan);
     }
 
     /// Context usage threshold for auto-pinch (80%)
@@ -394,7 +416,7 @@ impl App {
     /// sets `pending_auto_pinch` which triggers the pinch popup when idle.
     pub fn check_auto_pinch(&mut self) {
         // Don't trigger if already pending or no session
-        if self.pending_auto_pinch || self.current_session_id.is_none() {
+        if self.runtime.pending_auto_pinch || self.runtime.current_session_id.is_none() {
             return;
         }
 
@@ -403,16 +425,16 @@ impl App {
             return;
         }
 
-        let usage_ratio = self.context_tokens_used as f32 / max_tokens as f32;
+        let usage_ratio = self.runtime.context_tokens_used as f32 / max_tokens as f32;
 
         if usage_ratio >= Self::AUTO_PINCH_THRESHOLD {
             tracing::info!(
                 "Context at {:.0}% ({}/{}) - will trigger auto-pinch after idle",
                 usage_ratio * 100.0,
-                self.context_tokens_used,
+                self.runtime.context_tokens_used,
                 max_tokens
             );
-            self.pending_auto_pinch = true;
+            self.runtime.pending_auto_pinch = true;
         }
     }
 
@@ -422,43 +444,43 @@ impl App {
     /// entirely and runs pinch in the background. When idle, shows the popup for
     /// manual interaction.
     pub fn trigger_pending_auto_pinch(&mut self) {
-        if !self.pending_auto_pinch {
+        if !self.runtime.pending_auto_pinch {
             return;
         }
 
         // Don't trigger if still busy with streaming or tools
-        if self.chat.is_streaming || self.chat.is_executing_tools {
+        if self.runtime.chat.is_streaming || self.runtime.chat.is_executing_tools {
             return;
         }
 
         // Don't trigger if already in a popup or auto-pinch is running
-        if self.ui.popup != crate::tui::app::Popup::None || self.auto_pinch_in_progress {
+        if self.ui.popup != crate::tui::app::Popup::None || self.runtime.auto_pinch_in_progress {
             return;
         }
 
         // Don't trigger if no session
-        if self.current_session_id.is_none() {
-            self.pending_auto_pinch = false;
+        if self.runtime.current_session_id.is_none() {
+            self.runtime.pending_auto_pinch = false;
             return;
         }
 
-        self.pending_auto_pinch = false;
+        self.runtime.pending_auto_pinch = false;
 
         // Calculate usage percent
         let max_tokens = self.max_context_tokens();
         let usage_percent = if max_tokens > 0 {
-            ((self.context_tokens_used as f64 / max_tokens as f64) * 100.0) as u8
+            ((self.runtime.context_tokens_used as f64 / max_tokens as f64) * 100.0) as u8
         } else {
             0
         };
 
         // Show system message explaining why
-        self.chat.messages.push((
+        self.runtime.chat.messages.push((
             "system".to_string(),
             format!(
                 "Context is at {}% capacity ({} / {} tokens). Starting pinch to continue conversation with fresh context...",
                 usage_percent,
-                self.context_tokens_used,
+                self.runtime.context_tokens_used,
                 max_tokens
             ),
         ));
@@ -466,7 +488,7 @@ impl App {
         // Check if conversation has pending AI work (multi-turn tool loop).
         // If the last message is a tool result or assistant message with tool calls,
         // the AI was mid-flow — bypass popup and auto-pinch silently.
-        let was_autonomous = self.chat.conversation.last().is_some_and(|msg| {
+        let was_autonomous = self.runtime.chat.conversation.last().is_some_and(|msg| {
             msg.role == crate::ai::types::Role::User
                 && msg
                     .content
@@ -481,19 +503,19 @@ impl App {
         } else {
             // User is interactive — show popup as before
             let top_files = self.get_top_files_preview(5);
-            self.popups.pinch.start(usage_percent, top_files);
+            self.ui.popups.pinch.start(usage_percent, top_files);
             self.ui.popup = crate::tui::app::Popup::Pinch;
         }
     }
 
     /// Show a toast notification
     pub fn show_toast(&mut self, toast: crate::tui::components::Toast) {
-        self.toasts.push(toast);
+        self.ui.toasts.push(toast);
     }
 
     /// Get plan info for toolbar display
     pub fn get_plan_info(&self) -> Option<crate::tui::components::PlanInfo<'_>> {
-        self.active_plan.as_ref().map(|plan| {
+        self.runtime.active_plan.as_ref().map(|plan| {
             let (completed, total) = plan.progress();
             crate::tui::components::PlanInfo {
                 title: &plan.title,
@@ -509,57 +531,60 @@ impl App {
 
     /// Start streaming from AI - sets is_streaming flag
     pub fn start_streaming(&mut self) {
-        self.chat.start_streaming();
+        self.runtime.chat.start_streaming();
     }
 
     /// Stop streaming from AI - clears is_streaming flag and related caches
     pub fn stop_streaming(&mut self) {
-        self.chat.stop_streaming();
+        self.runtime.chat.stop_streaming();
     }
 
     /// Start tool execution - sets is_executing_tools flag
     pub fn start_tool_execution(&mut self) {
-        self.chat.start_tool_execution();
+        self.runtime.chat.start_tool_execution();
     }
 
     /// Stop tool execution - clears is_executing_tools flag
     pub fn stop_tool_execution(&mut self) {
-        self.chat.stop_tool_execution();
+        self.runtime.chat.stop_tool_execution();
     }
 
     /// Apply any pending view change (called at end of event loop iteration)
     pub fn apply_pending_view_change(&mut self) {
-        if let Some(view) = self.pending_view_change.take() {
+        if let Some(view) = self.ui.pending_view_change.take() {
             self.ui.view = view;
         }
     }
 
     /// Check if busy (streaming OR executing tools)
     pub fn is_busy(&self) -> bool {
-        self.chat.is_busy()
+        self.runtime.chat.is_busy()
     }
 
     /// Start editing the session title
     pub fn start_title_edit(&mut self) {
         if self.ui.view == View::Chat {
-            self.title_editor.start(self.session_title.as_deref());
+            self.runtime
+                .title_editor
+                .start(self.runtime.session_title.as_deref());
         }
     }
 
     /// Cancel title editing and revert
     pub fn cancel_title_edit(&mut self) {
-        self.title_editor.cancel();
+        self.runtime.title_editor.cancel();
     }
 
     /// Save the edited title
     pub fn save_title_edit(&mut self) {
-        if let Some(new_title) = self.title_editor.finish() {
-            self.session_title = Some(new_title.clone());
+        if let Some(new_title) = self.runtime.title_editor.finish() {
+            self.runtime.session_title = Some(new_title.clone());
 
             // Save to database
-            if let (Some(manager), Some(session_id)) =
-                (&self.services.session_manager, &self.current_session_id)
-            {
+            if let (Some(manager), Some(session_id)) = (
+                &self.services.session_manager,
+                &self.runtime.current_session_id,
+            ) {
                 let _ = manager.update_session_title(session_id, &new_title);
             }
         }
@@ -575,7 +600,7 @@ impl App {
                 "Updated to v{}",
                 version
             )));
-            self.just_updated = true;
+            self.runtime.just_updated = true;
         }
 
         // Check for pending update from previous session (cleans up stale files)
@@ -625,7 +650,7 @@ impl App {
         }
 
         // Eagerly initialize embedding engine in background
-        self.embedding_handle = Some(krusty_core::index::EmbeddingEngine::init_async());
+        self.runtime.embedding_handle = Some(krusty_core::index::EmbeddingEngine::init_async());
 
         enable_raw_mode()?;
         let mut stdout = io::stdout();
@@ -647,13 +672,13 @@ impl App {
         let mut terminal = Terminal::new(backend)?;
 
         // Initialize Kitty graphics support for plugin window
-        self.plugin_window.detect_graphics_support();
-        self.plugin_window.update_cell_size();
+        self.ui.plugin_window.detect_graphics_support();
+        self.ui.plugin_window.update_cell_size();
 
         let result = self.main_loop(&mut terminal).await;
 
         // Kill all background processes on shutdown
-        self.process_registry.kill_all().await;
+        self.runtime.process_registry.kill_all().await;
 
         disable_raw_mode()?;
         execute!(
@@ -672,20 +697,20 @@ impl App {
         match event {
             Event::Key(key) => {
                 self.handle_key(key);
-                self.needs_redraw = true;
+                self.ui.needs_redraw = true;
             }
             Event::Mouse(mouse) => {
                 self.handle_mouse_event(mouse);
-                self.needs_redraw = true;
+                self.ui.needs_redraw = true;
             }
             Event::Paste(text) => {
                 self.handle_paste(text);
-                self.needs_redraw = true;
+                self.ui.needs_redraw = true;
             }
             Event::Resize(_, _) => {
                 // Update cell size for Kitty graphics on resize
-                self.plugin_window.update_cell_size();
-                self.needs_redraw = true;
+                self.ui.plugin_window.update_cell_size();
+                self.ui.needs_redraw = true;
             }
             _ => {}
         }
@@ -701,20 +726,21 @@ impl App {
         let mut event_stream = EventStream::new();
 
         loop {
-            if let Some(area) = self.scroll_system.layout.input_area {
-                self.input.set_width(area.width);
+            if let Some(area) = self.ui.scroll_system.layout.input_area {
+                self.ui.input.set_width(area.width);
             }
 
             // Update running process count and elapsed time for status bar (non-blocking)
-            if let Some(count) = self.process_registry.try_running_count() {
-                self.running_process_count = count;
+            if let Some(count) = self.runtime.process_registry.try_running_count() {
+                self.runtime.running_process_count = count;
             }
-            self.running_process_elapsed = self.process_registry.try_oldest_running_elapsed();
+            self.runtime.running_process_elapsed =
+                self.runtime.process_registry.try_oldest_running_elapsed();
 
             // Keep process popup updated while open (non-blocking)
             if self.ui.popup == Popup::ProcessList {
-                if let Some(processes) = self.process_registry.try_list() {
-                    self.popups.process.update(processes);
+                if let Some(processes) = self.runtime.process_registry.try_list() {
+                    self.ui.popups.process.update(processes);
                 }
             }
 
@@ -722,17 +748,17 @@ impl App {
             // Trigger redraw when events were processed - ensures buffered text renders
             // even after is_streaming becomes false (fixes GLM/Z.ai streaming freeze)
             if self.process_stream_events() {
-                self.needs_redraw = true;
+                self.ui.needs_redraw = true;
             }
 
             // Execute tools when ready
             self.check_and_execute_tools();
 
             // Check for completed tool execution
-            if let Some(ref mut rx) = self.channels.tool_results {
+            if let Some(ref mut rx) = self.runtime.channels.tool_results {
                 match rx.try_recv() {
                     Ok(tool_results) => {
-                        self.channels.tool_results = None;
+                        self.runtime.channels.tool_results = None;
                         self.stop_streaming();
                         self.stop_tool_execution();
                         self.handle_tool_results(tool_results);
@@ -742,7 +768,7 @@ impl App {
                     }
                     Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
                         // Task finished without sending results (error case)
-                        self.channels.tool_results = None;
+                        self.runtime.channels.tool_results = None;
                         self.stop_streaming();
                         self.stop_tool_execution();
                     }
@@ -756,7 +782,7 @@ impl App {
             self.poll_summarization();
 
             // Poll auto-pinch (background pinch without popup)
-            if self.auto_pinch_in_progress {
+            if self.runtime.auto_pinch_in_progress {
                 self.poll_auto_pinch();
             }
 
@@ -765,8 +791,11 @@ impl App {
                 // Use inner_area width (terminal width minus borders) so crab stays contained
                 let term_size = terminal.size()?;
                 let inner_width = term_size.width.saturating_sub(2); // Account for logo border
-                self.menu_animator
-                    .update(inner_width, term_size.height, Duration::from_millis(16));
+                self.ui.menu_animator.update(
+                    inner_width,
+                    term_size.height,
+                    Duration::from_millis(16),
+                );
             }
 
             // Poll bash output channel for streaming updates
@@ -781,51 +810,55 @@ impl App {
             // Poll dual-mind dialogue for Big Claw / Little Claw updates
             let dual_mind_result = self.poll_dual_mind();
             if dual_mind_result.needs_redraw {
-                self.needs_redraw = true;
+                self.ui.needs_redraw = true;
             }
             self.process_poll_actions(dual_mind_result);
 
             // Poll /init indexing progress (runs before AI exploration)
             let indexing_result = crate::tui::polling::poll_indexing_progress(
-                &mut self.channels,
-                &mut self.blocks.explore,
-                &self.init_explore_id,
+                &mut self.runtime.channels,
+                &mut self.runtime.blocks.explore,
+                &self.runtime.init_explore_id,
             );
             if indexing_result.needs_redraw {
-                self.needs_redraw = true;
+                self.ui.needs_redraw = true;
             }
 
             // Poll /init exploration progress and result
             // Clone cached languages to avoid borrow conflict (cleared on completion)
-            let languages = self.cached_init_languages.clone().unwrap_or_default();
+            let languages = self
+                .runtime
+                .cached_init_languages
+                .clone()
+                .unwrap_or_default();
             let init_result = poll_init_exploration(
-                &mut self.channels,
-                &mut self.blocks.explore,
-                &mut self.init_explore_id,
-                &mut self.cached_init_languages,
-                &self.working_dir,
+                &mut self.runtime.channels,
+                &mut self.runtime.blocks.explore,
+                &mut self.runtime.init_explore_id,
+                &mut self.runtime.cached_init_languages,
+                &self.runtime.working_dir,
                 &languages,
             );
             if init_result.needs_redraw {
-                self.needs_redraw = true;
+                self.ui.needs_redraw = true;
             }
             self.process_poll_actions(init_result);
 
             // Poll MCP status updates from background tasks
-            let mcp_result = poll_mcp_status(&mut self.channels, &mut self.popups.mcp);
+            let mcp_result = poll_mcp_status(&mut self.runtime.channels, &mut self.ui.popups.mcp);
             if mcp_result.needs_redraw {
-                self.needs_redraw = true;
+                self.ui.needs_redraw = true;
             }
             self.process_poll_actions(mcp_result);
 
             // Poll OAuth status updates from background tasks
             let oauth_result = poll_oauth_status(
-                &mut self.channels,
-                &mut self.popups.auth,
-                self.active_provider,
+                &mut self.runtime.channels,
+                &mut self.ui.popups.auth,
+                self.runtime.active_provider,
             );
             if oauth_result.needs_redraw {
-                self.needs_redraw = true;
+                self.ui.needs_redraw = true;
             }
             self.process_poll_actions(oauth_result);
 
@@ -836,21 +869,23 @@ impl App {
             self.poll_terminal_panes();
 
             // Poll ProcessRegistry for background process status updates
-            let process_result =
-                poll_background_processes(&self.process_registry, &mut self.blocks.bash);
+            let process_result = poll_background_processes(
+                &self.runtime.process_registry,
+                &mut self.runtime.blocks.bash,
+            );
             if process_result.needs_redraw {
-                self.needs_redraw = true;
+                self.ui.needs_redraw = true;
             }
 
             // Tick toasts (auto-dismiss expired) - mark dirty if any expired
-            if self.toasts.tick() {
-                self.needs_redraw = true;
+            if self.ui.toasts.tick() {
+                self.ui.needs_redraw = true;
             }
 
             // Tick all animation blocks (before render, not during)
             // Returns true if any block is still animating
             if self.tick_blocks() {
-                self.needs_redraw = true;
+                self.ui.needs_redraw = true;
             }
 
             // Check if we should trigger auto-pinch (context at threshold)
@@ -858,26 +893,26 @@ impl App {
             self.trigger_pending_auto_pinch();
 
             // Process continuous edge scrolling during selection
-            if self.scroll_system.edge_scroll.direction.is_some() {
+            if self.ui.scroll_system.edge_scroll.direction.is_some() {
                 self.process_edge_scroll();
-                self.needs_redraw = true;
+                self.ui.needs_redraw = true;
             }
 
             // Always redraw if streaming is active (receiving deltas)
-            if self.chat.is_streaming {
-                self.needs_redraw = true;
+            if self.runtime.chat.is_streaming {
+                self.ui.needs_redraw = true;
             }
 
             // Only render if something changed
-            if self.needs_redraw {
+            if self.ui.needs_redraw {
                 terminal.draw(|f| self.ui(f))?;
                 // Flush any pending Kitty graphics after buffer is rendered
-                self.plugin_window.flush_pending_graphics();
-                self.needs_redraw = false;
+                self.ui.plugin_window.flush_pending_graphics();
+                self.ui.needs_redraw = false;
             }
 
             // 60fps polling - edge scroll needs faster polling for smooth scrolling
-            let poll_timeout = if self.scroll_system.edge_scroll.direction.is_some() {
+            let poll_timeout = if self.ui.scroll_system.edge_scroll.direction.is_some() {
                 Duration::from_millis(8) // 125fps for smooth edge scrolling
             } else {
                 Duration::from_millis(16) // 60fps normal
@@ -910,7 +945,7 @@ impl App {
             // Apply any deferred view changes (after popup handling)
             self.apply_pending_view_change();
 
-            if self.should_quit {
+            if self.runtime.should_quit {
                 // Save session state before exiting
                 self.save_session_token_count();
                 self.save_block_ui_states();

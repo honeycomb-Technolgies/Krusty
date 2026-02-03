@@ -29,7 +29,7 @@ impl App {
 
     /// Build context for Plan mode
     fn build_plan_mode_context(&self) -> String {
-        let Some(plan) = &self.active_plan else {
+        let Some(plan) = &self.runtime.active_plan else {
             // In plan mode but no active plan - provide instructions with format
             return r#"[PLAN MODE ACTIVE]
 
@@ -113,7 +113,7 @@ The user can exit plan mode with Ctrl+B when ready to implement."#,
 
     /// Build context for Build mode with active plan
     fn build_build_mode_context(&self) -> String {
-        let Some(plan) = &self.active_plan else {
+        let Some(plan) = &self.runtime.active_plan else {
             return String::new();
         };
 
@@ -246,7 +246,7 @@ You MUST follow this disciplined workflow. Do NOT batch-complete tasks or skip s
         };
 
         let conn = sm.db().conn();
-        let working_dir_str = self.working_dir.to_string_lossy().to_string();
+        let working_dir_str = self.runtime.working_dir.to_string_lossy().to_string();
 
         let codebase_id = match CodebaseStore::new(conn).get_by_path(&working_dir_str) {
             Ok(Some(codebase)) => codebase.id,
@@ -299,7 +299,7 @@ You MUST follow this disciplined workflow. Do NOT batch-complete tasks or skip s
         ];
 
         for filename in PROJECT_FILES {
-            let path = self.working_dir.join(filename);
+            let path = self.runtime.working_dir.join(filename);
             if let Ok(content) = std::fs::read_to_string(&path) {
                 tracing::debug!(
                     "Loaded project context from {} ({} chars)",
@@ -318,7 +318,8 @@ You MUST follow this disciplined workflow. Do NOT batch-complete tasks or skip s
 
     /// Extract the latest user message text from the conversation
     fn extract_latest_user_query(&self) -> Option<String> {
-        self.chat
+        self.runtime
+            .chat
             .conversation
             .iter()
             .rev()
@@ -343,14 +344,14 @@ You MUST follow this disciplined workflow. Do NOT batch-complete tasks or skip s
         };
 
         let conn = sm.db().conn();
-        let working_dir_str = self.working_dir.to_string_lossy().to_string();
+        let working_dir_str = self.runtime.working_dir.to_string_lossy().to_string();
 
         let codebase_id = match CodebaseStore::new(conn).get_by_path(&working_dir_str) {
             Ok(Some(codebase)) => codebase.id,
             _ => return String::new(),
         };
 
-        let engine_guard = self.embedding_engine.try_read().ok();
+        let engine_guard = self.runtime.embedding_engine.try_read().ok();
         let engine_ref = engine_guard.as_ref().and_then(|g| g.as_ref());
         let has_embeddings = engine_ref.is_some();
         let mut retrieval = SemanticRetrieval::new(conn);

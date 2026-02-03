@@ -11,13 +11,13 @@ use krusty_core::auth::{openai_oauth_config, AuthMethod, BrowserOAuthFlow, Devic
 impl App {
     /// Handle auth popup keyboard events
     pub fn handle_auth_popup_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
-        match &self.popups.auth.state {
+        match &self.ui.popups.auth.state {
             AuthState::ProviderSelection { .. } => match code {
                 KeyCode::Esc => self.ui.popup = Popup::None,
-                KeyCode::Up => self.popups.auth.prev_provider(),
-                KeyCode::Down => self.popups.auth.next_provider(),
+                KeyCode::Up => self.ui.popups.auth.prev_provider(),
+                KeyCode::Down => self.ui.popups.auth.next_provider(),
                 KeyCode::Enter => {
-                    self.popups.auth.confirm_provider();
+                    self.ui.popups.auth.confirm_provider();
                 }
                 _ => {}
             },
@@ -26,11 +26,11 @@ impl App {
                 self.handle_api_key_input(code, modifiers, provider);
             }
             AuthState::AuthMethodSelection { .. } => match code {
-                KeyCode::Esc => self.popups.auth.go_back(),
-                KeyCode::Up => self.popups.auth.prev_auth_method(),
-                KeyCode::Down => self.popups.auth.next_auth_method(),
+                KeyCode::Esc => self.ui.popups.auth.go_back(),
+                KeyCode::Up => self.ui.popups.auth.prev_auth_method(),
+                KeyCode::Down => self.ui.popups.auth.next_auth_method(),
                 KeyCode::Enter => {
-                    if let Some((provider, method)) = self.popups.auth.confirm_auth_method() {
+                    if let Some((provider, method)) = self.ui.popups.auth.confirm_auth_method() {
                         self.start_oauth_flow(provider, method);
                     }
                 }
@@ -38,12 +38,12 @@ impl App {
             },
             AuthState::OAuthBrowserWaiting { .. } | AuthState::OAuthDeviceCode { .. } => {
                 if code == KeyCode::Esc {
-                    self.popups.auth.go_back();
+                    self.ui.popups.auth.go_back();
                 }
             }
             AuthState::Complete { .. } => {
                 if code == KeyCode::Esc || code == KeyCode::Enter {
-                    self.popups.auth.reset();
+                    self.ui.popups.auth.reset();
                     self.ui.popup = Popup::None;
                 }
             }
@@ -58,35 +58,36 @@ impl App {
         provider: ProviderId,
     ) {
         match code {
-            KeyCode::Esc => self.popups.auth.go_back(),
-            KeyCode::Backspace if self.popups.auth.get_api_key().is_none_or(str::is_empty) => {
-                self.popups.auth.go_back();
+            KeyCode::Esc => self.ui.popups.auth.go_back(),
+            KeyCode::Backspace if self.ui.popups.auth.get_api_key().is_none_or(str::is_empty) => {
+                self.ui.popups.auth.go_back();
             }
-            KeyCode::Backspace => self.popups.auth.backspace_api_key(),
+            KeyCode::Backspace => self.ui.popups.auth.backspace_api_key(),
             KeyCode::Char('v') if modifiers.contains(KeyModifiers::CONTROL) => {
                 if let Ok(mut clipboard) = arboard::Clipboard::new() {
                     if let Ok(text) = clipboard.get_text() {
                         for c in text.trim().chars() {
-                            self.popups.auth.add_api_key_char(c);
+                            self.ui.popups.auth.add_api_key_char(c);
                         }
                     }
                 }
             }
             KeyCode::Char(c) if !modifiers.contains(KeyModifiers::CONTROL) => {
-                self.popups.auth.add_api_key_char(c);
+                self.ui.popups.auth.add_api_key_char(c);
             }
             KeyCode::Enter => {
-                let key = self.popups.auth.get_api_key().map(|k| k.to_string());
+                let key = self.ui.popups.auth.get_api_key().map(|k| k.to_string());
                 if let Some(key) = key {
                     if !key.is_empty() {
-                        if self.active_provider != provider {
+                        if self.runtime.active_provider != provider {
                             self.switch_provider(provider);
                         }
                         self.set_api_key(key);
-                        self.chat
+                        self.runtime
+                            .chat
                             .messages
                             .push(("system".to_string(), format!("{} API key saved!", provider)));
-                        self.popups.auth.set_api_key_complete();
+                        self.ui.popups.auth.set_api_key_complete();
 
                         if provider == ProviderId::OpenRouter {
                             self.start_openrouter_fetch();
@@ -107,7 +108,8 @@ impl App {
 
         match method {
             AuthMethod::OAuthBrowser => {
-                self.popups
+                self.ui
+                    .popups
                     .auth
                     .set_oauth_browser_status("Opening browser...");
 

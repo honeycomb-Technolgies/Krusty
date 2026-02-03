@@ -8,42 +8,42 @@ use crate::tui::popups::pinch::PinchStage;
 impl App {
     /// Handle pinch popup keyboard events
     pub fn handle_pinch_popup_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
-        match &self.popups.pinch.stage {
+        match &self.ui.popups.pinch.stage {
             PinchStage::PreservationInput { .. } => match code {
                 KeyCode::Esc => {
-                    self.popups.pinch.reset();
+                    self.ui.popups.pinch.reset();
                     self.ui.popup = Popup::None;
                 }
                 KeyCode::Enter => {
                     self.start_pinch_summarization();
                 }
-                KeyCode::Backspace => self.popups.pinch.backspace(),
+                KeyCode::Backspace => self.ui.popups.pinch.backspace(),
                 KeyCode::Char(c) if !modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.popups.pinch.add_char(c);
+                    self.ui.popups.pinch.add_char(c);
                 }
                 _ => {}
             },
             PinchStage::Summarizing { .. } => {
                 // Allow cancel during summarization
                 if code == KeyCode::Esc {
-                    self.cancellation.cancel();
-                    self.popups.pinch.reset();
+                    self.runtime.cancellation.cancel();
+                    self.ui.popups.pinch.reset();
                     self.ui.popup = Popup::None;
                 }
             }
             PinchStage::DirectionInput { .. } => match code {
                 KeyCode::Esc => {
-                    self.popups.pinch.reset();
+                    self.ui.popups.pinch.reset();
                     self.ui.popup = Popup::None;
                 }
-                KeyCode::Up => self.popups.pinch.scroll_up(),
-                KeyCode::Down => self.popups.pinch.scroll_down(),
+                KeyCode::Up => self.ui.popups.pinch.scroll_up(),
+                KeyCode::Down => self.ui.popups.pinch.scroll_down(),
                 KeyCode::Enter => {
                     self.complete_pinch();
                 }
-                KeyCode::Backspace => self.popups.pinch.backspace(),
+                KeyCode::Backspace => self.ui.popups.pinch.backspace(),
                 KeyCode::Char(c) if !modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.popups.pinch.add_char(c);
+                    self.ui.popups.pinch.add_char(c);
                 }
                 _ => {}
             },
@@ -62,7 +62,7 @@ impl App {
                         let should_continue = *auto_continue;
                         self.save_block_ui_states();
                         if let Err(e) = self.load_session(&id) {
-                            self.chat.messages.push((
+                            self.runtime.chat.messages.push((
                                 "system".to_string(),
                                 format!("Failed to load session: {}", e),
                             ));
@@ -70,11 +70,11 @@ impl App {
                             // Direction was provided - auto-start AI response
                             self.send_to_ai();
                         }
-                        self.popups.pinch.reset();
+                        self.ui.popups.pinch.reset();
                         self.ui.popup = Popup::None;
                     }
                     KeyCode::Esc => {
-                        self.popups.pinch.reset();
+                        self.ui.popups.pinch.reset();
                         self.ui.popup = Popup::None;
                     }
                     _ => {}
@@ -82,7 +82,7 @@ impl App {
             }
             PinchStage::Error { .. } => {
                 if code == KeyCode::Esc {
-                    self.popups.pinch.reset();
+                    self.ui.popups.pinch.reset();
                     self.ui.popup = Popup::None;
                 }
             }

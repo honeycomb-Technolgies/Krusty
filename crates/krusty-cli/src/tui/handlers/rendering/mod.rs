@@ -27,29 +27,29 @@ impl App {
         // Render popup on top - use reference matching for short-lived borrows
         match &self.ui.popup {
             Popup::None => {}
-            Popup::Help => self.popups.help.render(f, &self.ui.theme),
+            Popup::Help => self.ui.popups.help.render(f, &self.ui.theme),
             Popup::ThemeSelect => {
                 let theme_name = self.ui.theme_name.clone();
-                self.popups.theme.render(f, &self.ui.theme, &theme_name)
+                self.ui.popups.theme.render(f, &self.ui.theme, &theme_name)
             }
-            Popup::ModelSelect => self.popups.model.render(
+            Popup::ModelSelect => self.ui.popups.model.render(
                 f,
                 &self.ui.theme,
-                &self.current_model,
-                self.context_tokens_used,
+                &self.runtime.current_model,
+                self.runtime.context_tokens_used,
             ),
-            Popup::SessionList => self.popups.session.render(f, &self.ui.theme),
-            Popup::Auth => self.popups.auth.render(f, &self.ui.theme),
-            Popup::ProcessList => self.popups.process.render(f, &self.ui.theme),
-            Popup::Pinch => self.popups.pinch.render(f, &self.ui.theme),
-            Popup::FilePreview => self.popups.file_preview.render(f, &self.ui.theme),
-            Popup::SkillsBrowser => self.popups.skills.render(f, &self.ui.theme),
-            Popup::McpBrowser => self.popups.mcp.render(f, &self.ui.theme),
-            Popup::Hooks => self.popups.hooks.render(f, &self.ui.theme),
+            Popup::SessionList => self.ui.popups.session.render(f, &self.ui.theme),
+            Popup::Auth => self.ui.popups.auth.render(f, &self.ui.theme),
+            Popup::ProcessList => self.ui.popups.process.render(f, &self.ui.theme),
+            Popup::Pinch => self.ui.popups.pinch.render(f, &self.ui.theme),
+            Popup::FilePreview => self.ui.popups.file_preview.render(f, &self.ui.theme),
+            Popup::SkillsBrowser => self.ui.popups.skills.render(f, &self.ui.theme),
+            Popup::McpBrowser => self.ui.popups.mcp.render(f, &self.ui.theme),
+            Popup::Hooks => self.ui.popups.hooks.render(f, &self.ui.theme),
         }
 
         // Render toasts on top of everything
         let area = f.area();
-        render_toasts(f.buffer_mut(), area, &self.toasts, &self.ui.theme);
+        render_toasts(f.buffer_mut(), area, &self.ui.toasts, &self.ui.theme);
     }
 }

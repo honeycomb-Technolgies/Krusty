@@ -87,22 +87,36 @@ impl Tool for BashTool {
             }
         }
 
+        // Apply git identity for commit attribution
+        let effective_command = if let Some(ref identity) = ctx.git_identity {
+            identity.apply_to_command(&params.command)
+        } else {
+            params.command.clone()
+        };
+
         // Build command based on platform
         let mut cmd = if cfg!(windows) {
             let mut c = Command::new("cmd");
-            c.arg("/C").arg(&params.command);
+            c.arg("/C").arg(&effective_command);
             c
         } else {
             let mut c = Command::new("sh");
-            c.arg("-c").arg(&params.command);
+            c.arg("-c").arg(&effective_command);
             c
         };
+
+        // Apply git author env vars if in Author mode
+        if let Some(ref identity) = ctx.git_identity {
+            for (key, val) in identity.env_vars() {
+                cmd.env(key, val);
+            }
+        }
 
         cmd.current_dir(&ctx.working_dir);
 
         // Detect shell background syntax (command ending with &)
         // Treat this the same as run_in_background: true
-        let command_trimmed = params.command.trim();
+        let command_trimmed = effective_command.trim();
         let is_shell_backgrounded =
             command_trimmed.ends_with('&') && !command_trimmed.ends_with("&&"); // Don't match && (logical AND)
 
@@ -112,7 +126,7 @@ impl Tool for BashTool {
             let clean_command = if is_shell_backgrounded {
                 command_trimmed.trim_end_matches('&').trim().to_string()
             } else {
-                params.command.clone()
+                effective_command.clone()
             };
             // Use process registry if available for tracking
             if let Some(ref registry) = ctx.process_registry {
@@ -199,6 +213,7 @@ async fn execute_streaming(
     let stderr = child.stderr.take();
 
     let mut combined_output = String::new();
+    const MAX_OUTPUT_SIZE: usize = 10_000_000; // 10MB cap to prevent unbounded growth
 
     // Spawn tasks to read stdout and stderr concurrently
     let stdout_tx = output_tx.clone();
@@ -283,13 +298,28 @@ async fn execute_streaming(
 
     // Collect output from tasks
     if let Ok(stdout_output) = stdout_handle.await {
-        combined_output.push_str(&stdout_output);
+        if combined_output.len() + stdout_output.len() <= MAX_OUTPUT_SIZE {
+            combined_output.push_str(&stdout_output);
+        } else {
+            let remaining = MAX_OUTPUT_SIZE.saturating_sub(combined_output.len());
+            combined_output.push_str(&stdout_output[..remaining.min(stdout_output.len())]);
+            combined_output.push_str("\n[OUTPUT TRUNCATED: exceeded size limit]");
+        }
     }
     if let Ok(stderr_output) = stderr_handle.await {
-        if !combined_output.is_empty() && !stderr_output.is_empty() {
-            combined_output.push('\n');
+        if combined_output.len() + stderr_output.len() <= MAX_OUTPUT_SIZE {
+            if !combined_output.is_empty() && !stderr_output.is_empty() {
+                combined_output.push('\n');
+            }
+            combined_output.push_str(&stderr_output);
+        } else if combined_output.len() < MAX_OUTPUT_SIZE {
+            let remaining = MAX_OUTPUT_SIZE.saturating_sub(combined_output.len());
+            if !combined_output.is_empty() {
+                combined_output.push('\n');
+            }
+            combined_output.push_str(&stderr_output[..remaining.min(stderr_output.len())]);
+            combined_output.push_str("\n[OUTPUT TRUNCATED: exceeded size limit]");
         }
-        combined_output.push_str(&stderr_output);
     }
 
     // Send completion signal

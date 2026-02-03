@@ -40,17 +40,17 @@ impl App {
     /// Populates the shared Arc<RwLock<...>> so the search_codebase tool can also use it.
     fn ensure_embedding_engine(&mut self) {
         // Check if already initialized (non-blocking read)
-        if self.embedding_init_failed {
+        if self.runtime.embedding_init_failed {
             return;
         }
-        if let Ok(guard) = self.embedding_engine.try_read() {
+        if let Ok(guard) = self.runtime.embedding_engine.try_read() {
             if guard.is_some() {
                 return;
             }
         }
 
         // Try to resolve the background init handle
-        if let Some(handle) = &self.embedding_handle {
+        if let Some(handle) = &self.runtime.embedding_handle {
             if !handle.is_finished() {
                 tracing::debug!(
                     "Embedding engine still initializing, will use keyword search for this request"
@@ -58,11 +58,11 @@ impl App {
                 return;
             }
             // Handle is finished - take it and resolve
-            if let Some(handle) = self.embedding_handle.take() {
+            if let Some(handle) = self.runtime.embedding_handle.take() {
                 match futures::executor::block_on(handle) {
                     Ok(Ok(engine)) => {
                         let engine = Arc::new(engine);
-                        if let Ok(mut guard) = self.embedding_engine.try_write() {
+                        if let Ok(mut guard) = self.runtime.embedding_engine.try_write() {
                             *guard = Some(engine);
                         }
                         tracing::info!("Embedding engine initialized from background task");
@@ -72,12 +72,12 @@ impl App {
                         tracing::debug!(
                             "Embedding engine background init failed (keyword fallback): {e}"
                         );
-                        self.embedding_init_failed = true;
+                        self.runtime.embedding_init_failed = true;
                         return;
                     }
                     Err(e) => {
                         tracing::debug!("Embedding engine background task panicked: {e}");
-                        self.embedding_init_failed = true;
+                        self.runtime.embedding_init_failed = true;
                         return;
                     }
                 }
@@ -88,14 +88,14 @@ impl App {
         match krusty_core::index::EmbeddingEngine::new() {
             Ok(engine) => {
                 let engine = Arc::new(engine);
-                if let Ok(mut guard) = self.embedding_engine.try_write() {
+                if let Ok(mut guard) = self.runtime.embedding_engine.try_write() {
                     *guard = Some(engine);
                 }
                 tracing::info!("Embedding engine initialized for semantic search");
             }
             Err(e) => {
                 tracing::debug!("Embedding engine init failed (keyword fallback): {e}");
-                self.embedding_init_failed = true;
+                self.runtime.embedding_init_failed = true;
             }
         }
     }
@@ -113,34 +113,38 @@ impl App {
         }
 
         if !self.is_authenticated() {
-            self.input.insert_text(&text);
-            self.chat.messages.push((
+            self.ui.input.insert_text(&text);
+            self.runtime.chat.messages.push((
                 "system".to_string(),
                 "Not authenticated. Use /auth to set up API key.".to_string(),
             ));
             return;
         }
 
-        if self.current_session_id.is_none() {
+        if self.runtime.current_session_id.is_none() {
             self.create_session(&text);
         }
 
         let (content_blocks, display_text) = match self.build_user_content(&text) {
             Ok(result) => result,
             Err(e) => {
-                self.chat
+                self.runtime
+                    .chat
                     .messages
                     .push(("system".to_string(), format!("Error: {}", e)));
                 return;
             }
         };
 
-        self.chat.messages.push(("user".to_string(), display_text));
+        self.runtime
+            .chat
+            .messages
+            .push(("user".to_string(), display_text));
         let user_msg = ModelMessage {
             role: Role::User,
             content: content_blocks,
         };
-        self.chat.conversation.push(user_msg.clone());
+        self.runtime.chat.conversation.push(user_msg.clone());
         self.save_model_message(&user_msg);
         self.send_to_ai();
     }
@@ -158,7 +162,7 @@ impl App {
             ));
         }
 
-        let segments = parse_input(text, &self.working_dir);
+        let segments = parse_input(text, &self.runtime.working_dir);
         let mut content_blocks = Vec::new();
         let mut display_parts = Vec::new();
         let mut file_count = 0;
@@ -180,7 +184,8 @@ impl App {
                         _ => "Image",
                     };
                     // Track the file for preview lookup
-                    self.attached_files
+                    self.runtime
+                        .attached_files
                         .insert(loaded.display_name.clone(), path.clone());
                     display_parts.push(format!("[{}: {}]", file_type, loaded.display_name));
                     content_blocks.push(loaded.content);
@@ -196,7 +201,7 @@ impl App {
                     // Extract clipboard id (format: "clipboard:uuid")
                     let clipboard_id = id.strip_prefix("clipboard:").unwrap_or(&id);
                     if let Some((width, height, rgba_bytes)) =
-                        self.pending_clipboard_images.remove(clipboard_id)
+                        self.runtime.pending_clipboard_images.remove(clipboard_id)
                     {
                         file_count += 1;
                         check_file_limit(file_count)?;
@@ -239,7 +244,7 @@ impl App {
     /// Send the current conversation to the AI and start streaming response
     pub fn send_to_ai(&mut self) {
         // Block sending while decision prompt is visible (waiting for user input)
-        if self.decision_prompt.visible {
+        if self.ui.decision_prompt.visible {
             tracing::info!("send_to_ai blocked - waiting for user decision");
             return;
         }
@@ -251,11 +256,11 @@ impl App {
 
         tracing::info!(
             "=== send_to_ai START === conversation_len={}",
-            self.chat.conversation.len()
+            self.runtime.chat.conversation.len()
         );
 
         // Log conversation structure for debugging
-        for (i, msg) in self.chat.conversation.iter().enumerate() {
+        for (i, msg) in self.runtime.chat.conversation.iter().enumerate() {
             let content_summary: Vec<String> = msg
                 .content
                 .iter()
@@ -281,37 +286,39 @@ impl App {
 
         // Check max turns limit
         if self
+            .runtime
             .agent_config
-            .exceeded_max_turns(self.agent_state.current_turn)
+            .exceeded_max_turns(self.runtime.agent_state.current_turn)
         {
-            self.event_bus.emit(AgentEvent::Interrupt {
-                turn: self.agent_state.current_turn,
+            self.runtime.event_bus.emit(AgentEvent::Interrupt {
+                turn: self.runtime.agent_state.current_turn,
                 reason: InterruptReason::MaxTurnsReached,
             });
-            self.chat.messages.push((
+            self.runtime.chat.messages.push((
                 "system".to_string(),
                 format!(
                     "Max turns ({}) reached. Use /home to start a new session.",
-                    self.agent_config.max_turns.unwrap_or(0)
+                    self.runtime.agent_config.max_turns.unwrap_or(0)
                 ),
             ));
             return;
         }
 
-        let Some(ref _client) = self.ai_client else {
-            self.chat
+        let Some(ref _client) = self.runtime.ai_client else {
+            self.runtime
+                .chat
                 .messages
                 .push(("system".to_string(), "No AI client configured".to_string()));
             return;
         };
 
         self.start_streaming();
-        self.streaming.reset();
+        self.runtime.streaming.reset();
 
-        self.agent_state.start_turn();
-        self.event_bus.emit(AgentEvent::TurnStart {
-            turn: self.agent_state.current_turn,
-            message_count: self.chat.conversation.len(),
+        self.runtime.agent_state.start_turn();
+        self.runtime.event_bus.emit(AgentEvent::TurnStart {
+            turn: self.runtime.agent_state.current_turn,
+            message_count: self.runtime.chat.conversation.len(),
         });
 
         // Lazy-init embedding engine for semantic search
@@ -350,8 +357,8 @@ impl App {
                 "Context: search"
             );
         }
-        let _has_thinking_conversation = self.thinking_enabled
-            && self.chat.conversation.iter().any(|msg| {
+        let _has_thinking_conversation = self.runtime.thinking_enabled
+            && self.runtime.chat.conversation.iter().any(|msg| {
                 msg.role == Role::Assistant
                     && msg
                         .content
@@ -359,7 +366,7 @@ impl App {
                         .any(|c| matches!(c, Content::Thinking { .. }))
             });
 
-        let mut conversation = self.chat.conversation.clone();
+        let mut conversation = self.runtime.chat.conversation.clone();
         let mut system_insert_count = 0;
 
         // Inject project context FIRST
@@ -432,7 +439,7 @@ impl App {
         let client = match self.create_ai_client() {
             Some(c) => c,
             None => {
-                self.chat.messages.push((
+                self.runtime.chat.messages.push((
                     "system".to_string(),
                     "No authentication available".to_string(),
                 ));
@@ -444,7 +451,7 @@ impl App {
         let tool_names: Vec<_> = tools.iter().map(|t| t.name.as_str()).collect();
         tracing::info!("Sending {} tools to API: {:?}", tools.len(), tool_names);
 
-        let can_use_thinking = self.thinking_enabled;
+        let can_use_thinking = self.runtime.thinking_enabled;
         let thinking = can_use_thinking.then(ThinkingConfig::default);
 
         let context_management = match (can_use_thinking, !tools.is_empty()) {
@@ -463,11 +470,11 @@ impl App {
             ..Default::default()
         };
 
-        self.cancellation.reset();
-        let cancel_token = self.cancellation.child_token();
+        self.runtime.cancellation.reset();
+        let cancel_token = self.runtime.cancellation.child_token();
 
         let (tx, rx) = mpsc::unbounded_channel();
-        self.streaming.start_stream(rx);
+        self.runtime.streaming.start_stream(rx);
 
         tokio::spawn(async move {
             tokio::select! {

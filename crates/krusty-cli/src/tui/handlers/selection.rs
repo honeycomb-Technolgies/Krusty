@@ -15,59 +15,61 @@ impl App {
     ///
     /// Returns true if selection drag was handled.
     pub fn handle_selection_drag(&mut self, x: u16, y: u16) -> bool {
-        if !self.scroll_system.selection.is_selecting {
+        if !self.ui.scroll_system.selection.is_selecting {
             return false;
         }
 
-        match self.scroll_system.selection.area {
+        match self.ui.scroll_system.selection.area {
             SelectionArea::Messages => {
-                if let Some(area) = self.scroll_system.layout.messages_area {
+                if let Some(area) = self.ui.scroll_system.layout.messages_area {
                     let edge_zone = 2; // rows from edge to trigger scroll
 
                     // Auto-scroll at edges and set continuous scroll state
-                    if y <= area.y + edge_zone && self.scroll_system.scroll.can_scroll_up() {
-                        self.scroll_system.scroll.scroll_up(1);
-                        self.scroll_system.edge_scroll.direction = Some(EdgeScrollDirection::Up);
-                        self.scroll_system.edge_scroll.area = SelectionArea::Messages;
-                        self.scroll_system.edge_scroll.last_x = x;
+                    if y <= area.y + edge_zone && self.ui.scroll_system.scroll.can_scroll_up() {
+                        self.ui.scroll_system.scroll.scroll_up(1);
+                        self.ui.scroll_system.edge_scroll.direction = Some(EdgeScrollDirection::Up);
+                        self.ui.scroll_system.edge_scroll.area = SelectionArea::Messages;
+                        self.ui.scroll_system.edge_scroll.last_x = x;
                     } else if y >= area.y + area.height.saturating_sub(edge_zone)
-                        && self.scroll_system.scroll.can_scroll_down()
+                        && self.ui.scroll_system.scroll.can_scroll_down()
                     {
-                        self.scroll_system.scroll.scroll_down(1);
-                        self.scroll_system.edge_scroll.direction = Some(EdgeScrollDirection::Down);
-                        self.scroll_system.edge_scroll.area = SelectionArea::Messages;
-                        self.scroll_system.edge_scroll.last_x = x;
+                        self.ui.scroll_system.scroll.scroll_down(1);
+                        self.ui.scroll_system.edge_scroll.direction =
+                            Some(EdgeScrollDirection::Down);
+                        self.ui.scroll_system.edge_scroll.area = SelectionArea::Messages;
+                        self.ui.scroll_system.edge_scroll.last_x = x;
                     } else {
-                        self.scroll_system.edge_scroll.direction = None;
+                        self.ui.scroll_system.edge_scroll.direction = None;
                     }
 
                     // Update selection end
                     if let Some(pos) = self.hit_test_messages(x, y) {
-                        self.scroll_system.selection.end = Some(pos);
+                        self.ui.scroll_system.selection.end = Some(pos);
                     }
                 }
                 true
             }
             SelectionArea::Input => {
-                if let Some(area) = self.scroll_system.layout.input_area {
+                if let Some(area) = self.ui.scroll_system.layout.input_area {
                     let edge_zone = 1;
 
                     if y <= area.y + edge_zone {
-                        self.input.scroll_up();
-                        self.scroll_system.edge_scroll.direction = Some(EdgeScrollDirection::Up);
-                        self.scroll_system.edge_scroll.area = SelectionArea::Input;
-                        self.scroll_system.edge_scroll.last_x = x;
+                        self.ui.input.scroll_up();
+                        self.ui.scroll_system.edge_scroll.direction = Some(EdgeScrollDirection::Up);
+                        self.ui.scroll_system.edge_scroll.area = SelectionArea::Input;
+                        self.ui.scroll_system.edge_scroll.last_x = x;
                     } else if y >= area.y + area.height.saturating_sub(edge_zone) {
-                        self.input.scroll_down();
-                        self.scroll_system.edge_scroll.direction = Some(EdgeScrollDirection::Down);
-                        self.scroll_system.edge_scroll.area = SelectionArea::Input;
-                        self.scroll_system.edge_scroll.last_x = x;
+                        self.ui.input.scroll_down();
+                        self.ui.scroll_system.edge_scroll.direction =
+                            Some(EdgeScrollDirection::Down);
+                        self.ui.scroll_system.edge_scroll.area = SelectionArea::Input;
+                        self.ui.scroll_system.edge_scroll.last_x = x;
                     } else {
-                        self.scroll_system.edge_scroll.direction = None;
+                        self.ui.scroll_system.edge_scroll.direction = None;
                     }
 
                     if let Some(pos) = self.hit_test_input(x, y) {
-                        self.scroll_system.selection.end = Some(pos);
+                        self.ui.scroll_system.selection.end = Some(pos);
                     }
                 }
                 true
@@ -79,33 +81,33 @@ impl App {
     /// Process continuous edge scrolling during selection
     /// Called from main loop to keep scrolling while mouse is held at edge
     pub fn process_edge_scroll(&mut self) {
-        let Some(direction) = self.scroll_system.edge_scroll.direction else {
+        let Some(direction) = self.ui.scroll_system.edge_scroll.direction else {
             return;
         };
 
-        if !self.scroll_system.selection.is_selecting {
-            self.scroll_system.edge_scroll.direction = None;
+        if !self.ui.scroll_system.selection.is_selecting {
+            self.ui.scroll_system.edge_scroll.direction = None;
             return;
         }
 
-        let x = self.scroll_system.edge_scroll.last_x;
+        let x = self.ui.scroll_system.edge_scroll.last_x;
 
-        match self.scroll_system.edge_scroll.area {
+        match self.ui.scroll_system.edge_scroll.area {
             SelectionArea::Messages => {
-                if let Some(area) = self.scroll_system.layout.messages_area {
+                if let Some(area) = self.ui.scroll_system.layout.messages_area {
                     match direction {
                         EdgeScrollDirection::Up => {
-                            if self.scroll_system.scroll.can_scroll_up() {
-                                self.scroll_system.scroll.scroll_up(1);
+                            if self.ui.scroll_system.scroll.can_scroll_up() {
+                                self.ui.scroll_system.scroll.scroll_up(1);
                             } else {
-                                self.scroll_system.edge_scroll.direction = None;
+                                self.ui.scroll_system.edge_scroll.direction = None;
                             }
                         }
                         EdgeScrollDirection::Down => {
-                            if self.scroll_system.scroll.can_scroll_down() {
-                                self.scroll_system.scroll.scroll_down(1);
+                            if self.ui.scroll_system.scroll.can_scroll_down() {
+                                self.ui.scroll_system.scroll.scroll_down(1);
                             } else {
-                                self.scroll_system.edge_scroll.direction = None;
+                                self.ui.scroll_system.edge_scroll.direction = None;
                             }
                         }
                     }
@@ -114,34 +116,34 @@ impl App {
                         EdgeScrollDirection::Down => area.y + area.height.saturating_sub(1),
                     };
                     if let Some(pos) = self.hit_test_messages(x, y) {
-                        self.scroll_system.selection.end = Some(pos);
+                        self.ui.scroll_system.selection.end = Some(pos);
                     }
                 }
             }
             SelectionArea::Input => {
-                if let Some(area) = self.scroll_system.layout.input_area {
+                if let Some(area) = self.ui.scroll_system.layout.input_area {
                     match direction {
-                        EdgeScrollDirection::Up => self.input.scroll_up(),
-                        EdgeScrollDirection::Down => self.input.scroll_down(),
+                        EdgeScrollDirection::Up => self.ui.input.scroll_up(),
+                        EdgeScrollDirection::Down => self.ui.input.scroll_down(),
                     }
                     let y = match direction {
                         EdgeScrollDirection::Up => area.y + 1,
                         EdgeScrollDirection::Down => area.y + area.height.saturating_sub(1),
                     };
                     if let Some(pos) = self.hit_test_input(x, y) {
-                        self.scroll_system.selection.end = Some(pos);
+                        self.ui.scroll_system.selection.end = Some(pos);
                     }
                 }
             }
             SelectionArea::None => {
-                self.scroll_system.edge_scroll.direction = None;
+                self.ui.scroll_system.edge_scroll.direction = None;
             }
         }
     }
 
     /// Copy selected text to clipboard, returns true on success
     pub fn copy_selection_to_clipboard(&self) -> bool {
-        let text = match self.scroll_system.selection.area {
+        let text = match self.ui.scroll_system.selection.area {
             SelectionArea::Messages => self.get_selected_messages_text(),
             SelectionArea::Input => self.get_selected_input_text(),
             SelectionArea::None => return false,
@@ -238,17 +240,18 @@ impl App {
     /// accurate line-to-text mapping for selection extraction.
     fn get_selected_messages_text(&self) -> String {
         let Some(((start_line, start_col), (end_line, end_col))) =
-            self.scroll_system.selection.normalized()
+            self.ui.scroll_system.selection.normalized()
         else {
             return String::new();
         };
 
-        if self.chat.messages.is_empty() {
+        if self.runtime.chat.messages.is_empty() {
             return String::new();
         }
 
         // Calculate wrap width (same as render_messages: inner.width - 4 for scrollbar)
         let wrap_width = self
+            .ui
             .scroll_system
             .layout
             .messages_area
@@ -267,10 +270,10 @@ impl App {
         let mut write_idx = 0;
         let mut web_search_idx = 0;
 
-        for (role, content) in self.chat.messages.iter() {
+        for (role, content) in self.runtime.chat.messages.iter() {
             match role.as_str() {
                 "thinking" => {
-                    if let Some(block) = self.blocks.thinking.get(thinking_idx) {
+                    if let Some(block) = self.runtime.blocks.thinking.get(thinking_idx) {
                         let height = block.height(content_width, &self.ui.theme) as usize;
                         // Get text content and pad/truncate to match rendered height
                         let text_lines = block
@@ -283,7 +286,7 @@ impl App {
                     all_lines.push(String::new()); // blank after
                 }
                 "bash" => {
-                    if let Some(block) = self.blocks.bash.get(bash_idx) {
+                    if let Some(block) = self.runtime.blocks.bash.get(bash_idx) {
                         let height = block.height(content_width, &self.ui.theme) as usize;
                         let text_lines = block
                             .get_text_content()
@@ -296,8 +299,8 @@ impl App {
                 }
                 "terminal" => {
                     // Skip pinned terminals (same as render)
-                    if self.blocks.pinned_terminal != Some(terminal_idx) {
-                        if let Some(block) = self.blocks.terminal.get(terminal_idx) {
+                    if self.runtime.blocks.pinned_terminal != Some(terminal_idx) {
+                        if let Some(block) = self.runtime.blocks.terminal.get(terminal_idx) {
                             let height = block.height(content_width, &self.ui.theme) as usize;
                             let text_lines = block
                                 .get_text_content()
@@ -310,7 +313,7 @@ impl App {
                     terminal_idx += 1;
                 }
                 "tool_result" => {
-                    if let Some(block) = self.blocks.tool_result.get(tool_result_idx) {
+                    if let Some(block) = self.runtime.blocks.tool_result.get(tool_result_idx) {
                         let height = block.height(content_width, &self.ui.theme) as usize;
                         let text_lines = block
                             .get_text_content()
@@ -322,7 +325,7 @@ impl App {
                     all_lines.push(String::new());
                 }
                 "read" => {
-                    if let Some(block) = self.blocks.read.get(read_idx) {
+                    if let Some(block) = self.runtime.blocks.read.get(read_idx) {
                         let height = block.height(content_width, &self.ui.theme) as usize;
                         let text_lines = block
                             .get_text_content()
@@ -334,7 +337,7 @@ impl App {
                     all_lines.push(String::new());
                 }
                 "edit" => {
-                    if let Some(block) = self.blocks.edit.get(edit_idx) {
+                    if let Some(block) = self.runtime.blocks.edit.get(edit_idx) {
                         let height = block.height(content_width, &self.ui.theme) as usize;
                         let text_lines = block
                             .get_text_content()
@@ -346,7 +349,7 @@ impl App {
                     all_lines.push(String::new());
                 }
                 "write" => {
-                    if let Some(block) = self.blocks.write.get(write_idx) {
+                    if let Some(block) = self.runtime.blocks.write.get(write_idx) {
                         let height = block.height(content_width, &self.ui.theme) as usize;
                         let text_lines = block
                             .get_text_content()
@@ -358,7 +361,7 @@ impl App {
                     all_lines.push(String::new());
                 }
                 "web_search" => {
-                    if let Some(block) = self.blocks.web_search.get(web_search_idx) {
+                    if let Some(block) = self.runtime.blocks.web_search.get(web_search_idx) {
                         let height = block.height(content_width, &self.ui.theme) as usize;
                         let text_lines = block
                             .get_text_content()
@@ -372,7 +375,10 @@ impl App {
                 "assistant" => {
                     // Use markdown cache to get rendered text (must use get_rendered, not get!)
                     let content_hash = hash_content(content);
-                    if let Some(cached) = self.markdown_cache.get_rendered(content_hash, wrap_width)
+                    if let Some(cached) = self
+                        .ui
+                        .markdown_cache
+                        .get_rendered(content_hash, wrap_width)
                     {
                         // Extract text from cached Line spans
                         for line in cached.lines.iter() {
@@ -424,12 +430,12 @@ impl App {
     /// Extract selected text from input
     fn get_selected_input_text(&self) -> String {
         let Some(((start_line, start_col), (end_line, end_col))) =
-            self.scroll_system.selection.normalized()
+            self.ui.scroll_system.selection.normalized()
         else {
             return String::new();
         };
 
-        let lines = self.input.get_wrapped_lines();
+        let lines = self.ui.input.get_wrapped_lines();
         extract_selection(&lines, start_line, start_col, end_line, end_col)
     }
 }

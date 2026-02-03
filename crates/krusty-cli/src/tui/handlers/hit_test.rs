@@ -12,7 +12,7 @@ impl App {
     /// Convert screen coordinates to messages text position (line, column)
     /// Returns None if click is outside content
     pub fn hit_test_messages(&self, screen_x: u16, screen_y: u16) -> Option<(usize, usize)> {
-        let area = self.scroll_system.layout.messages_area?;
+        let area = self.ui.scroll_system.layout.messages_area?;
 
         // Check if within messages area (accounting for border)
         let inner_x = area.x + 1;
@@ -33,7 +33,7 @@ impl App {
         let rel_y = (screen_y - inner_y) as usize;
 
         // Add scroll offset to get actual line index
-        let line_index = rel_y + self.scroll_system.scroll.offset;
+        let line_index = rel_y + self.ui.scroll_system.scroll.offset;
 
         Some((line_index, rel_x))
     }
@@ -49,12 +49,16 @@ impl App {
         let content_hash = hasher.finish();
 
         // First check the new cache (populated by calculate_message_lines via get_or_render_with_links)
-        if let Some(cached) = self.markdown_cache.get_rendered(content_hash, wrap_width) {
+        if let Some(cached) = self
+            .ui
+            .markdown_cache
+            .get_rendered(content_hash, wrap_width)
+        {
             return cached.lines.len();
         }
 
         // Fall back to legacy cache
-        if let Some(cached) = self.markdown_cache.get(content_hash, wrap_width) {
+        if let Some(cached) = self.ui.markdown_cache.get(content_hash, wrap_width) {
             return cached.len();
         }
 
@@ -82,7 +86,7 @@ impl App {
     ///
     /// This consolidates hit testing into a single message iteration instead of 5 separate ones.
     pub fn hit_test_any_block(&self, screen_x: u16, screen_y: u16) -> Option<BlockHitResult> {
-        let area = self.scroll_system.layout.messages_area?;
+        let area = self.ui.scroll_system.layout.messages_area?;
         let inner_x = area.x + 1;
         let inner_y = area.y + 1;
         let inner_width = area.width.saturating_sub(2);
@@ -96,7 +100,7 @@ impl App {
             return None;
         }
 
-        let scroll = self.scroll_system.scroll.offset as u16;
+        let scroll = self.ui.scroll_system.scroll.offset as u16;
         // MUST match render_messages():
         // - content_width = inner.width - 4 (scrollbar gap)
         // - wrap_width = content_width - 2 (SYMBOL_WIDTH for message prefixes)
@@ -147,62 +151,72 @@ impl App {
             None
         };
 
-        for (role, content) in &self.chat.messages {
+        for (role, content) in &self.runtime.chat.messages {
             if let Some((block_type, idx)) = indices.get_and_increment(role) {
                 // Get block height based on type
                 let height = match block_type {
                     BlockType::Thinking => self
+                        .runtime
                         .blocks
                         .thinking
                         .get(idx)
                         .map(|b| b.height(content_width, &self.ui.theme)),
                     BlockType::Bash => self
+                        .runtime
                         .blocks
                         .bash
                         .get(idx)
                         .map(|b| b.height(content_width, &self.ui.theme)),
                     BlockType::TerminalPane => {
                         // Skip pinned terminal - handled separately at top
-                        if self.blocks.pinned_terminal == Some(idx) {
+                        if self.runtime.blocks.pinned_terminal == Some(idx) {
                             None
                         } else {
-                            self.blocks
+                            self.runtime
+                                .blocks
                                 .terminal
                                 .get(idx)
                                 .map(|b| b.height(content_width, &self.ui.theme))
                         }
                     }
                     BlockType::ToolResult => self
+                        .runtime
                         .blocks
                         .tool_result
                         .get(idx)
                         .map(|b| b.height(content_width, &self.ui.theme)),
                     BlockType::Read => self
+                        .runtime
                         .blocks
                         .read
                         .get(idx)
                         .map(|b| b.height(content_width, &self.ui.theme)),
                     BlockType::Edit => self
+                        .runtime
                         .blocks
                         .edit
                         .get(idx)
                         .map(|b| b.height(content_width, &self.ui.theme)),
                     BlockType::Write => self
+                        .runtime
                         .blocks
                         .write
                         .get(idx)
                         .map(|b| b.height(content_width, &self.ui.theme)),
                     BlockType::WebSearch => self
+                        .runtime
                         .blocks
                         .web_search
                         .get(idx)
                         .map(|b| b.height(content_width, &self.ui.theme)),
                     BlockType::Explore => self
+                        .runtime
                         .blocks
                         .explore
                         .get(idx)
                         .map(|b| b.height(content_width, &self.ui.theme)),
                     BlockType::Build => self
+                        .runtime
                         .blocks
                         .build
                         .get(idx)
@@ -238,7 +252,7 @@ impl App {
     /// Convert screen coordinates to input text position (line, column)
     /// Returns None if click is outside content
     pub fn hit_test_input(&self, screen_x: u16, screen_y: u16) -> Option<(usize, usize)> {
-        let area = self.scroll_system.layout.input_area?;
+        let area = self.ui.scroll_system.layout.input_area?;
 
         // Check if within input area (accounting for border)
         let inner_x = area.x + 1;
@@ -259,7 +273,7 @@ impl App {
         let rel_y = (screen_y - inner_y) as usize;
 
         // Add viewport offset to get actual line index
-        let line_index = rel_y + self.input.get_viewport_offset();
+        let line_index = rel_y + self.ui.input.get_viewport_offset();
 
         Some((line_index, rel_x))
     }

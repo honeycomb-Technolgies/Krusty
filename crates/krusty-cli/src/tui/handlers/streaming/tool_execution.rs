@@ -53,7 +53,7 @@ impl App {
         }
 
         if !results.is_empty() {
-            self.pending_tool_results.extend(results);
+            self.runtime.pending_tool_results.extend(results);
         }
     }
 
@@ -117,7 +117,7 @@ impl App {
                 continue;
             };
 
-            let Some(plan) = &mut self.active_plan else {
+            let Some(plan) = &mut self.runtime.active_plan else {
                 results.push(Content::ToolResult {
                     tool_use_id: tool_call.id.clone(),
                     output: serde_json::Value::String(
@@ -225,7 +225,7 @@ impl App {
         }
 
         if !results.is_empty() {
-            self.pending_tool_results.extend(results);
+            self.runtime.pending_tool_results.extend(results);
         }
     }
 
@@ -245,7 +245,7 @@ impl App {
                 continue;
             };
 
-            let Some(plan) = &mut self.active_plan else {
+            let Some(plan) = &mut self.runtime.active_plan else {
                 results.push(Content::ToolResult {
                     tool_use_id: tool_call.id.clone(),
                     output: serde_json::Value::String(
@@ -281,7 +281,7 @@ impl App {
         }
 
         if !results.is_empty() {
-            self.pending_tool_results.extend(results);
+            self.runtime.pending_tool_results.extend(results);
         }
     }
 
@@ -313,7 +313,7 @@ impl App {
                 continue;
             };
 
-            let Some(plan) = &mut self.active_plan else {
+            let Some(plan) = &mut self.runtime.active_plan else {
                 results.push(Content::ToolResult {
                     tool_use_id: tool_call.id.clone(),
                     output: serde_json::Value::String(
@@ -349,7 +349,7 @@ impl App {
         }
 
         if !results.is_empty() {
-            self.pending_tool_results.extend(results);
+            self.runtime.pending_tool_results.extend(results);
         }
     }
 
@@ -377,7 +377,7 @@ impl App {
                 continue;
             };
 
-            let Some(plan) = &mut self.active_plan else {
+            let Some(plan) = &mut self.runtime.active_plan else {
                 results.push(Content::ToolResult {
                     tool_use_id: tool_call.id.clone(),
                     output: serde_json::Value::String(
@@ -413,7 +413,7 @@ impl App {
         }
 
         if !results.is_empty() {
-            self.pending_tool_results.extend(results);
+            self.runtime.pending_tool_results.extend(results);
         }
     }
 
@@ -473,13 +473,14 @@ impl App {
         }
 
         // Remove the "Preparing questions..." message
-        if let Some((tag, _)) = self.chat.messages.last() {
+        if let Some((tag, _)) = self.runtime.chat.messages.last() {
             if tag == "tool" {
-                self.chat.messages.pop();
+                self.runtime.chat.messages.pop();
             }
         }
 
-        self.decision_prompt
+        self.ui
+            .decision_prompt
             .show_ask_user(prompt_questions, tool_call.id);
     }
 
@@ -506,9 +507,9 @@ impl App {
             )
         });
         if has_action {
-            self.exploration_budget_count = 0;
+            self.runtime.exploration_budget_count = 0;
         } else if all_readonly {
-            self.exploration_budget_count += tool_calls.len();
+            self.runtime.exploration_budget_count += tool_calls.len();
         }
 
         if tool_calls.is_empty() {
@@ -587,7 +588,7 @@ impl App {
             }
 
             if has_plan_tools {
-                let results = std::mem::take(&mut self.pending_tool_results);
+                let results = std::mem::take(&mut self.runtime.pending_tool_results);
                 if !results.is_empty() {
                     self.stop_streaming();
                     self.handle_tool_results(results);
@@ -614,7 +615,7 @@ impl App {
                     "spawn_tool_execution: queuing {} tools until explore completes",
                     other_tools.len()
                 );
-                self.queued_tools.extend(other_tools);
+                self.runtime.queued_tools.extend(other_tools);
             }
 
             explore_tools
@@ -628,12 +629,12 @@ impl App {
 
         // Create streaming output channel for bash
         let (output_tx, output_rx) = mpsc::unbounded_channel::<ToolOutputChunk>();
-        self.channels.bash_output = Some(output_rx);
+        self.runtime.channels.bash_output = Some(output_rx);
 
         // Create explore progress channel if any explore tools
         let explore_progress_tx = if has_explore {
             let (tx, rx) = mpsc::unbounded_channel::<AgentProgress>();
-            self.channels.explore_progress = Some(rx);
+            self.runtime.channels.explore_progress = Some(rx);
             Some(tx)
         } else {
             None
@@ -642,16 +643,16 @@ impl App {
         // Create build progress channel if any build tools
         let build_progress_tx = if has_build {
             let (tx, rx) = mpsc::unbounded_channel::<AgentProgress>();
-            self.channels.build_progress = Some(rx);
+            self.runtime.channels.build_progress = Some(rx);
             Some(tx)
         } else {
             None
         };
 
         // Create dual-mind dialogue channel if dual-mind is active
-        let dual_mind_tx = if self.dual_mind.is_some() {
+        let dual_mind_tx = if self.runtime.dual_mind.is_some() {
             let (tx, rx) = mpsc::unbounded_channel::<DualMindUpdate>();
-            self.channels.dual_mind = Some(rx);
+            self.runtime.channels.dual_mind = Some(rx);
             // DEBUG: Log that dual-mind is active for this execution
             if let Ok(mut file) = std::fs::OpenOptions::new()
                 .create(true)
@@ -683,7 +684,7 @@ impl App {
 
         // Create result channel
         let (result_tx, result_rx) = oneshot::channel();
-        self.channels.tool_results = Some(result_rx);
+        self.runtime.channels.tool_results = Some(result_rx);
 
         self.start_tool_execution();
 
@@ -692,12 +693,12 @@ impl App {
 
         // Clone what we need for the spawned task
         let tool_registry = self.services.tool_registry.clone();
-        let process_registry = self.process_registry.clone();
+        let process_registry = self.runtime.process_registry.clone();
         let skills_manager = self.services.skills_manager.clone();
-        let cancel_token = self.cancellation.child_token();
+        let cancel_token = self.runtime.cancellation.child_token();
         let plan_mode = self.ui.work_mode == crate::tui::app::WorkMode::Plan;
-        let current_model = self.current_model.clone();
-        let dual_mind = self.dual_mind.clone();
+        let current_model = self.runtime.current_model.clone();
+        let dual_mind = self.runtime.dual_mind.clone();
         let dual_mind_tx = dual_mind_tx;
 
         tokio::spawn(async move {
@@ -880,13 +881,15 @@ impl App {
                     .and_then(|v| v.as_str())
                     .unwrap_or("bash")
                     .to_string();
-                self.blocks
+                self.runtime
+                    .blocks
                     .bash
                     .push(crate::tui::blocks::BashBlock::with_tool_id(
                         command,
                         tool_call.id.clone(),
                     ));
-                self.chat
+                self.runtime
+                    .chat
                     .messages
                     .push(("bash".to_string(), tool_call.id.clone()));
             }
@@ -898,14 +901,16 @@ impl App {
                     .and_then(|v| v.as_str())
                     .unwrap_or("*")
                     .to_string();
-                self.blocks
+                self.runtime
+                    .blocks
                     .tool_result
                     .push(crate::tui::blocks::ToolResultBlock::new(
                         tool_call.id.clone(),
                         tool_name.clone(),
                         pattern,
                     ));
-                self.chat
+                self.runtime
+                    .chat
                     .messages
                     .push(("tool_result".to_string(), tool_call.id.clone()));
             }
@@ -917,11 +922,15 @@ impl App {
                     .and_then(|v| v.as_str())
                     .unwrap_or("file")
                     .to_string();
-                self.blocks.read.push(crate::tui::blocks::ReadBlock::new(
-                    tool_call.id.clone(),
-                    file_path,
-                ));
-                self.chat
+                self.runtime
+                    .blocks
+                    .read
+                    .push(crate::tui::blocks::ReadBlock::new(
+                        tool_call.id.clone(),
+                        file_path,
+                    ));
+                self.runtime
+                    .chat
                     .messages
                     .push(("read".to_string(), tool_call.id.clone()));
             }
@@ -947,7 +956,7 @@ impl App {
                     .to_string();
                 let start_line = 1;
 
-                if let Some(block) = self.blocks.edit.last_mut() {
+                if let Some(block) = self.runtime.blocks.edit.last_mut() {
                     if block.is_pending() {
                         block.set_diff_data(file_path, old_string, new_string, start_line);
                     }
@@ -968,7 +977,7 @@ impl App {
                     .unwrap_or("")
                     .to_string();
 
-                if let Some(block) = self.blocks.write.last_mut() {
+                if let Some(block) = self.runtime.blocks.write.last_mut() {
                     if block.is_pending() {
                         block.set_content(file_path, content);
                     }
@@ -987,17 +996,19 @@ impl App {
                     tool_name,
                     tool_call.id
                 );
-                self.blocks
+                self.runtime
+                    .blocks
                     .explore
                     .push(crate::tui::blocks::ExploreBlock::with_tool_id(
                         prompt,
                         tool_call.id.clone(),
                     ));
-                self.chat
+                self.runtime
+                    .chat
                     .messages
                     .push(("explore".to_string(), tool_call.id.clone()));
-                if self.scroll_system.scroll.auto_scroll {
-                    self.scroll_system.scroll.request_scroll_to_bottom();
+                if self.ui.scroll_system.scroll.auto_scroll {
+                    self.ui.scroll_system.scroll.request_scroll_to_bottom();
                 }
             }
 
@@ -1012,17 +1023,19 @@ impl App {
                     "spawn_tool_execution: creating BuildBlock for 'build' with id={}",
                     tool_call.id
                 );
-                self.blocks
+                self.runtime
+                    .blocks
                     .build
                     .push(crate::tui::blocks::BuildBlock::with_tool_id(
                         prompt,
                         tool_call.id.clone(),
                     ));
-                self.chat
+                self.runtime
+                    .chat
                     .messages
                     .push(("build".to_string(), tool_call.id.clone()));
-                if self.scroll_system.scroll.auto_scroll {
-                    self.scroll_system.scroll.request_scroll_to_bottom();
+                if self.ui.scroll_system.scroll.auto_scroll {
+                    self.ui.scroll_system.scroll.request_scroll_to_bottom();
                 }
             }
         }
@@ -1036,7 +1049,7 @@ impl App {
 
         tracing::info!(
             result_count = tool_results.len(),
-            explore_block_count = self.blocks.explore.len(),
+            explore_block_count = self.runtime.blocks.explore.len(),
             "handle_tool_results called"
         );
 
@@ -1069,30 +1082,30 @@ impl App {
         }
 
         // Combine with any pending results
-        let mut all_results = std::mem::take(&mut self.pending_tool_results);
+        let mut all_results = std::mem::take(&mut self.runtime.pending_tool_results);
         all_results.extend(tool_results);
 
         // Process queued tools if any explore tools completed
-        if !self.queued_tools.is_empty() {
-            let queued = std::mem::take(&mut self.queued_tools);
+        if !self.runtime.queued_tools.is_empty() {
+            let queued = std::mem::take(&mut self.runtime.queued_tools);
             tracing::info!(
                 "handle_tool_results: processing {} queued tools",
                 queued.len()
             );
             self.spawn_tool_execution(queued);
             // Store results for later
-            self.pending_tool_results = all_results;
+            self.runtime.pending_tool_results = all_results;
             return;
         }
 
         // If decision prompt is visible, defer tool results until user decides
         // This prevents the AI from continuing while waiting for user input
-        if self.decision_prompt.visible {
+        if self.ui.decision_prompt.visible {
             tracing::info!(
                 "Decision prompt visible - deferring {} tool results",
                 all_results.len()
             );
-            self.pending_tool_results = all_results;
+            self.runtime.pending_tool_results = all_results;
             self.stop_tool_execution();
             return;
         }
@@ -1100,7 +1113,7 @@ impl App {
         // Inject exploration budget warning if threshold exceeded
         const EXPLORATION_BUDGET_SOFT: usize = 15;
         const EXPLORATION_BUDGET_HARD: usize = 30;
-        if self.exploration_budget_count >= EXPLORATION_BUDGET_HARD {
+        if self.runtime.exploration_budget_count >= EXPLORATION_BUDGET_HARD {
             let warning = format!(
                 "[EXPLORATION BUDGET EXCEEDED]\n\
                 You have made {} consecutive read-only operations without taking action.\n\
@@ -1108,17 +1121,17 @@ impl App {
                 If you are working on a plan, call task_start and begin implementation.\n\
                 If you need more context, use search_codebase for targeted results.\n\
                 Further exploration without action is unacceptable.",
-                self.exploration_budget_count
+                self.runtime.exploration_budget_count
             );
             all_results.push(Content::Text { text: warning });
-        } else if self.exploration_budget_count >= EXPLORATION_BUDGET_SOFT {
+        } else if self.runtime.exploration_budget_count >= EXPLORATION_BUDGET_SOFT {
             let warning = format!(
                 "[EXPLORATION BUDGET]\n\
                 You have made {} consecutive read-only operations without taking action.\n\
                 If you are working on a plan, call task_start and begin implementation.\n\
                 If you need more context, use search_codebase for targeted results.\n\
                 Continued exploration without action is wasteful. Act now or explain why you need more context.",
-                self.exploration_budget_count
+                self.runtime.exploration_budget_count
             );
             all_results.push(Content::Text { text: warning });
         }
@@ -1130,7 +1143,7 @@ impl App {
         };
 
         self.stop_tool_execution();
-        self.chat.conversation.push(tool_result_msg.clone());
+        self.runtime.chat.conversation.push(tool_result_msg.clone());
         self.save_model_message(&tool_result_msg);
 
         // Continue conversation with AI
@@ -1139,7 +1152,7 @@ impl App {
 
     /// Update ToolResultBlock with output
     fn update_tool_result_block(&mut self, tool_use_id: &str, output_str: &str) {
-        for block in &mut self.blocks.tool_result {
+        for block in &mut self.runtime.blocks.tool_result {
             if block.tool_use_id() == tool_use_id {
                 block.set_results(output_str);
                 block.complete();
@@ -1150,7 +1163,7 @@ impl App {
 
     /// Update ReadBlock with content
     fn update_read_block(&mut self, tool_use_id: &str, output_str: &str) {
-        for block in &mut self.blocks.read {
+        for block in &mut self.runtime.blocks.read {
             if block.tool_use_id() == tool_use_id {
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(output_str) {
                     let content = json.get("content").and_then(|v| v.as_str()).unwrap_or("");
@@ -1174,7 +1187,7 @@ impl App {
 
     /// Update BashBlock for background processes
     fn update_bash_block(&mut self, tool_use_id: &str, output_str: &str) {
-        for block in &mut self.blocks.bash {
+        for block in &mut self.runtime.blocks.bash {
             if block.tool_use_id() == Some(tool_use_id) {
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(output_str) {
                     if let Some(process_id) = json.get("processId").and_then(|v| v.as_str()) {
@@ -1194,11 +1207,11 @@ impl App {
     /// Update ExploreBlock with results
     fn update_explore_block(&mut self, tool_use_id: &str, output_str: &str) {
         tracing::info!(
-            explore_blocks = self.blocks.explore.len(),
+            explore_blocks = self.runtime.blocks.explore.len(),
             tool_use_id = %tool_use_id,
             "Looking for matching ExploreBlock"
         );
-        for block in &mut self.blocks.explore {
+        for block in &mut self.runtime.blocks.explore {
             if block.tool_use_id() == Some(tool_use_id) {
                 tracing::info!(
                     tool_use_id = %tool_use_id,
@@ -1213,7 +1226,7 @@ impl App {
 
     /// Update BuildBlock with results
     fn update_build_block(&mut self, tool_use_id: &str, output_str: &str) {
-        for block in &mut self.blocks.build {
+        for block in &mut self.runtime.blocks.build {
             if block.tool_use_id() == Some(tool_use_id) {
                 tracing::info!(
                     tool_use_id = %tool_use_id,

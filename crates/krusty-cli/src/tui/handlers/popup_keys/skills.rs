@@ -9,31 +9,31 @@ impl App {
     pub fn handle_skills_popup_key(&mut self, code: KeyCode) {
         match code {
             KeyCode::Esc => {
-                if self.popups.skills.search_active {
-                    self.popups.skills.toggle_search();
+                if self.ui.popups.skills.search_active {
+                    self.ui.popups.skills.toggle_search();
                 } else {
                     self.ui.popup = Popup::None;
                 }
             }
-            KeyCode::Up => self.popups.skills.prev(),
-            KeyCode::Down => self.popups.skills.next(),
-            KeyCode::Char('k') if !self.popups.skills.search_active => {
-                self.popups.skills.prev();
+            KeyCode::Up => self.ui.popups.skills.prev(),
+            KeyCode::Down => self.ui.popups.skills.next(),
+            KeyCode::Char('k') if !self.ui.popups.skills.search_active => {
+                self.ui.popups.skills.prev();
             }
-            KeyCode::Char('j') if !self.popups.skills.search_active => {
-                self.popups.skills.next();
+            KeyCode::Char('j') if !self.ui.popups.skills.search_active => {
+                self.ui.popups.skills.next();
             }
-            KeyCode::Char('/') if !self.popups.skills.search_active => {
-                self.popups.skills.toggle_search();
+            KeyCode::Char('/') if !self.ui.popups.skills.search_active => {
+                self.ui.popups.skills.toggle_search();
             }
-            KeyCode::Char('r') if !self.popups.skills.search_active => {
+            KeyCode::Char('r') if !self.ui.popups.skills.search_active => {
                 self.refresh_skills_browser();
             }
-            KeyCode::Backspace if self.popups.skills.search_active => {
-                self.popups.skills.backspace_search();
+            KeyCode::Backspace if self.ui.popups.skills.search_active => {
+                self.ui.popups.skills.backspace_search();
             }
-            KeyCode::Char(c) if self.popups.skills.search_active => {
-                self.popups.skills.add_search_char(c);
+            KeyCode::Char(c) if self.ui.popups.skills.search_active => {
+                self.ui.popups.skills.add_search_char(c);
             }
             _ => {}
         }
