@@ -104,7 +104,7 @@ impl App {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(self.ui.theme.border_color));
+            .border_style(Style::default().fg(self.ui.ui.theme.border_color));
 
         let inner = block.inner(area);
         f.render_widget(block, area);
@@ -127,31 +127,31 @@ impl App {
         };
 
         // Get selection range if selecting in messages area
-        let selection = if self.scroll_system.selection.area == SelectionArea::Messages {
-            self.scroll_system.selection.normalized()
+        let selection = if self.ui.scroll_system.selection.area == SelectionArea::Messages {
+            self.ui.scroll_system.selection.normalized()
         } else {
             None
         };
 
         // Selection highlight colors from theme
-        let sel_bg = self.ui.theme.selection_bg_color;
-        let sel_fg = self.ui.theme.selection_fg_color;
+        let sel_bg = self.ui.ui.theme.selection_bg_color;
+        let sel_fg = self.ui.ui.theme.selection_fg_color;
 
         // Clear cache if width changed (resize invalidation)
-        self.markdown_cache.check_width(wrap_width);
+        self.ui.markdown_cache.check_width(wrap_width);
 
         // Pre-render all markdown content with link tracking
         // Uses Arc to avoid expensive clones on cache hits
         let mut rendered_markdown: Vec<Option<Arc<RenderedMarkdown>>> =
-            Vec::with_capacity(self.chat.messages.len());
-        for (role, content) in &self.chat.messages {
+            Vec::with_capacity(self.runtime.chat.messages.len());
+        for (role, content) in &self.runtime.chat.messages {
             if role == "assistant" {
                 let content_hash = hash_content(content);
-                let rendered = self.markdown_cache.get_or_render_with_links(
+                let rendered = self.ui.markdown_cache.get_or_render_with_links(
                     content,
                     content_hash,
                     wrap_width,
-                    &self.ui.theme,
+                    &self.ui.ui.theme,
                 );
                 rendered_markdown.push(Some(rendered));
             } else {
@@ -160,7 +160,7 @@ impl App {
         }
 
         // Track block positions with single Vec (consolidates 10 allocations into 1)
-        let estimated_blocks = self.blocks.total_count();
+        let estimated_blocks = self.runtime.blocks.total_count();
         let mut block_positions: Vec<BlockPosition> = Vec::with_capacity(estimated_blocks);
         let mut thinking_idx = 0;
         let mut bash_idx = 0;
@@ -175,13 +175,13 @@ impl App {
         let mut total_lines: usize = 0;
 
         // Store message heights from first pass to avoid recalculating in second pass
-        let mut message_heights: Vec<usize> = Vec::with_capacity(self.chat.messages.len());
+        let mut message_heights: Vec<usize> = Vec::with_capacity(self.runtime.chat.messages.len());
 
         // First pass: calculate positions (using pre-rendered markdown)
-        for (msg_idx, (role, content)) in self.chat.messages.iter().enumerate() {
+        for (msg_idx, (role, content)) in self.runtime.chat.messages.iter().enumerate() {
             if role == "thinking" {
-                if let Some(tb) = self.blocks.thinking.get(thinking_idx) {
-                    let height = tb.height(content_width, &self.ui.theme);
+                if let Some(tb) = self.runtime.blocks.thinking.get(thinking_idx) {
+                    let height = tb.height(content_width, &self.ui.ui.theme);
                     Self::track_block_position(
                         &mut block_positions,
                         &mut total_lines,
@@ -196,8 +196,8 @@ impl App {
             }
 
             if role == "bash" {
-                if let Some(bb) = self.blocks.bash.get(bash_idx) {
-                    let height = bb.height(content_width, &self.ui.theme);
+                if let Some(bb) = self.runtime.blocks.bash.get(bash_idx) {
+                    let height = bb.height(content_width, &self.ui.ui.theme);
                     Self::track_block_position(
                         &mut block_positions,
                         &mut total_lines,
@@ -212,9 +212,9 @@ impl App {
             }
 
             if role == "terminal" {
-                if self.blocks.pinned_terminal != Some(terminal_idx) {
-                    if let Some(tp) = self.blocks.terminal.get(terminal_idx) {
-                        let height = tp.height(content_width, &self.ui.theme);
+                if self.runtime.blocks.pinned_terminal != Some(terminal_idx) {
+                    if let Some(tp) = self.runtime.blocks.terminal.get(terminal_idx) {
+                        let height = tp.height(content_width, &self.ui.ui.theme);
                         Self::track_block_position(
                             &mut block_positions,
                             &mut total_lines,
@@ -230,8 +230,8 @@ impl App {
             }
 
             if role == "tool_result" {
-                if let Some(tr) = self.blocks.tool_result.get(tool_result_idx) {
-                    let height = tr.height(content_width, &self.ui.theme);
+                if let Some(tr) = self.runtime.blocks.tool_result.get(tool_result_idx) {
+                    let height = tr.height(content_width, &self.ui.ui.theme);
                     Self::track_block_position(
                         &mut block_positions,
                         &mut total_lines,
@@ -246,8 +246,8 @@ impl App {
             }
 
             if role == "read" {
-                if let Some(rb) = self.blocks.read.get(read_idx) {
-                    let height = rb.height(content_width, &self.ui.theme);
+                if let Some(rb) = self.runtime.blocks.read.get(read_idx) {
+                    let height = rb.height(content_width, &self.ui.ui.theme);
                     Self::track_block_position(
                         &mut block_positions,
                         &mut total_lines,
@@ -262,8 +262,8 @@ impl App {
             }
 
             if role == "edit" {
-                if let Some(eb) = self.blocks.edit.get(edit_idx) {
-                    let height = eb.height(content_width, &self.ui.theme);
+                if let Some(eb) = self.runtime.blocks.edit.get(edit_idx) {
+                    let height = eb.height(content_width, &self.ui.ui.theme);
                     Self::track_block_position(
                         &mut block_positions,
                         &mut total_lines,
@@ -278,8 +278,8 @@ impl App {
             }
 
             if role == "write" {
-                if let Some(wb) = self.blocks.write.get(write_idx) {
-                    let height = wb.height(content_width, &self.ui.theme);
+                if let Some(wb) = self.runtime.blocks.write.get(write_idx) {
+                    let height = wb.height(content_width, &self.ui.ui.theme);
                     Self::track_block_position(
                         &mut block_positions,
                         &mut total_lines,
@@ -294,8 +294,8 @@ impl App {
             }
 
             if role == "web_search" {
-                if let Some(ws) = self.blocks.web_search.get(web_search_idx) {
-                    let height = ws.height(content_width, &self.ui.theme);
+                if let Some(ws) = self.runtime.blocks.web_search.get(web_search_idx) {
+                    let height = ws.height(content_width, &self.ui.ui.theme);
                     Self::track_block_position(
                         &mut block_positions,
                         &mut total_lines,
@@ -310,8 +310,8 @@ impl App {
             }
 
             if role == "explore" {
-                if let Some(eb) = self.blocks.explore.get(explore_idx) {
-                    let height = eb.height(content_width, &self.ui.theme);
+                if let Some(eb) = self.runtime.blocks.explore.get(explore_idx) {
+                    let height = eb.height(content_width, &self.ui.ui.theme);
                     Self::track_block_position(
                         &mut block_positions,
                         &mut total_lines,
@@ -326,8 +326,8 @@ impl App {
             }
 
             if role == "build" {
-                if let Some(bb) = self.blocks.build.get(build_idx) {
-                    let height = bb.height(content_width, &self.ui.theme);
+                if let Some(bb) = self.runtime.blocks.build.get(build_idx) {
+                    let height = bb.height(content_width, &self.ui.ui.theme);
                     Self::track_block_position(
                         &mut block_positions,
                         &mut total_lines,
@@ -370,7 +370,7 @@ impl App {
         // Second pass: build lines with placeholders for custom blocks
         // Also track message base line offsets for hyperlink positions
         // OPTIMIZATION: Only build styled content for visible messages
-        let scroll_offset = self.scroll_system.scroll.offset;
+        let scroll_offset = self.ui.scroll_system.scroll.offset;
         let viewport_height = inner.height as usize;
         let visible_start = scroll_offset.saturating_sub(viewport_height); // Buffer above
         let visible_end = scroll_offset + viewport_height * 2; // Buffer below
@@ -398,7 +398,7 @@ impl App {
                     .map(|p| p.height)
             };
 
-        for (msg_idx, (role, content)) in self.chat.messages.iter().enumerate() {
+        for (msg_idx, (role, content)) in self.runtime.chat.messages.iter().enumerate() {
             if role == "thinking" {
                 if let Some(height) =
                     find_position(&block_positions, BlockType::Thinking, thinking_idx)
@@ -429,7 +429,7 @@ impl App {
 
             if role == "terminal" {
                 // Skip pinned terminal - it's rendered at top
-                if self.blocks.pinned_terminal != Some(terminal_idx) {
+                if self.runtime.blocks.pinned_terminal != Some(terminal_idx) {
                     if let Some(height) =
                         find_position(&block_positions, BlockType::Terminal, terminal_idx)
                     {
@@ -563,7 +563,7 @@ impl App {
                         let line_with_symbol = if md_line_idx == 0 {
                             let symbol = Span::styled(
                                 ASSISTANT_SYMBOL,
-                                Style::default().fg(self.ui.theme.accent_color),
+                                Style::default().fg(self.ui.ui.theme.accent_color),
                             );
                             let mut spans = vec![symbol];
                             spans.extend(md_line.spans.clone());
@@ -591,12 +591,12 @@ impl App {
             } else {
                 // On-screen user/system: render plain text
                 let content_color = match role.as_str() {
-                    "user" => self.ui.theme.user_msg_color,
-                    "system" => self.ui.theme.system_msg_color,
-                    _ => self.ui.theme.text_color,
+                    "user" => self.ui.ui.theme.user_msg_color,
+                    "system" => self.ui.ui.theme.system_msg_color,
+                    _ => self.ui.ui.theme.text_color,
                 };
 
-                let hovered_file_ref = self.scroll_system.hover.message_file_ref.as_ref();
+                let hovered_file_ref = self.ui.scroll_system.hover.message_file_ref.as_ref();
                 let mut is_first_line_of_msg = true;
 
                 for line in content.lines() {
@@ -613,7 +613,7 @@ impl App {
                                     line_idx,
                                     selection,
                                     Style::default().fg(content_color),
-                                    self.ui.theme.link_color,
+                                    self.ui.ui.theme.link_color,
                                     sel_bg,
                                     sel_fg,
                                     msg_idx,
@@ -636,7 +636,7 @@ impl App {
                                     is_first_line_of_msg = false;
                                     let symbol = Span::styled(
                                         USER_SYMBOL,
-                                        Style::default().fg(self.ui.theme.accent_color),
+                                        Style::default().fg(self.ui.ui.theme.accent_color),
                                     );
                                     let mut spans = vec![symbol];
                                     spans.extend(content_line.spans);
@@ -657,12 +657,12 @@ impl App {
 
         // Clear the entire messages viewport (including scrollbar gap) before rendering
         // This is critical: ratatui widgets don't clear cells they don't touch
-        clear_area(f.buffer_mut(), inner, self.ui.theme.bg_color);
+        clear_area(f.buffer_mut(), inner, self.ui.ui.theme.bg_color);
 
         // Render text content into content_rect (NOT inner) to prevent overflow into scrollbar gap
         // Use a unified effective_scroll for ALL rendering operations to prevent drift
         // Clamp to u16::MAX since Paragraph::scroll uses u16 (supports ~65k lines)
-        let effective_scroll = self.scroll_system.scroll.offset.min(u16::MAX as usize);
+        let effective_scroll = self.ui.scroll_system.scroll.offset.min(u16::MAX as usize);
         let effective_scroll_u16 = effective_scroll as u16;
         f.render_widget(
             Paragraph::new(lines).scroll((effective_scroll_u16, 0)),
@@ -677,7 +677,11 @@ impl App {
             width: scrollbar_gap,
             height: inner.height,
         };
-        clear_area(f.buffer_mut(), scrollbar_clear_rect, self.ui.theme.bg_color);
+        clear_area(
+            f.buffer_mut(),
+            scrollbar_clear_rect,
+            self.ui.ui.theme.bg_color,
+        );
 
         // Apply OSC 8 hyperlinks to the buffer after Paragraph rendering
         // This wraps each link cell's symbol with escape sequences
@@ -694,7 +698,7 @@ impl App {
                     );
 
                     // Apply hover styling if this message contains the hovered link
-                    if let Some(hovered) = &self.scroll_system.hover.message_link {
+                    if let Some(hovered) = &self.ui.scroll_system.hover.message_link {
                         if hovered.msg_idx == *msg_idx {
                             apply_link_hover_style(
                                 f.buffer_mut(),
@@ -703,7 +707,7 @@ impl App {
                                 Some(hovered),
                                 effective_scroll,
                                 *base_line,
-                                self.ui.theme.link_color,
+                                self.ui.ui.theme.link_color,
                             );
                         }
                     }
@@ -729,7 +733,7 @@ impl App {
 
         // Resize terminal PTYs to match render width (debounced)
         // Note: tick() is called in the event loop before render, not here
-        for tp in &mut self.blocks.terminal {
+        for tp in &mut self.runtime.blocks.terminal {
             tp.resize_to_width(content_width);
         }
     }
@@ -795,59 +799,66 @@ impl App {
                 width: inner.width,
                 height: visible_height,
             };
-            clear_area(f.buffer_mut(), clear_rect, self.ui.theme.bg_color);
+            clear_area(f.buffer_mut(), clear_rect, self.ui.ui.theme.bg_color);
 
             // Render the appropriate block type
             match pos.block_type {
                 BlockType::Thinking => {
-                    if let Some(tb) = self.blocks.thinking.get(pos.block_idx) {
-                        tb.render(block_area, f.buffer_mut(), &self.ui.theme, false, clip);
+                    if let Some(tb) = self.runtime.blocks.thinking.get(pos.block_idx) {
+                        tb.render(block_area, f.buffer_mut(), &self.ui.ui.theme, false, clip);
                     }
                 }
                 BlockType::Bash => {
-                    if let Some(bb) = self.blocks.bash.get(pos.block_idx) {
-                        bb.render(block_area, f.buffer_mut(), &self.ui.theme, false, clip);
+                    if let Some(bb) = self.runtime.blocks.bash.get(pos.block_idx) {
+                        bb.render(block_area, f.buffer_mut(), &self.ui.ui.theme, false, clip);
                     }
                 }
                 BlockType::Terminal => {
-                    if let Some(tp) = self.blocks.terminal.get(pos.block_idx) {
-                        let is_focused = self.blocks.focused_terminal == Some(pos.block_idx);
-                        tp.render(block_area, f.buffer_mut(), &self.ui.theme, is_focused, clip);
+                    if let Some(tp) = self.runtime.blocks.terminal.get(pos.block_idx) {
+                        let is_focused =
+                            self.runtime.blocks.focused_terminal == Some(pos.block_idx);
+                        tp.render(
+                            block_area,
+                            f.buffer_mut(),
+                            &self.ui.ui.theme,
+                            is_focused,
+                            clip,
+                        );
                     }
                 }
                 BlockType::ToolResult => {
-                    if let Some(tr) = self.blocks.tool_result.get(pos.block_idx) {
-                        tr.render(block_area, f.buffer_mut(), &self.ui.theme, false, clip);
+                    if let Some(tr) = self.runtime.blocks.tool_result.get(pos.block_idx) {
+                        tr.render(block_area, f.buffer_mut(), &self.ui.ui.theme, false, clip);
                     }
                 }
                 BlockType::Read => {
-                    if let Some(rb) = self.blocks.read.get(pos.block_idx) {
-                        rb.render(block_area, f.buffer_mut(), &self.ui.theme, false, clip);
+                    if let Some(rb) = self.runtime.blocks.read.get(pos.block_idx) {
+                        rb.render(block_area, f.buffer_mut(), &self.ui.ui.theme, false, clip);
                     }
                 }
                 BlockType::Edit => {
-                    if let Some(eb) = self.blocks.edit.get(pos.block_idx) {
-                        eb.render(block_area, f.buffer_mut(), &self.ui.theme, false, clip);
+                    if let Some(eb) = self.runtime.blocks.edit.get(pos.block_idx) {
+                        eb.render(block_area, f.buffer_mut(), &self.ui.ui.theme, false, clip);
                     }
                 }
                 BlockType::Write => {
-                    if let Some(wb) = self.blocks.write.get(pos.block_idx) {
-                        wb.render(block_area, f.buffer_mut(), &self.ui.theme, false, clip);
+                    if let Some(wb) = self.runtime.blocks.write.get(pos.block_idx) {
+                        wb.render(block_area, f.buffer_mut(), &self.ui.ui.theme, false, clip);
                     }
                 }
                 BlockType::WebSearch => {
-                    if let Some(ws) = self.blocks.web_search.get(pos.block_idx) {
-                        ws.render(block_area, f.buffer_mut(), &self.ui.theme, false, clip);
+                    if let Some(ws) = self.runtime.blocks.web_search.get(pos.block_idx) {
+                        ws.render(block_area, f.buffer_mut(), &self.ui.ui.theme, false, clip);
                     }
                 }
                 BlockType::Explore => {
-                    if let Some(eb) = self.blocks.explore.get(pos.block_idx) {
-                        eb.render(block_area, f.buffer_mut(), &self.ui.theme, false, clip);
+                    if let Some(eb) = self.runtime.blocks.explore.get(pos.block_idx) {
+                        eb.render(block_area, f.buffer_mut(), &self.ui.ui.theme, false, clip);
                     }
                 }
                 BlockType::Build => {
-                    if let Some(bb) = self.blocks.build.get(pos.block_idx) {
-                        bb.render(block_area, f.buffer_mut(), &self.ui.theme, false, clip);
+                    if let Some(bb) = self.runtime.blocks.build.get(pos.block_idx) {
+                        bb.render(block_area, f.buffer_mut(), &self.ui.ui.theme, false, clip);
                     }
                 }
             }

@@ -4,6 +4,7 @@ use anyhow::Result;
 use rusqlite::params;
 
 use crate::ai::models::ModelMetadata;
+use crate::tools::git_identity::GitIdentity;
 
 use super::{database::Database, unix_timestamp};
 
@@ -190,5 +191,18 @@ impl Preferences {
     /// Save active plugin ID
     pub fn set_active_plugin(&self, plugin_id: &str) -> Result<()> {
         self.set("active_plugin", plugin_id)
+    }
+
+    /// Get git identity configuration (defaults to CoAuthor mode)
+    pub fn get_git_identity(&self) -> GitIdentity {
+        self.get("git_identity")
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    /// Save git identity configuration
+    pub fn set_git_identity(&self, identity: &GitIdentity) -> Result<()> {
+        let json = serde_json::to_string(identity)?;
+        self.set("git_identity", &json)
     }
 }

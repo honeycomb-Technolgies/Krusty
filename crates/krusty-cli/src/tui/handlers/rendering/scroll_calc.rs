@@ -29,68 +29,78 @@ impl App {
         let wrap_width = inner_width.saturating_sub(SYMBOL_WIDTH);
 
         // Pre-render markdown to cache (same as render_messages) to ensure consistent line counts
-        self.markdown_cache.check_width(wrap_width);
+        self.ui.markdown_cache.check_width(wrap_width);
 
-        for (role, content) in &self.chat.messages {
+        for (role, content) in &self.runtime.chat.messages {
             if let Some((block_type, idx)) = indices.get_and_increment(role) {
                 // Handle block types
                 let height = match block_type {
                     BlockType::Thinking => self
+                        .runtime
                         .blocks
                         .thinking
                         .get(idx)
-                        .map(|b| b.height(content_width, &self.ui.theme)),
+                        .map(|b| b.height(content_width, &self.ui.ui.theme)),
                     BlockType::Bash => self
+                        .runtime
                         .blocks
                         .bash
                         .get(idx)
-                        .map(|b| b.height(content_width, &self.ui.theme)),
+                        .map(|b| b.height(content_width, &self.ui.ui.theme)),
                     BlockType::TerminalPane => {
                         // Skip pinned terminal - it's rendered at top
-                        if self.blocks.pinned_terminal == Some(idx) {
+                        if self.runtime.blocks.pinned_terminal == Some(idx) {
                             None
                         } else {
-                            self.blocks
+                            self.runtime
+                                .blocks
                                 .terminal
                                 .get(idx)
-                                .map(|b| b.height(content_width, &self.ui.theme))
+                                .map(|b| b.height(content_width, &self.ui.ui.theme))
                         }
                     }
                     BlockType::ToolResult => self
+                        .runtime
                         .blocks
                         .tool_result
                         .get(idx)
-                        .map(|b| b.height(content_width, &self.ui.theme)),
+                        .map(|b| b.height(content_width, &self.ui.ui.theme)),
                     BlockType::Read => self
+                        .runtime
                         .blocks
                         .read
                         .get(idx)
-                        .map(|b| b.height(content_width, &self.ui.theme)),
+                        .map(|b| b.height(content_width, &self.ui.ui.theme)),
                     BlockType::Edit => self
+                        .runtime
                         .blocks
                         .edit
                         .get(idx)
-                        .map(|b| b.height(content_width, &self.ui.theme)),
+                        .map(|b| b.height(content_width, &self.ui.ui.theme)),
                     BlockType::Write => self
+                        .runtime
                         .blocks
                         .write
                         .get(idx)
-                        .map(|b| b.height(content_width, &self.ui.theme)),
+                        .map(|b| b.height(content_width, &self.ui.ui.theme)),
                     BlockType::WebSearch => self
+                        .runtime
                         .blocks
                         .web_search
                         .get(idx)
-                        .map(|b| b.height(content_width, &self.ui.theme)),
+                        .map(|b| b.height(content_width, &self.ui.ui.theme)),
                     BlockType::Explore => self
+                        .runtime
                         .blocks
                         .explore
                         .get(idx)
-                        .map(|b| b.height(content_width, &self.ui.theme)),
+                        .map(|b| b.height(content_width, &self.ui.ui.theme)),
                     BlockType::Build => self
+                        .runtime
                         .blocks
                         .build
                         .get(idx)
-                        .map(|b| b.height(content_width, &self.ui.theme)),
+                        .map(|b| b.height(content_width, &self.ui.ui.theme)),
                 };
                 if let Some(h) = height {
                     total += h as usize + 1; // +1 for blank after
@@ -100,11 +110,11 @@ impl App {
                 let mut hasher = DefaultHasher::new();
                 content.hash(&mut hasher);
                 let content_hash = hasher.finish();
-                let rendered = self.markdown_cache.get_or_render_with_links(
+                let rendered = self.ui.markdown_cache.get_or_render_with_links(
                     content,
                     content_hash,
                     wrap_width,
-                    &self.ui.theme,
+                    &self.ui.ui.theme,
                 );
                 total += rendered.lines.len() + 1; // +1 for blank after
             } else {

@@ -18,9 +18,9 @@ impl App {
             key_event.kind == KeyEventKind::Press || key_event.kind == KeyEventKind::Repeat;
 
         // Handle title editing mode first (ignore Release events)
-        if self.title_editor.is_editing {
+        if self.runtime.title_editor.is_editing {
             if is_press {
-                match self.title_editor.handle_key(code, modifiers) {
+                match self.runtime.title_editor.handle_key(code, modifiers) {
                     TitleAction::Save => self.save_title_edit(),
                     TitleAction::Cancel => self.cancel_title_edit(),
                     TitleAction::Continue => {}
@@ -30,7 +30,7 @@ impl App {
         }
 
         // Handle popups first (ignore Release events)
-        if self.ui.popup != Popup::None {
+        if self.ui.ui.popup != Popup::None {
             if is_press {
                 self.handle_popup_key(code, modifiers);
             }
@@ -38,15 +38,15 @@ impl App {
         }
 
         // Handle plugin window focus - route keys to plugin
-        if self.plugin_window.focused {
+        if self.ui.plugin_window.focused {
             // Delete unfocuses the plugin window (Esc is used by plugin menus)
             if code == KeyCode::Delete {
-                self.plugin_window.unfocus();
+                self.ui.plugin_window.unfocus();
                 return;
             }
             // Ctrl+Q still quits
             if modifiers.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('q') {
-                self.should_quit = true;
+                self.runtime.should_quit = true;
                 return;
             }
             // Ctrl+P toggles plugin window visibility
@@ -57,12 +57,12 @@ impl App {
                     .preferences
                     .as_ref()
                     .and_then(|p| p.get_active_plugin());
-                self.plugin_window.toggle(preferred.as_deref());
+                self.ui.plugin_window.toggle(preferred.as_deref());
                 return;
             }
             // Forward all other keys to the plugin (pass full event for key release detection)
-            let area = self.plugin_window.last_area;
-            if let Some(plugin) = self.plugin_window.active_plugin_mut() {
+            let area = self.ui.plugin_window.last_area;
+            if let Some(plugin) = self.ui.plugin_window.active_plugin_mut() {
                 use crate::tui::plugins::PluginEventResult;
                 let event = crossterm::event::Event::Key(key_event);
                 if let Some(area) = area {
@@ -76,19 +76,19 @@ impl App {
         }
 
         // Forward keys to focused terminal (except Esc and Ctrl+Q)
-        if let Some(idx) = self.blocks.focused_terminal {
+        if let Some(idx) = self.runtime.blocks.focused_terminal {
             // ESC unfocuses terminal
             if code == KeyCode::Esc {
-                self.blocks.clear_all_terminal_focus();
+                self.runtime.blocks.clear_all_terminal_focus();
                 return;
             }
             // Ctrl+Q still quits
             if modifiers.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('q') {
-                self.should_quit = true;
+                self.runtime.should_quit = true;
                 return;
             }
             // Forward all other keys to the terminal
-            if let Some(tp) = self.blocks.terminal.get_mut(idx) {
+            if let Some(tp) = self.runtime.blocks.terminal.get_mut(idx) {
                 let _ = tp.handle_key(key_event);
             }
             return;
@@ -100,27 +100,27 @@ impl App {
         }
 
         // Handle autocomplete navigation
-        if self.autocomplete.visible {
+        if self.ui.autocomplete.visible {
             match code {
                 KeyCode::Tab | KeyCode::Down => {
-                    self.autocomplete.next();
+                    self.ui.autocomplete.next();
                     return;
                 }
                 KeyCode::Up => {
-                    self.autocomplete.prev();
+                    self.ui.autocomplete.prev();
                     return;
                 }
                 // Only plain Enter selects autocomplete - Shift+Enter should insert newline
                 KeyCode::Enter if modifiers.is_empty() => {
-                    if let Some(cmd) = self.autocomplete.get_selected() {
+                    if let Some(cmd) = self.ui.autocomplete.get_selected() {
                         self.handle_slash_command(cmd.primary);
-                        self.input.clear();
-                        self.autocomplete.hide();
+                        self.ui.input.clear();
+                        self.ui.autocomplete.hide();
                     }
                     return;
                 }
                 KeyCode::Esc => {
-                    self.autocomplete.hide();
+                    self.ui.autocomplete.hide();
                     return;
                 }
                 _ => {}
@@ -128,48 +128,48 @@ impl App {
         }
 
         // Handle file search navigation - fully isolate arrow keys
-        if self.file_search.visible {
+        if self.ui.file_search.visible {
             use crate::tui::input::file_search::FileSearchMode;
 
             match code {
                 KeyCode::Down => {
-                    self.file_search.next();
+                    self.ui.file_search.next();
                     return;
                 }
                 KeyCode::Up => {
-                    self.file_search.prev();
+                    self.ui.file_search.prev();
                     return;
                 }
                 KeyCode::Right => {
-                    if self.file_search.mode == FileSearchMode::Tree {
-                        self.file_search.enter_dir();
+                    if self.ui.file_search.mode == FileSearchMode::Tree {
+                        self.ui.file_search.enter_dir();
                     }
                     // Always consume right arrow in file search
                     return;
                 }
                 KeyCode::Left => {
-                    if self.file_search.mode == FileSearchMode::Tree {
-                        self.file_search.go_up();
+                    if self.ui.file_search.mode == FileSearchMode::Tree {
+                        self.ui.file_search.go_up();
                     }
                     // Always consume left arrow in file search
                     return;
                 }
                 // Ctrl+F toggles between fuzzy and tree mode
                 KeyCode::Char('f') if modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.file_search.toggle_mode();
+                    self.ui.file_search.toggle_mode();
                     return;
                 }
                 KeyCode::Enter if modifiers.is_empty() => {
-                    if let Some(path) = self.file_search.get_selected() {
+                    if let Some(path) = self.ui.file_search.get_selected() {
                         let path = path.to_string();
                         // Insert @path into input, replacing the @query
                         self.insert_file_reference(&path);
-                        self.file_search.hide();
+                        self.ui.file_search.hide();
                     }
                     return;
                 }
                 KeyCode::Esc => {
-                    self.file_search.hide();
+                    self.ui.file_search.hide();
                     return;
                 }
                 _ => {}
@@ -178,21 +178,21 @@ impl App {
 
         // Ctrl+Q to quit
         if modifiers.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('q') {
-            self.should_quit = true;
+            self.runtime.should_quit = true;
             return;
         }
 
         // Ctrl+B to open process list
         if modifiers.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('b') {
             self.refresh_process_popup();
-            self.ui.popup = Popup::ProcessList;
+            self.ui.ui.popup = Popup::ProcessList;
             return;
         }
 
         // Ctrl+T to toggle plan/tasks sidebar (only if we have an active plan)
         if modifiers.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('t') {
-            if self.active_plan.is_some() {
-                self.plan_sidebar.toggle();
+            if self.runtime.active_plan.is_some() {
+                self.ui.plan_sidebar.toggle();
             }
             return;
         }
@@ -204,19 +204,19 @@ impl App {
                 .preferences
                 .as_ref()
                 .and_then(|p| p.get_active_plugin());
-            self.plugin_window.toggle(preferred.as_deref());
+            self.ui.plugin_window.toggle(preferred.as_deref());
             return;
         }
 
         // Ctrl+G to toggle work mode (BUILD/PLAN)
         if modifiers.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('g') {
-            let old_mode = self.ui.work_mode;
-            self.ui.work_mode = self.ui.work_mode.toggle();
-            tracing::info!(from = ?old_mode, to = ?self.ui.work_mode, "Work mode toggled via Ctrl+G");
+            let old_mode = self.ui.ui.work_mode;
+            self.ui.ui.work_mode = self.ui.ui.work_mode.toggle();
+            tracing::info!(from = ?old_mode, to = ?self.ui.ui.work_mode, "Work mode toggled via Ctrl+G");
             return;
         }
 
-        match self.ui.view {
+        match self.ui.ui.view {
             View::StartMenu => self.handle_start_menu_key(code, modifiers),
             View::Chat => self.handle_chat_key(code, modifiers),
         }
@@ -227,30 +227,30 @@ impl App {
         use crate::tui::popups::auth::AuthState;
 
         // Forward paste to focused terminal
-        if let Some(idx) = self.blocks.focused_terminal {
-            if let Some(tp) = self.blocks.terminal.get_mut(idx) {
+        if let Some(idx) = self.runtime.blocks.focused_terminal {
+            if let Some(tp) = self.runtime.blocks.terminal.get_mut(idx) {
                 let _ = tp.write(text.as_bytes());
             }
             return;
         }
 
         // Route paste to auth popup if active and in input state
-        if let Popup::Auth = &self.ui.popup {
-            if let AuthState::ApiKeyInput { .. } = &self.popups.auth.state {
+        if let Popup::Auth = &self.ui.ui.popup {
+            if let AuthState::ApiKeyInput { .. } = &self.ui.popups.auth.state {
                 for c in text.trim().chars() {
-                    self.popups.auth.add_api_key_char(c);
+                    self.ui.popups.auth.add_api_key_char(c);
                 }
                 return;
             }
         }
 
         // Route paste to pinch popup if in input state
-        if let Popup::Pinch = &self.ui.popup {
+        if let Popup::Pinch = &self.ui.ui.popup {
             use crate::tui::popups::pinch::PinchStage;
-            match &self.popups.pinch.stage {
+            match &self.ui.popups.pinch.stage {
                 PinchStage::PreservationInput { .. } | PinchStage::DirectionInput { .. } => {
                     for c in text.chars() {
-                        self.popups.pinch.add_char(c);
+                        self.ui.popups.pinch.add_char(c);
                     }
                     return;
                 }
@@ -263,9 +263,9 @@ impl App {
         let trimmed = text.trim();
         let path = std::path::Path::new(trimmed);
         if path.exists() && crate::tools::is_supported_file(path) {
-            self.input.insert_text(&format!("[{}]", trimmed));
+            self.ui.input.insert_text(&format!("[{}]", trimmed));
         } else {
-            self.input.insert_text(&text);
+            self.ui.input.insert_text(&text);
         }
         self.update_autocomplete();
     }
@@ -273,11 +273,11 @@ impl App {
     /// Handle start menu keyboard events
     pub fn handle_start_menu_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
         // Tab - toggle extended thinking mode (when not in autocomplete)
-        if code == KeyCode::Tab && !self.autocomplete.visible {
-            self.thinking_enabled = !self.thinking_enabled;
+        if code == KeyCode::Tab && !self.ui.autocomplete.visible {
+            self.runtime.thinking_enabled = !self.runtime.thinking_enabled;
             tracing::info!(
                 "Extended thinking {}",
-                if self.thinking_enabled {
+                if self.runtime.thinking_enabled {
                     "enabled"
                 } else {
                     "disabled"
@@ -286,11 +286,11 @@ impl App {
             return;
         }
 
-        match self.input.handle_key(code, modifiers) {
+        match self.ui.input.handle_key(code, modifiers) {
             InputAction::Submit(text) => {
                 if !text.is_empty() {
-                    self.input.clear();
-                    self.autocomplete.hide();
+                    self.ui.input.clear();
+                    self.ui.autocomplete.hide();
                     self.handle_input_submit(text);
                 }
             }
@@ -301,15 +301,16 @@ impl App {
                 placeholder_id,
             } => {
                 // Store clipboard image for later resolution
-                self.pending_clipboard_images
+                self.runtime
+                    .pending_clipboard_images
                     .insert(placeholder_id, (width, height, rgba_bytes));
                 self.update_autocomplete();
             }
             InputAction::Continue | InputAction::ContentChanged => {
                 self.update_autocomplete();
                 // Escape clears input on start menu
-                if code == KeyCode::Esc && !self.autocomplete.visible {
-                    self.input.clear();
+                if code == KeyCode::Esc && !self.ui.autocomplete.visible {
+                    self.ui.input.clear();
                 }
             }
         }
@@ -319,30 +320,32 @@ impl App {
     pub fn handle_chat_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
         // IMPORTANT: Handle decision prompt FIRST (before global Esc handler)
         // This ensures Esc in custom input mode cancels typing, not the whole conversation
-        if self.decision_prompt.visible && self.handle_decision_prompt_key(code, modifiers) {
+        if self.ui.decision_prompt.visible && self.handle_decision_prompt_key(code, modifiers) {
             return;
         }
         // Fall through to input for custom response typing
 
         // Esc interrupts AI processing (use /home to return to start menu)
         // Only if decision prompt is NOT visible (handled above)
-        if code == KeyCode::Esc && !self.autocomplete.visible && !self.decision_prompt.visible {
+        if code == KeyCode::Esc && !self.ui.autocomplete.visible && !self.ui.decision_prompt.visible
+        {
             if self.is_busy() {
                 // Cancel the background task
-                self.cancellation.cancel();
+                self.runtime.cancellation.cancel();
 
                 // Emit interrupt event
-                self.event_bus.emit(AgentEvent::Interrupt {
-                    turn: self.agent_state.current_turn,
+                self.runtime.event_bus.emit(AgentEvent::Interrupt {
+                    turn: self.runtime.agent_state.current_turn,
                     reason: InterruptReason::UserRequested,
                 });
 
                 // Update state
-                self.agent_state.interrupt();
-                self.streaming.reset();
+                self.runtime.agent_state.interrupt();
+                self.runtime.streaming.reset();
                 self.stop_streaming();
                 self.stop_tool_execution();
-                self.chat
+                self.runtime
+                    .chat
                     .messages
                     .push(("system".to_string(), "Interrupted.".to_string()));
             }
@@ -351,11 +354,11 @@ impl App {
 
         // Tab - toggle extended thinking mode (when not in autocomplete)
         // Can toggle during streaming - takes effect after current stream completes
-        if code == KeyCode::Tab && !self.autocomplete.visible {
-            self.thinking_enabled = !self.thinking_enabled;
+        if code == KeyCode::Tab && !self.ui.autocomplete.visible {
+            self.runtime.thinking_enabled = !self.runtime.thinking_enabled;
             tracing::info!(
                 "Extended thinking {}",
-                if self.thinking_enabled {
+                if self.runtime.thinking_enabled {
                     "enabled"
                 } else {
                     "disabled"
@@ -365,23 +368,23 @@ impl App {
         }
 
         // Plan sidebar scrolling with Shift+PageUp/PageDown or Shift+Up/Down
-        if self.plan_sidebar.visible && modifiers.contains(KeyModifiers::SHIFT) {
+        if self.ui.plan_sidebar.visible && modifiers.contains(KeyModifiers::SHIFT) {
             let visible_height = 20; // Approximate visible height
             match code {
                 KeyCode::PageUp => {
-                    self.plan_sidebar.page_up(visible_height);
+                    self.ui.plan_sidebar.page_up(visible_height);
                     return;
                 }
                 KeyCode::PageDown => {
-                    self.plan_sidebar.page_down(visible_height);
+                    self.ui.plan_sidebar.page_down(visible_height);
                     return;
                 }
                 KeyCode::Up => {
-                    self.plan_sidebar.scroll_up();
+                    self.ui.plan_sidebar.scroll_up();
                     return;
                 }
                 KeyCode::Down => {
-                    self.plan_sidebar.scroll_down(visible_height);
+                    self.ui.plan_sidebar.scroll_down(visible_height);
                     return;
                 }
                 _ => {}
@@ -390,35 +393,35 @@ impl App {
 
         // PageUp - show older content (decrease offset toward 0/top)
         if code == KeyCode::PageUp {
-            self.scroll_system.scroll.scroll_up(5);
+            self.ui.scroll_system.scroll.scroll_up(5);
             return;
         }
         // PageDown - show newer content (increase offset toward MAX/bottom)
         if code == KeyCode::PageDown {
-            self.scroll_system.scroll.scroll_down(5);
+            self.ui.scroll_system.scroll.scroll_down(5);
             return;
         }
 
-        match self.input.handle_key(code, modifiers) {
+        match self.ui.input.handle_key(code, modifiers) {
             InputAction::Submit(text) => {
                 // Check if we're in decision prompt custom input mode
-                if self.decision_prompt.visible && self.decision_prompt.custom_input_mode {
+                if self.ui.decision_prompt.visible && self.ui.decision_prompt.custom_input_mode {
                     if !text.is_empty() {
-                        let all_done = self.decision_prompt.submit_custom(text);
-                        self.input.clear();
+                        let all_done = self.ui.decision_prompt.submit_custom(text);
+                        self.ui.input.clear();
                         if all_done {
                             self.handle_decision_prompt_complete();
                         }
                     }
                 } else if !text.is_empty() {
                     if self.is_busy() {
-                        self.chat.messages.push((
+                        self.runtime.chat.messages.push((
                             "system".to_string(),
                             "Please wait for the current response to complete.".to_string(),
                         ));
                     } else {
-                        self.input.clear();
-                        self.autocomplete.hide();
+                        self.ui.input.clear();
+                        self.ui.autocomplete.hide();
                         self.handle_input_submit(text);
                     }
                 }
@@ -430,7 +433,8 @@ impl App {
                 placeholder_id,
             } => {
                 // Store clipboard image for later resolution
-                self.pending_clipboard_images
+                self.runtime
+                    .pending_clipboard_images
                     .insert(placeholder_id, (width, height, rgba_bytes));
                 self.update_autocomplete();
             }
@@ -442,7 +446,7 @@ impl App {
 
     /// Update autocomplete suggestions based on input
     pub fn update_autocomplete(&mut self) {
-        let content = self.input.content();
+        let content = self.ui.input.content();
         // Only show autocomplete for slash commands, not file paths
         // /help = show autocomplete, /home/user/file.pdf = don't show
         if let Some(query) = content.strip_prefix('/') {
@@ -453,14 +457,14 @@ impl App {
                     .any(|ext| query.to_lowercase().ends_with(ext));
 
             if is_file_path {
-                self.autocomplete.hide();
-            } else if self.autocomplete.visible {
-                self.autocomplete.update(query);
+                self.ui.autocomplete.hide();
+            } else if self.ui.autocomplete.visible {
+                self.ui.autocomplete.update(query);
             } else {
-                self.autocomplete.show(query);
+                self.ui.autocomplete.show(query);
             }
         } else {
-            self.autocomplete.hide();
+            self.ui.autocomplete.hide();
         }
 
         // Also update file search
@@ -469,7 +473,7 @@ impl App {
 
     /// Update file search based on input (triggered by @)
     pub fn update_file_search(&mut self) {
-        let content = self.input.content();
+        let content = self.ui.input.content();
 
         // Find the last @ in the content
         if let Some(at_pos) = content.rfind('@') {
@@ -478,29 +482,29 @@ impl App {
 
             // Don't trigger if @ is followed by a space or newline (completed reference)
             if query.starts_with(' ') || query.starts_with('\n') {
-                self.file_search.hide();
+                self.ui.file_search.hide();
                 return;
             }
 
             // Don't show file search if we're in slash command mode
-            if content.starts_with('/') && !self.autocomplete.visible {
-                self.file_search.hide();
+            if content.starts_with('/') && !self.ui.autocomplete.visible {
+                self.ui.file_search.hide();
                 return;
             }
 
-            if self.file_search.visible {
-                self.file_search.update(query);
+            if self.ui.file_search.visible {
+                self.ui.file_search.update(query);
             } else {
-                self.file_search.show(query);
+                self.ui.file_search.show(query);
             }
         } else {
-            self.file_search.hide();
+            self.ui.file_search.hide();
         }
     }
 
     /// Insert a file reference into the input, replacing the @query
     pub fn insert_file_reference(&mut self, path: &str) {
-        let content = self.input.content().to_string();
+        let content = self.ui.input.content().to_string();
 
         // Find the last @ and replace from there
         if let Some(at_pos) = content.rfind('@') {
@@ -509,15 +513,15 @@ impl App {
             let before = &content[..at_pos];
             let new_content = format!("{}[{}] ", before, path);
 
-            self.input.clear();
-            self.input.insert_text(&new_content);
+            self.ui.input.clear();
+            self.ui.input.insert_text(&new_content);
         }
     }
 
     /// Refresh process popup with current process list (non-blocking)
     pub fn refresh_process_popup(&mut self) {
-        if let Some(processes) = self.process_registry.try_list() {
-            self.popups.process.update(processes);
+        if let Some(processes) = self.runtime.process_registry.try_list() {
+            self.ui.popups.process.update(processes);
         }
     }
 
@@ -525,10 +529,10 @@ impl App {
     /// Returns true if the key was handled (don't pass to input)
     fn handle_decision_prompt_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> bool {
         // In custom input mode, only Escape cancels
-        if self.decision_prompt.custom_input_mode {
+        if self.ui.decision_prompt.custom_input_mode {
             if code == KeyCode::Esc {
-                self.decision_prompt.exit_custom_mode();
-                self.input.clear();
+                self.ui.decision_prompt.exit_custom_mode();
+                self.ui.input.clear();
                 return true;
             }
             // Let Enter be handled by input (submits custom text)
@@ -539,8 +543,8 @@ impl App {
             // Number keys select option directly
             KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
                 let num = (c as usize) - ('0' as usize);
-                if self.decision_prompt.select_by_number(num) {
-                    let all_done = self.decision_prompt.confirm_selection();
+                if self.ui.decision_prompt.select_by_number(num) {
+                    let all_done = self.ui.decision_prompt.confirm_selection();
                     if all_done {
                         self.handle_decision_prompt_complete();
                     }
@@ -549,25 +553,25 @@ impl App {
             }
             // Arrow navigation
             KeyCode::Up => {
-                self.decision_prompt.prev_option();
+                self.ui.decision_prompt.prev_option();
                 true
             }
             KeyCode::Down => {
-                self.decision_prompt.next_option();
+                self.ui.decision_prompt.next_option();
                 true
             }
             // Page navigation for many options
             KeyCode::PageUp => {
-                self.decision_prompt.page_up();
+                self.ui.decision_prompt.page_up();
                 true
             }
             KeyCode::PageDown => {
-                self.decision_prompt.page_down();
+                self.ui.decision_prompt.page_down();
                 true
             }
             // Enter confirms current selection
             KeyCode::Enter if modifiers.is_empty() => {
-                let all_done = self.decision_prompt.confirm_selection();
+                let all_done = self.ui.decision_prompt.confirm_selection();
                 if all_done {
                     self.handle_decision_prompt_complete();
                 }
@@ -575,25 +579,25 @@ impl App {
             }
             // Space toggles for multi-select
             KeyCode::Char(' ') => {
-                self.decision_prompt.toggle_current();
+                self.ui.decision_prompt.toggle_current();
                 true
             }
             // Backspace goes back to previous question
-            KeyCode::Backspace if self.decision_prompt.current_index > 0 => {
-                self.decision_prompt.go_back();
+            KeyCode::Backspace if self.ui.decision_prompt.current_index > 0 => {
+                self.ui.decision_prompt.go_back();
                 true
             }
             // Escape goes back or dismisses
             KeyCode::Esc => {
-                if !self.decision_prompt.go_back() {
+                if !self.ui.decision_prompt.go_back() {
                     // No previous question - close the prompt
-                    self.decision_prompt.hide();
+                    self.ui.decision_prompt.hide();
                 }
                 true
             }
             // Any other character starts custom input mode
             KeyCode::Char(_) => {
-                self.decision_prompt.enter_custom_mode();
+                self.ui.decision_prompt.enter_custom_mode();
                 false // Let it pass through to input
             }
             _ => false,
@@ -604,11 +608,11 @@ impl App {
     pub(crate) fn handle_decision_prompt_complete(&mut self) {
         use crate::tui::components::PromptType;
 
-        let prompt_type = self.decision_prompt.prompt_type.clone();
-        let answers = self.decision_prompt.answers.clone();
-        let tool_use_id = self.decision_prompt.tool_use_id.clone();
+        let prompt_type = self.ui.decision_prompt.prompt_type.clone();
+        let answers = self.ui.decision_prompt.answers.clone();
+        let tool_use_id = self.ui.decision_prompt.tool_use_id.clone();
 
-        self.decision_prompt.hide();
+        self.ui.decision_prompt.hide();
 
         match prompt_type {
             PromptType::PlanConfirm => {
@@ -628,7 +632,7 @@ impl App {
         use crate::tui::components::PromptAnswer;
 
         // Flush any pending tool results that were deferred while prompt was visible
-        let pending_results = std::mem::take(&mut self.pending_tool_results);
+        let pending_results = std::mem::take(&mut self.runtime.pending_tool_results);
         if !pending_results.is_empty() {
             tracing::info!(
                 "Flushing {} pending tool results after plan confirmation",
@@ -638,7 +642,7 @@ impl App {
                 role: Role::User,
                 content: pending_results,
             };
-            self.chat.conversation.push(msg.clone());
+            self.runtime.chat.conversation.push(msg.clone());
             self.save_model_message(&msg);
         }
 
@@ -647,7 +651,7 @@ impl App {
                 match idx {
                     0 => {
                         // Execute - switch to BUILD mode and auto-start
-                        self.ui.work_mode = crate::tui::app::WorkMode::Build;
+                        self.ui.ui.work_mode = crate::tui::app::WorkMode::Build;
 
                         // Auto-send execute message to Claude
                         let execute_msg =
@@ -656,9 +660,9 @@ impl App {
                     }
                     1 => {
                         // Abandon - clear plan
-                        if let Some(ref plan) = self.active_plan {
+                        if let Some(ref plan) = self.runtime.active_plan {
                             let title = plan.title.clone();
-                            self.chat.messages.push((
+                            self.runtime.chat.messages.push((
                                 "system".to_string(),
                                 format!("Plan '{}' abandoned.", title),
                             ));
@@ -688,7 +692,7 @@ impl App {
 
         // Build answers object matching the questions
         let mut answers_json = serde_json::Map::new();
-        let questions = &self.decision_prompt.questions;
+        let questions = &self.ui.decision_prompt.questions;
 
         for (i, answer) in answers.iter().enumerate() {
             let question = questions.get(i);
@@ -731,7 +735,7 @@ impl App {
         };
 
         // Include any pending tool results that were deferred while prompt was visible
-        let mut content = std::mem::take(&mut self.pending_tool_results);
+        let mut content = std::mem::take(&mut self.runtime.pending_tool_results);
         content.push(tool_result);
 
         // Add to conversation as user message (tool results are sent as user role)
@@ -747,7 +751,7 @@ impl App {
             "Sending AskUserQuestion tool result"
         );
 
-        self.chat.conversation.push(msg.clone());
+        self.runtime.chat.conversation.push(msg.clone());
         self.save_model_message(&msg);
 
         // Continue AI conversation

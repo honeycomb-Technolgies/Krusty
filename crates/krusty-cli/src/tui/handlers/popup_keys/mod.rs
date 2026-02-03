@@ -19,10 +19,10 @@ use crate::tui::app::{App, Popup};
 impl App {
     /// Handle keyboard events when a popup is open
     pub fn handle_popup_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
-        match &self.ui.popup {
+        match &self.ui.ui.popup {
             Popup::Help => match code {
-                KeyCode::Esc => self.ui.popup = Popup::None,
-                KeyCode::Tab => self.popups.help.next_tab(),
+                KeyCode::Esc => self.ui.ui.popup = Popup::None,
+                KeyCode::Tab => self.ui.popups.help.next_tab(),
                 _ => {}
             },
             Popup::ThemeSelect => {
@@ -30,26 +30,26 @@ impl App {
                     KeyCode::Esc => {
                         // Restore original theme on cancel
                         self.restore_original_theme();
-                        self.ui.popup = Popup::None;
+                        self.ui.ui.popup = Popup::None;
                     }
                     KeyCode::Up | KeyCode::Char('k') => {
-                        self.popups.theme.prev();
+                        self.ui.popups.theme.prev();
                         // Live preview on navigation
-                        if let Some(name) = self.popups.theme.get_selected_theme_name() {
+                        if let Some(name) = self.ui.popups.theme.get_selected_theme_name() {
                             self.preview_theme(&name);
                         }
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
-                        self.popups.theme.next();
+                        self.ui.popups.theme.next();
                         // Live preview on navigation
-                        if let Some(name) = self.popups.theme.get_selected_theme_name() {
+                        if let Some(name) = self.ui.popups.theme.get_selected_theme_name() {
                             self.preview_theme(&name);
                         }
                     }
                     KeyCode::Enter => {
-                        if let Some(name) = self.popups.theme.get_selected_theme_name() {
+                        if let Some(name) = self.ui.popups.theme.get_selected_theme_name() {
                             self.set_theme(&name); // Apply AND save
-                            self.ui.popup = Popup::None;
+                            self.ui.ui.popup = Popup::None;
                         }
                     }
                     _ => {}
@@ -88,20 +88,20 @@ impl App {
 
     /// Handle model select popup keys
     fn handle_model_select_key(&mut self, code: KeyCode) {
-        if self.popups.model.search_active {
+        if self.ui.popups.model.search_active {
             match code {
-                KeyCode::Esc => self.popups.model.toggle_search(),
-                KeyCode::Enter => self.popups.model.close_search(),
-                KeyCode::Backspace => self.popups.model.backspace_search(),
-                KeyCode::Char(c) => self.popups.model.add_search_char(c),
+                KeyCode::Esc => self.ui.popups.model.toggle_search(),
+                KeyCode::Enter => self.ui.popups.model.close_search(),
+                KeyCode::Backspace => self.ui.popups.model.backspace_search(),
+                KeyCode::Char(c) => self.ui.popups.model.add_search_char(c),
                 _ => {}
             }
         } else {
             match code {
-                KeyCode::Esc => self.ui.popup = Popup::None,
-                KeyCode::Up | KeyCode::Char('k') => self.popups.model.prev(),
-                KeyCode::Down | KeyCode::Char('j') => self.popups.model.next(),
-                KeyCode::Char('i') | KeyCode::Char('/') => self.popups.model.toggle_search(),
+                KeyCode::Esc => self.ui.ui.popup = Popup::None,
+                KeyCode::Up | KeyCode::Char('k') => self.ui.popups.model.prev(),
+                KeyCode::Down | KeyCode::Char('j') => self.ui.popups.model.next(),
+                KeyCode::Char('i') | KeyCode::Char('/') => self.ui.popups.model.toggle_search(),
                 KeyCode::Enter => self.confirm_model_selection(),
                 _ => {}
             }
@@ -110,14 +110,14 @@ impl App {
 
     /// Confirm model selection
     fn confirm_model_selection(&mut self) {
-        let metadata = self.popups.model.get_selected_metadata().cloned();
+        let metadata = self.ui.popups.model.get_selected_metadata().cloned();
 
         if let Some(metadata) = metadata {
             // Check if current context exceeds new model's limit
-            if self.context_tokens_used > metadata.context_window {
-                let used_k = self.context_tokens_used as f64 / 1000.0;
+            if self.runtime.context_tokens_used > metadata.context_window {
+                let used_k = self.runtime.context_tokens_used as f64 / 1000.0;
                 let max_k = metadata.context_window as f64 / 1000.0;
-                self.popups.model.set_error(format!(
+                self.ui.popups.model.set_error(format!(
                     "Context too large ({:.0}k) for {} ({:.0}k max). Clear conversation or choose a larger model.",
                     used_k, metadata.display_name, max_k
                 ));
@@ -126,19 +126,19 @@ impl App {
                 let model_id = metadata.id;
 
                 // Switch provider if selecting model from different provider
-                if provider_id != self.active_provider {
+                if provider_id != self.runtime.active_provider {
                     self.switch_provider(provider_id);
                     if !self.is_authenticated() {
                         let _ = futures::executor::block_on(self.try_load_auth());
                     }
                 }
-                self.current_model = model_id.clone();
+                self.runtime.current_model = model_id.clone();
 
                 // Reinitialize AI client and dual-mind with new model
-                if self.api_key.is_some() {
+                if self.runtime.api_key.is_some() {
                     let config = self.create_client_config();
-                    if let Some(key) = &self.api_key {
-                        self.ai_client = Some(AiClient::with_api_key(config, key.clone()));
+                    if let Some(key) = &self.runtime.api_key {
+                        self.runtime.ai_client = Some(AiClient::with_api_key(config, key.clone()));
                     }
                     self.init_dual_mind();
                 }
@@ -157,7 +157,7 @@ impl App {
                     }
                 }
 
-                self.ui.popup = Popup::None;
+                self.ui.ui.popup = Popup::None;
             }
         }
     }
@@ -165,27 +165,27 @@ impl App {
     /// Handle session list popup keys
     fn handle_session_list_key(&mut self, code: KeyCode) {
         match code {
-            KeyCode::Esc => self.ui.popup = Popup::None,
-            KeyCode::Up | KeyCode::Char('k') => self.popups.session.prev(),
-            KeyCode::Down | KeyCode::Char('j') => self.popups.session.next(),
+            KeyCode::Esc => self.ui.ui.popup = Popup::None,
+            KeyCode::Up | KeyCode::Char('k') => self.ui.popups.session.prev(),
+            KeyCode::Down | KeyCode::Char('j') => self.ui.popups.session.next(),
             KeyCode::Char('d') | KeyCode::Delete => {
-                if let Some(session) = self.popups.session.delete_selected() {
+                if let Some(session) = self.ui.popups.session.delete_selected() {
                     self.delete_session(&session.id);
                 }
             }
             KeyCode::Enter => {
-                if let Some(session) = self.popups.session.get_selected_session() {
+                if let Some(session) = self.ui.popups.session.get_selected_session() {
                     let session_id = session.id.clone();
                     self.save_block_ui_states();
                     if let Err(e) = self.load_session(&session_id) {
-                        self.chat.messages.push((
+                        self.runtime.chat.messages.push((
                             "system".to_string(),
                             format!("Failed to load session: {}", e),
                         ));
                     } else {
-                        self.pending_view_change = Some(crate::tui::app::View::Chat);
+                        self.ui.pending_view_change = Some(crate::tui::app::View::Chat);
                     }
-                    self.ui.popup = Popup::None;
+                    self.ui.ui.popup = Popup::None;
                 }
             }
             _ => {}

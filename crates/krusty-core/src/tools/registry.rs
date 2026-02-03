@@ -15,6 +15,7 @@ use crate::ai::types::AiTool;
 use crate::mcp::McpManager;
 use crate::process::ProcessRegistry;
 use crate::skills::SkillsManager;
+use crate::tools::git_identity::GitIdentity;
 
 /// Default tool execution timeout (2 minutes)
 const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(120);
@@ -84,6 +85,8 @@ pub struct ToolContext {
     pub build_progress_tx: Option<mpsc::UnboundedSender<AgentProgress>>,
     /// Current user-selected model (for non-Anthropic providers, subagents use this)
     pub current_model: Option<String>,
+    /// Git identity for commit attribution
+    pub git_identity: Option<GitIdentity>,
 }
 
 impl Default for ToolContext {
@@ -102,6 +105,7 @@ impl Default for ToolContext {
             explore_progress_tx: None,
             build_progress_tx: None,
             current_model: None,
+            git_identity: None,
         }
     }
 }
@@ -169,6 +173,12 @@ impl ToolContext {
     /// Set the current user-selected model (for non-Anthropic provider subagents)
     pub fn with_current_model(mut self, model: String) -> Self {
         self.current_model = Some(model);
+        self
+    }
+
+    /// Set git identity for commit attribution
+    pub fn with_git_identity(mut self, identity: GitIdentity) -> Self {
+        self.git_identity = Some(identity);
         self
     }
 

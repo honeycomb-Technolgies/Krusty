@@ -87,22 +87,36 @@ impl Tool for BashTool {
             }
         }
 
+        // Apply git identity for commit attribution
+        let effective_command = if let Some(ref identity) = ctx.git_identity {
+            identity.apply_to_command(&params.command)
+        } else {
+            params.command.clone()
+        };
+
         // Build command based on platform
         let mut cmd = if cfg!(windows) {
             let mut c = Command::new("cmd");
-            c.arg("/C").arg(&params.command);
+            c.arg("/C").arg(&effective_command);
             c
         } else {
             let mut c = Command::new("sh");
-            c.arg("-c").arg(&params.command);
+            c.arg("-c").arg(&effective_command);
             c
         };
+
+        // Apply git author env vars if in Author mode
+        if let Some(ref identity) = ctx.git_identity {
+            for (key, val) in identity.env_vars() {
+                cmd.env(key, val);
+            }
+        }
 
         cmd.current_dir(&ctx.working_dir);
 
         // Detect shell background syntax (command ending with &)
         // Treat this the same as run_in_background: true
-        let command_trimmed = params.command.trim();
+        let command_trimmed = effective_command.trim();
         let is_shell_backgrounded =
             command_trimmed.ends_with('&') && !command_trimmed.ends_with("&&"); // Don't match && (logical AND)
 
@@ -112,7 +126,7 @@ impl Tool for BashTool {
             let clean_command = if is_shell_backgrounded {
                 command_trimmed.trim_end_matches('&').trim().to_string()
             } else {
-                params.command.clone()
+                effective_command.clone()
             };
             // Use process registry if available for tracking
             if let Some(ref registry) = ctx.process_registry {

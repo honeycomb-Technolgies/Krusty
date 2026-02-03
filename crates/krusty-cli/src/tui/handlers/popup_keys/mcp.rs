@@ -11,16 +11,16 @@ impl App {
     pub fn handle_mcp_popup_key(&mut self, code: KeyCode) {
         match code {
             KeyCode::Esc => {
-                self.ui.popup = Popup::None;
+                self.ui.ui.popup = Popup::None;
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                self.popups.mcp.prev();
+                self.ui.popups.mcp.prev();
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                self.popups.mcp.next();
+                self.ui.popups.mcp.next();
             }
             KeyCode::Enter => {
-                self.popups.mcp.toggle_expand();
+                self.ui.popups.mcp.toggle_expand();
             }
             KeyCode::Char('c') => {
                 self.mcp_connect();
@@ -34,9 +34,10 @@ impl App {
 
     /// Connect to selected MCP server
     fn mcp_connect(&mut self) {
-        if let Some(server) = self.popups.mcp.get_selected() {
+        if let Some(server) = self.ui.popups.mcp.get_selected() {
             if server.server_type == "remote" {
-                self.popups
+                self.ui
+                    .popups
                     .mcp
                     .set_status("Remote servers handled by API".to_string());
                 return;
@@ -47,7 +48,8 @@ impl App {
             let registry = self.services.tool_registry.clone();
             let status_tx = self.services.mcp_status_tx.clone();
 
-            self.popups
+            self.ui
+                .popups
                 .mcp
                 .set_status(format!("Connecting to {}...", name));
 
@@ -80,9 +82,10 @@ impl App {
 
     /// Disconnect from selected MCP server
     fn mcp_disconnect(&mut self) {
-        if let Some(server) = self.popups.mcp.get_selected() {
+        if let Some(server) = self.ui.popups.mcp.get_selected() {
             if server.server_type == "remote" {
-                self.popups
+                self.ui
+                    .popups
                     .mcp
                     .set_status("Remote servers handled by API".to_string());
                 return;

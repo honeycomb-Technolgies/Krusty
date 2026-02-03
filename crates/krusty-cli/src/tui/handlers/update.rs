@@ -27,12 +27,12 @@ impl App {
     pub fn start_update_check(&mut self) {
         // Skip if we just applied an update this session — the in-memory VERSION
         // constant is stale and would trigger a redundant re-download loop
-        if self.just_updated {
+        if self.runtime.just_updated {
             return;
         }
 
         // Don't start if already checking
-        if self.channels.update_status.is_some() {
+        if self.runtime.channels.update_status.is_some() {
             return;
         }
 
@@ -43,7 +43,7 @@ impl App {
 
         // Create channel for status updates
         let (tx, rx) = mpsc::unbounded_channel();
-        self.channels.update_status = Some(rx);
+        self.runtime.channels.update_status = Some(rx);
 
         // Spawn background task to check for updates
         tokio::spawn(async move {
@@ -83,15 +83,16 @@ impl App {
 
     /// Poll update status channel and show toasts
     pub fn poll_update_status(&mut self) {
-        let statuses: Vec<UpdateStatus> = if let Some(ref mut rx) = self.channels.update_status {
-            let mut collected = Vec::new();
-            while let Ok(status) = rx.try_recv() {
-                collected.push(status);
-            }
-            collected
-        } else {
-            return;
-        };
+        let statuses: Vec<UpdateStatus> =
+            if let Some(ref mut rx) = self.runtime.channels.update_status {
+                let mut collected = Vec::new();
+                while let Ok(status) = rx.try_recv() {
+                    collected.push(status);
+                }
+                collected
+            } else {
+                return;
+            };
 
         let mut clear_channel = false;
 
@@ -102,7 +103,7 @@ impl App {
                 }
                 UpdateStatus::UpToDate => {
                     // Silent on startup - clean up any stale state
-                    self.update_status = None;
+                    self.runtime.update_status = None;
                     clear_channel = true;
                 }
                 UpdateStatus::Available(_) => {
@@ -123,15 +124,15 @@ impl App {
                     if !e.contains("timeout") && !e.contains("connection") {
                         tracing::warn!("Update check failed: {}", e);
                     }
-                    self.update_status = None;
+                    self.runtime.update_status = None;
                     clear_channel = true;
                 }
             }
-            self.update_status = Some(status);
+            self.runtime.update_status = Some(status);
         }
 
         if clear_channel {
-            self.channels.update_status = None;
+            self.runtime.channels.update_status = None;
         }
     }
 }

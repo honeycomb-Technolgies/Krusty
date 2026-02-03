@@ -45,7 +45,7 @@ impl App {
     pub fn process_stream_events(&mut self) -> bool {
         let mut processed_any = false;
 
-        while let Some(event) = self.streaming.poll() {
+        while let Some(event) = self.runtime.streaming.poll() {
             processed_any = true;
             self.handle_stream_event(event);
         }
@@ -144,7 +144,7 @@ impl App {
                 error_code,
             } => {
                 tracing::warn!("Server tool error: {} ({})", error_code, tool_use_id);
-                self.chat.messages.push((
+                self.runtime.chat.messages.push((
                     "system".to_string(),
                     format!("Web tool error: {}", error_code),
                 ));
@@ -165,16 +165,17 @@ impl App {
         const COMPLETION_KEYWORDS: &[&str] = &[
             "complete", "Complete", "done", "Done", "finished", "Finished", "✓", "✅",
         ];
-        let should_check_completion =
-            self.active_plan.is_some() && COMPLETION_KEYWORDS.iter().any(|kw| delta.contains(kw));
+        let should_check_completion = self.runtime.active_plan.is_some()
+            && COMPLETION_KEYWORDS.iter().any(|kw| delta.contains(kw));
 
         // Use cached streaming assistant index (O(1)) instead of O(n) scan per delta.
         // Cache is cleared at the start of each new streaming session (start_streaming),
         // so a None cache means this is the first text delta of a new turn — create a
         // fresh message block instead of appending to a previous turn's message.
-        let append_idx = if let Some(idx) = self.chat.streaming_assistant_idx {
-            if idx < self.chat.messages.len()
+        let append_idx = if let Some(idx) = self.runtime.chat.streaming_assistant_idx {
+            if idx < self.runtime.chat.messages.len()
                 && self
+                    .runtime
                     .chat
                     .messages
                     .get(idx)
@@ -191,21 +192,24 @@ impl App {
         };
 
         if let Some(idx) = append_idx {
-            self.chat.streaming_assistant_idx = Some(idx);
-            if let Some((_, content)) = self.chat.messages.get_mut(idx) {
+            self.runtime.chat.streaming_assistant_idx = Some(idx);
+            if let Some((_, content)) = self.runtime.chat.messages.get_mut(idx) {
                 content.push_str(&delta);
             }
         } else {
             // Create new assistant message at end and cache its index
-            let new_idx = self.chat.messages.len();
-            self.chat.messages.push(("assistant".to_string(), delta));
-            self.chat.streaming_assistant_idx = Some(new_idx);
+            let new_idx = self.runtime.chat.messages.len();
+            self.runtime
+                .chat
+                .messages
+                .push(("assistant".to_string(), delta));
+            self.runtime.chat.streaming_assistant_idx = Some(new_idx);
         }
 
         // Real-time task completion detection
         if should_check_completion {
             // Clone last message content to avoid borrow issues
-            let check_text = self.chat.messages.last().map(|(_, content)| {
+            let check_text = self.runtime.chat.messages.last().map(|(_, content)| {
                 if content.len() > 500 {
                     // Find a valid char boundary near the target position
                     // to avoid panicking on multi-byte UTF-8 characters
@@ -226,8 +230,8 @@ impl App {
             }
         }
 
-        if self.scroll_system.scroll.auto_scroll {
-            self.scroll_system.scroll.request_scroll_to_bottom();
+        if self.ui.scroll_system.scroll.auto_scroll {
+            self.ui.scroll_system.scroll.request_scroll_to_bottom();
         }
     }
 
@@ -238,9 +242,10 @@ impl App {
         citations: Vec<crate::ai::types::Citation>,
     ) {
         // Use cached streaming assistant index (O(1)) instead of O(n) scan per delta.
-        let append_idx = if let Some(idx) = self.chat.streaming_assistant_idx {
-            if idx < self.chat.messages.len()
+        let append_idx = if let Some(idx) = self.runtime.chat.streaming_assistant_idx {
+            if idx < self.runtime.chat.messages.len()
                 && self
+                    .runtime
                     .chat
                     .messages
                     .get(idx)
@@ -256,15 +261,18 @@ impl App {
         };
 
         if let Some(idx) = append_idx {
-            self.chat.streaming_assistant_idx = Some(idx);
-            if let Some((_, content)) = self.chat.messages.get_mut(idx) {
+            self.runtime.chat.streaming_assistant_idx = Some(idx);
+            if let Some((_, content)) = self.runtime.chat.messages.get_mut(idx) {
                 content.push_str(&delta);
             }
         } else {
             // Create new assistant message at end and cache its index
-            let new_idx = self.chat.messages.len();
-            self.chat.messages.push(("assistant".to_string(), delta));
-            self.chat.streaming_assistant_idx = Some(new_idx);
+            let new_idx = self.runtime.chat.messages.len();
+            self.runtime
+                .chat
+                .messages
+                .push(("assistant".to_string(), delta));
+            self.runtime.chat.streaming_assistant_idx = Some(new_idx);
         }
 
         if !citations.is_empty() {
@@ -274,8 +282,8 @@ impl App {
             }
         }
 
-        if self.scroll_system.scroll.auto_scroll {
-            self.scroll_system.scroll.request_scroll_to_bottom();
+        if self.ui.scroll_system.scroll.auto_scroll {
+            self.ui.scroll_system.scroll.request_scroll_to_bottom();
         }
     }
 
@@ -290,24 +298,30 @@ impl App {
 
         // Create pending blocks for edit/write tools
         if name == "edit" {
-            self.blocks
+            self.runtime
+                .blocks
                 .edit
                 .push(crate::tui::blocks::EditBlock::new_pending(
                     "...".to_string(),
                 ));
-            if let Some(block) = self.blocks.edit.last_mut() {
-                block.set_diff_mode(self.blocks.diff_mode);
+            if let Some(block) = self.runtime.blocks.edit.last_mut() {
+                block.set_diff_mode(self.runtime.blocks.diff_mode);
             }
-            self.chat.messages.push(("edit".to_string(), String::new()));
+            self.runtime
+                .chat
+                .messages
+                .push(("edit".to_string(), String::new()));
         }
 
         if name == "write" {
-            self.blocks
+            self.runtime
+                .blocks
                 .write
                 .push(crate::tui::blocks::WriteBlock::new_pending(
                     "...".to_string(),
                 ));
-            self.chat
+            self.runtime
+                .chat
                 .messages
                 .push(("write".to_string(), String::new()));
         }
@@ -340,14 +354,16 @@ impl App {
                 | "set_dependency"     // Silent - updates plan sidebar
                 | "enter_plan_mode" // Silent - updates status bar
         ) {
-            self.chat
+            self.runtime
+                .chat
                 .messages
                 .push(("tool".to_string(), format!("Using tool: {} ...", name)));
         }
 
         // Special loading message for AskUserQuestion
         if name == "AskUserQuestion" {
-            self.chat
+            self.runtime
+                .chat
                 .messages
                 .push(("tool".to_string(), "Preparing questions...".to_string()));
         }
@@ -363,24 +379,26 @@ impl App {
         self.complete_streaming_blocks();
 
         // Create a new ThinkingBlock
-        self.blocks
+        self.runtime
+            .blocks
             .thinking
             .push(crate::tui::blocks::ThinkingBlock::new());
-        self.chat
+        self.runtime
+            .chat
             .messages
             .push(("thinking".to_string(), String::new()));
     }
 
     /// Handle thinking delta event
     fn handle_thinking_delta(&mut self, thinking: String) {
-        if let Some(block) = self.blocks.thinking.last_mut() {
+        if let Some(block) = self.runtime.blocks.thinking.last_mut() {
             block.append(&thinking);
         }
     }
 
     /// Handle thinking complete event
     fn handle_thinking_complete(&mut self, signature: String) {
-        if let Some(block) = self.blocks.thinking.last_mut() {
+        if let Some(block) = self.runtime.blocks.thinking.last_mut() {
             block.set_signature(signature.clone());
             block.complete();
         }
@@ -394,19 +412,22 @@ impl App {
     /// Handle stream finished event (API done sending)
     fn handle_stream_finished(&mut self, reason: crate::ai::types::FinishReason) {
         let turn_duration = self
+            .runtime
             .agent_state
             .turn_duration()
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
 
-        self.event_bus.emit(AgentEvent::StreamEnd { reason });
-        self.event_bus.emit(AgentEvent::TurnComplete {
-            turn: self.agent_state.current_turn,
+        self.runtime
+            .event_bus
+            .emit(AgentEvent::StreamEnd { reason });
+        self.runtime.event_bus.emit(AgentEvent::TurnComplete {
+            turn: self.runtime.agent_state.current_turn,
             duration_ms: turn_duration,
             tokens: crate::ai::types::Usage {
                 prompt_tokens: 0,
                 completion_tokens: 0,
-                total_tokens: self.context_tokens_used,
+                total_tokens: self.runtime.context_tokens_used,
                 cache_creation_input_tokens: 0,
                 cache_read_input_tokens: 0,
             },
@@ -416,6 +437,7 @@ impl App {
     /// Handle stream complete event (channel closed)
     fn handle_stream_complete(&mut self, final_text: String) {
         let turn_duration = self
+            .runtime
             .agent_state
             .turn_duration()
             .map(|d| d.as_millis() as u64)
@@ -424,31 +446,31 @@ impl App {
         tracing::info!(
             "StreamEvent::Complete - final_text_len={}, phase={}",
             final_text.len(),
-            self.streaming.phase_name()
+            self.runtime.streaming.phase_name()
         );
 
-        self.event_bus.emit(AgentEvent::TurnComplete {
-            turn: self.agent_state.current_turn,
+        self.runtime.event_bus.emit(AgentEvent::TurnComplete {
+            turn: self.runtime.agent_state.current_turn,
             duration_ms: turn_duration,
             tokens: crate::ai::types::Usage {
                 prompt_tokens: 0,
                 completion_tokens: 0,
-                total_tokens: self.context_tokens_used,
+                total_tokens: self.runtime.context_tokens_used,
                 cache_creation_input_tokens: 0,
                 cache_read_input_tokens: 0,
             },
         });
 
         // Check for plan structure in AI response when in plan mode
-        if self.ui.work_mode == WorkMode::Plan && !final_text.is_empty() {
+        if self.ui.ui.work_mode == WorkMode::Plan && !final_text.is_empty() {
             self.try_detect_and_save_plan(&final_text);
         }
 
         // Check for task completion mentions (works in both modes if plan is active)
         // Include thinking block content since models often mention completions there
-        if self.active_plan.is_some() {
+        if self.runtime.active_plan.is_some() {
             let mut check_text = final_text.clone();
-            if let Some(thinking_text) = self.streaming.thinking_text() {
+            if let Some(thinking_text) = self.runtime.streaming.thinking_text() {
                 tracing::debug!(
                     "Appending {} chars of thinking content for completion check",
                     thinking_text.len()
@@ -476,23 +498,23 @@ impl App {
         }
 
         // If no tools to execute, build and save the assistant message now
-        if !self.streaming.is_ready_for_tools() {
+        if !self.runtime.streaming.is_ready_for_tools() {
             self.stop_streaming();
 
             // Build and save assistant message using StreamingManager
-            if let Some(assistant_msg) = self.streaming.build_assistant_message() {
+            if let Some(assistant_msg) = self.runtime.streaming.build_assistant_message() {
                 tracing::info!(
                     "SAVING assistant message with {} content blocks (no tools)",
                     assistant_msg.content.len()
                 );
-                self.chat.conversation.push(assistant_msg.clone());
+                self.runtime.chat.conversation.push(assistant_msg.clone());
                 self.save_model_message(&assistant_msg);
             } else {
                 // Check if we need a filler message after tool_result
                 self.maybe_add_filler_message();
             }
 
-            self.streaming.reset();
+            self.runtime.streaming.reset();
         }
         // If ready for tools, the tool execution logic will handle it
     }
@@ -513,10 +535,10 @@ impl App {
         );
 
         // Get working directory for the plan
-        let working_dir = self.working_dir.to_string_lossy().into_owned();
-        let session_id = self.current_session_id.clone();
+        let working_dir = self.runtime.working_dir.to_string_lossy().into_owned();
+        let session_id = self.runtime.current_session_id.clone();
 
-        if let Some(ref mut active_plan) = self.active_plan {
+        if let Some(ref mut active_plan) = self.runtime.active_plan {
             // Merge into existing plan
             active_plan.merge_from(&parsed_plan);
             tracing::info!(
@@ -561,13 +583,14 @@ impl App {
                         let task_count = new_plan.total_tasks();
 
                         self.set_plan(new_plan);
-                        self.ui.work_mode = WorkMode::Plan;
-                        if !self.plan_sidebar.visible {
-                            self.plan_sidebar.toggle();
+                        self.ui.ui.work_mode = WorkMode::Plan;
+                        if !self.ui.plan_sidebar.visible {
+                            self.ui.plan_sidebar.toggle();
                         }
 
                         // Show decision prompt for plan confirmation
-                        self.decision_prompt
+                        self.ui
+                            .decision_prompt
                             .show_plan_confirm(&plan_title, task_count);
                     }
                 }
@@ -593,7 +616,7 @@ impl App {
             return;
         }
 
-        let active_plan = match self.active_plan.as_mut() {
+        let active_plan = match self.runtime.active_plan.as_mut() {
             Some(plan) => plan,
             None => return,
         };
@@ -636,7 +659,7 @@ impl App {
 
                 // Show visible feedback to user
                 let task_list = updated_tasks.join(", ");
-                self.chat.messages.push((
+                self.runtime.chat.messages.push((
                     "system".to_string(),
                     format!("✓ Task {} complete ({}/{})", task_list, completed, total),
                 ));
@@ -647,7 +670,7 @@ impl App {
                         "Plan '{}' completed - starting graceful disengage",
                         plan_title
                     );
-                    self.chat.messages.push((
+                    self.runtime.chat.messages.push((
                         "system".to_string(),
                         format!(
                             "🎉 Plan '{}' complete! All {} tasks finished.",
@@ -656,7 +679,7 @@ impl App {
                     ));
 
                     // Start graceful collapse - plan clears when animation completes
-                    self.plan_sidebar.start_collapse();
+                    self.ui.plan_sidebar.start_collapse();
                 }
             }
         }
@@ -672,7 +695,7 @@ impl App {
             return;
         }
 
-        let active_plan = match self.active_plan.as_mut() {
+        let active_plan = match self.runtime.active_plan.as_mut() {
             Some(plan) => plan,
             None => return,
         };
@@ -707,21 +730,21 @@ impl App {
 
             // Show inline feedback
             let task_list = updated_tasks.join(", ");
-            self.chat.messages.push((
+            self.runtime.chat.messages.push((
                 "system".to_string(),
                 format!("✓ Task {} complete ({}/{})", task_list, completed, total),
             ));
 
             if plan_complete {
                 tracing::info!("Plan '{}' completed (real-time detection)", plan_title);
-                self.chat.messages.push((
+                self.runtime.chat.messages.push((
                     "system".to_string(),
                     format!(
                         "🎉 Plan '{}' complete! All {} tasks finished.",
                         plan_title, total
                     ),
                 ));
-                self.plan_sidebar.start_collapse();
+                self.ui.plan_sidebar.start_collapse();
             }
         }
     }
@@ -735,7 +758,7 @@ impl App {
             || RE_STOPPED.is_match(response_text)
             || RE_ACKNOWLEDGED.is_match(response_text)
         {
-            if let Some(ref mut plan) = self.active_plan {
+            if let Some(ref mut plan) = self.runtime.active_plan {
                 plan.status = crate::plan::PlanStatus::Abandoned;
                 let title = plan.title.clone();
                 let file_path = plan
@@ -756,7 +779,7 @@ impl App {
                 } else {
                     format!("Plan '{}' abandoned. Saved at: {}", title, file_path)
                 };
-                self.chat.messages.push(("system".to_string(), msg));
+                self.runtime.chat.messages.push(("system".to_string(), msg));
                 self.clear_plan();
                 return true;
             }
@@ -767,18 +790,20 @@ impl App {
 
     /// Handle stream error event
     fn handle_stream_error(&mut self, error: String) {
-        self.event_bus.emit(AgentEvent::StreamError {
+        self.runtime.event_bus.emit(AgentEvent::StreamError {
             error: error.clone(),
         });
 
         self.stop_streaming();
-        self.agent_state.interrupt();
-        self.chat
+        self.runtime.agent_state.interrupt();
+        self.runtime
+            .chat
             .messages
             .push(("system".to_string(), format!("Error: {}", error)));
 
         // If last message was a tool_result, add error assistant message
         let needs_assistant = self
+            .runtime
             .chat
             .conversation
             .last()
@@ -799,11 +824,11 @@ impl App {
                     text: format!("[Error: {}]", error),
                 }],
             };
-            self.chat.conversation.push(assistant_msg.clone());
+            self.runtime.chat.conversation.push(assistant_msg.clone());
             self.save_model_message(&assistant_msg);
         }
 
-        self.streaming.reset();
+        self.runtime.streaming.reset();
     }
 
     // =========================================================================
@@ -818,7 +843,7 @@ impl App {
         cache_read_tokens: usize,
         cache_created_tokens: usize,
     ) {
-        self.context_tokens_used = prompt_tokens + completion_tokens;
+        self.runtime.context_tokens_used = prompt_tokens + completion_tokens;
         if cache_read_tokens > 0 || cache_created_tokens > 0 {
             tracing::info!(
                 "Cache: read={} created={} total_input={}",
@@ -863,8 +888,9 @@ impl App {
         // Query will be empty initially - we don't have it until results come back
         if name == "web_search" {
             let block = WebSearchBlock::new(tool_use_id, String::new());
-            self.blocks.web_search.push(block);
-            self.chat
+            self.runtime.blocks.web_search.push(block);
+            self.runtime
+                .chat
                 .messages
                 .push(("web_search".to_string(), String::new()));
         }
@@ -885,6 +911,7 @@ impl App {
 
         // Find matching WebSearchBlock and update it
         if let Some(block) = self
+            .runtime
             .blocks
             .web_search
             .iter_mut()
@@ -902,7 +929,8 @@ impl App {
     ) {
         tracing::info!("Web fetch completed: {} ({})", content.url, tool_use_id);
         let title = content.title.as_deref().unwrap_or("page");
-        self.chat
+        self.runtime
+            .chat
             .messages
             .push(("system".to_string(), format!("Fetched: {}", title)));
     }
@@ -913,28 +941,28 @@ impl App {
 
     /// Mark all streaming blocks as complete
     fn complete_streaming_blocks(&mut self) {
-        for rb in &mut self.blocks.read {
+        for rb in &mut self.runtime.blocks.read {
             if rb.is_streaming() {
                 rb.complete();
             }
         }
-        for eb in &mut self.blocks.edit {
+        for eb in &mut self.runtime.blocks.edit {
             if eb.is_streaming() {
                 eb.complete();
             }
         }
-        for wb in &mut self.blocks.write {
+        for wb in &mut self.runtime.blocks.write {
             if wb.is_streaming() {
                 wb.complete();
             }
         }
-        for ws in &mut self.blocks.web_search {
+        for ws in &mut self.runtime.blocks.web_search {
             if ws.is_streaming() {
                 ws.complete();
             }
         }
         // NOTE: ExploreBlocks are NOT completed here - they wait for tool results
-        // for eb in &mut self.blocks.explore {
+        // for eb in &mut self.runtime.blocks.explore {
         //     if eb.is_streaming() {
         //         eb.complete(String::new());
         //     }
@@ -946,6 +974,7 @@ impl App {
     /// They are NOT saved to database - the API client handles filler insertion dynamically.
     fn maybe_add_filler_message(&mut self) {
         let needs_assistant_follow_up = self
+            .runtime
             .chat
             .conversation
             .last()
@@ -969,30 +998,34 @@ impl App {
                 }],
             };
             // Only push to conversation for API alternation - do NOT save to database
-            self.chat.conversation.push(assistant_msg);
+            self.runtime.chat.conversation.push(assistant_msg);
         }
     }
 
     /// Check and execute pending tools when ready
     pub fn check_and_execute_tools(&mut self) {
         // Don't execute tools while decision prompt is visible (waiting for user input)
-        if self.decision_prompt.visible {
+        if self.ui.decision_prompt.visible {
             return;
         }
 
-        if self.streaming.is_ready_for_tools() && self.channels.tool_results.is_none() {
+        if self.runtime.streaming.is_ready_for_tools()
+            && self.runtime.channels.tool_results.is_none()
+        {
             // Build and save assistant message BEFORE executing tools
-            if let Some(assistant_msg) = self.streaming.build_assistant_message() {
+            if let Some(assistant_msg) = self.runtime.streaming.build_assistant_message() {
                 tracing::info!(
                     "SAVING assistant message with {} content blocks BEFORE tool execution",
                     assistant_msg.content.len()
                 );
-                self.chat.conversation.push(assistant_msg.clone());
+                self.runtime.chat.conversation.push(assistant_msg.clone());
                 self.save_model_message(&assistant_msg);
             }
 
             // Take tool calls from StreamingManager (transitions to Complete state)
-            if let Some((_text, _thinking_blocks, tool_calls)) = self.streaming.take_tool_calls() {
+            if let Some((_text, _thinking_blocks, tool_calls)) =
+                self.runtime.streaming.take_tool_calls()
+            {
                 // Spawn tool execution as background task
                 self.spawn_tool_execution(tool_calls);
             }

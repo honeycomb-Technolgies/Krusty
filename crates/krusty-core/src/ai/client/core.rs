@@ -59,6 +59,7 @@ Use specialized tools over shell commands:
 - Never force push, never skip hooks
 - Commit messages explain WHY, not WHAT
 - Each commit leaves codebase working
+- Commits include attribution trailer (configurable via preferences)
 
 ## Quality Bar
 
