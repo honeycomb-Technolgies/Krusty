@@ -2,9 +2,9 @@
 set -e
 
 # Krusty installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/BurgessTG/Krusty/main/install.sh | sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/honeycomb-Technologies/Krusty/main/install.sh | sh
 
-REPO="BurgessTG/Krusty"
+REPO="honeycomb-Technologies/Krusty"
 BINARY="krusty"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 

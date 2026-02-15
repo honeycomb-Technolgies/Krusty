@@ -5,114 +5,66 @@
 ▐█.█▌▐█•█▌▐█▄█▌▐█▄▪▐█ ▐█▌· ▐█▀·.
 ·▀  ▀.▀  ▀ ▀▀▀  ▀▀▀▀  ▀▀▀   ▀ •
 ```
-The Fun AI coding assistant. 
+The Fun AI coding assistant.
+
+## Overview
+
+Krusty is a single binary that bundles a terminal TUI, a web server with an embedded PWA frontend, and editor integration via ACP — all in one.
 
 ## Repository Layout
 
-- `crates/krusty-cli` - terminal UI client
-- `crates/krusty-core` - shared AI/tools/storage/runtime
-- `crates/krusty-server` - self-hosted API server for app clients
-- `apps/pwa` - PWA app boundary
-- `apps/desktop` - desktop wrapper boundary
-- `apps/marketing` - marketing-site boundary
-
-## Self-Host Split Quickstart
-
-This repo is now split into independent runtime targets:
-
-1. `krusty-server` for API + agent/tool runtime
-2. `apps/pwa/app` for mobile/desktop browser app (installable PWA)
-3. `apps/desktop/shell` for native desktop wrapper around the same PWA surface
-4. `apps/marketing/site` for static website content only
-
-No Kubernetes setup is required in the current self-host phase.
-
-### 1) Start server
-
-```bash
-cargo run -p krusty-server
+```
+crates/
+  krusty-cli/     Terminal UI + CLI entry point
+  krusty-core/    Shared AI, tools, storage, runtime
+  krusty-server/  API server (library, embedded in CLI)
+apps/
+  pwa/            SvelteKit PWA frontend (embedded at compile time)
+  desktop/        Tauri desktop wrapper
 ```
 
-### 2) Start PWA app
+## Quick Start
+
+### Install
 
 ```bash
-cd apps/pwa/app
-npm ci
-npm run dev
+curl -fsSL https://raw.githubusercontent.com/honeycomb-Technologies/Krusty/main/install.sh | sh
 ```
 
-Optional API override:
+Or from source:
 
 ```bash
-VITE_API_BASE=http://localhost:3000/api npm run dev
-```
-
-### 3) Run desktop wrapper (optional)
-
-```bash
-cd apps/desktop/shell
-npm ci
-npm run dev
-```
-
-### 4) Run marketing site (optional)
-
-```bash
-cd apps/marketing/site
-python3 -m http.server 8080
-```
-
-## Installation
-
-### Quick Install (Linux/macOS)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/BurgessTG/Krusty/main/install.sh | sh
-```
-
-### Homebrew (macOS/Linux)
-
-```bash
-brew tap BurgessTG/tap
-brew install krusty
-```
-
-### From Source
-
-```bash
-git clone https://github.com/BurgessTG/Krusty.git
+git clone https://github.com/honeycomb-Technologies/Krusty.git
 cd Krusty
 cargo build --release
 ./target/release/krusty
 ```
 
-Run the self-host server:
+### Commands
 
-```bash
-cargo run -p krusty-server
-```
+| Command | Description |
+|---------|-------------|
+| `krusty` | Launch the interactive TUI |
+| `krusty serve` | Start the web server with embedded PWA (default port 3000) |
+| `krusty serve --port 8080` | Start on a custom port |
+| `krusty acp` | Run as ACP server for editor integration |
 
-### GitHub Releases
-
-Download prebuilt binaries from [Releases](https://github.com/BurgessTG/Krusty/releases):
-- Linux (x86_64, ARM64)
-- macOS (Intel, Apple Silicon)
-- Windows (x86_64)
+`krusty serve` bundles everything — API server, agent runtime, and PWA frontend — into a single process. On first run it walks you through provider and API key setup. If Tailscale is installed, it auto-configures remote HTTPS access.
 
 ## Supported Providers
 
-Krusty supports multiple AI providers. Add API keys via `/auth` in the TUI.
+Configure providers via `/auth` in the TUI or on first run of `krusty serve`.
 
 | Provider | Models |
 |----------|--------|
-| **MiniMax** | MiniMax M2.5|
+| **MiniMax** | MiniMax M2.5 |
 | **OpenAI** | GPT 5.3 Codex |
 | **OpenRouter** | 100+ Frontier and OSS models |
-| **Z.ai** | GLM-5|
+| **Z.ai** | GLM-5 |
 
 Switch providers and models anytime with `/model` or `Ctrl+M`.
 
-## Controls
+## TUI Controls
 
 ### Keyboard Shortcuts
 
@@ -124,11 +76,10 @@ Switch providers and models anytime with `/model` or `Ctrl+M`.
 | `Ctrl+L` | Clear screen |
 | `Ctrl+M` | Open model selector |
 | `Ctrl+N` | New session |
-| `Ctrl+P` | View background processes |
 | `Ctrl+K` | Open command palette |
 | `Ctrl+G` | Toggle BUILD/PLAN mode |
 | `Ctrl+T` | Toggle plan sidebar |
-| `Ctrl+P` | Open plugin window |
+| `Ctrl+P` | View background processes |
 | `Ctrl+Q` | Quit application |
 | `Ctrl+V` | Paste text or image |
 | `Ctrl+W` | Delete word |
@@ -171,18 +122,9 @@ Switch providers and models anytime with `/model` or `Ctrl+M`.
 Configure multiple providers and switch between them seamlessly. Your conversation continues even when switching models.
 
 ### Language Server Protocol (LSP)
-Install language servers from Zed's extension marketplace for 100+ languages:
-
-```bash
-krusty lsp install rust
-krusty lsp install python
-krusty lsp install typescript
-```
-
-Or use `/lsp` in the TUI to browse and install interactively.
+Install language servers from Zed's extension marketplace for 100+ languages. Use `/lsp` in the TUI to browse and install interactively.
 
 ### Tool Execution
-Krusty can execute tools on your behalf:
 - **Read/Write/Edit** - File operations with syntax highlighting
 - **Bash** - Run shell commands with streaming output
 - **Glob/Grep** - Search files and content (ripgrep-powered)
@@ -191,14 +133,14 @@ Krusty can execute tools on your behalf:
 - **Web Search/Fetch** - Search and fetch web content (Anthropic models)
 
 ### Plan/Build Mode
-Toggle between structured planning and execution modes with `Ctrl+B`:
+Toggle between structured planning and execution modes with `Ctrl+G`:
 - **Plan Mode** - Restricts write operations, focuses on task planning with phases and tasks
 - **Build Mode** - Enables all tools for execution of approved plans
 
 Plans are stored as markdown in `~/.krusty/plans/` and can be managed with `/plan`.
 
 ### Terminal Integration
-Open an interactive terminal session with `/terminal` (or `/term`, `/shell`) for direct shell access within the TUI.
+Open an interactive terminal session with `/terminal` for direct shell access within the TUI.
 
 ### Context Compression
 Use `/pinch` to compress long conversations into a new session with summarized context, preserving essential information while reducing token usage.
@@ -210,7 +152,7 @@ Modular instruction sets for domain-specific tasks. Add custom skills in `~/.kru
 All conversations are saved locally in SQLite. Resume any session with `/load` (filtered by current directory).
 
 ### Themes
-31 built-in themes including krusty (default), tokyo_night, dracula, catppuccin_mocha, gruvbox_dark, nord, one_dark, solarized_dark, synthwave_84, monokai, rosepine, and more. Switch with `/theme` or:
+31 built-in themes including krusty (default), tokyo_night, dracula, catppuccin_mocha, gruvbox_dark, nord, one_dark, solarized_dark, synthwave_84, monokai, rosepine, and more. Switch with `/theme`.
 
 ### Auto-Updates
 Krusty checks for updates and can self-update.
@@ -224,19 +166,37 @@ Data stored in `~/.krusty/`:
 ├── credentials.json  # API keys (encrypted)
 ├── preferences.json  # Settings (theme, model, recent models)
 ├── extensions/       # Zed WASM LSP extensions
-├── bin/             # Auto-downloaded LSP binaries
-├── skills/          # Custom global skills
-├── plans/           # Markdown plan files
-├── tokens/          # LSP and MCP authentication
-├── mcp_keys.json    # MCP server credentials
-└── logs/            # Application logs
+├── bin/              # Auto-downloaded LSP binaries
+├── skills/           # Custom global skills
+├── plans/            # Markdown plan files
+├── tokens/           # LSP and MCP authentication
+├── mcp_keys.json     # MCP server credentials
+└── logs/             # Application logs
 ```
 
 ### Project Configuration
 
-Add a `KRAB.md`, or `CLAUDE.md` file to your project root for project-specific instructions that are automatically included in context. Generate one with `/init`.
+Add a `KRAB.md` or `CLAUDE.md` file to your project root for project-specific instructions that are automatically included in context. Generate one with `/init`.
 
 Project-level skills in `.krusty/skills/` override global skills.
+
+## Development
+
+```bash
+cargo fmt --all
+cargo clippy --workspace -- -D warnings
+cargo build --workspace
+cargo test --workspace
+```
+
+PWA frontend (requires [bun](https://bun.sh)):
+
+```bash
+cd apps/pwa/app
+bun install
+bun run check
+bun run build
+```
 
 ## License
 
