@@ -32,8 +32,8 @@
 	let error = $state<string | null>(null);
 	let searchQuery = $state('');
 	let selectedIndex = 0; // Not reactive - managed via DOM
-	let searchInput: HTMLInputElement;
-	let listContainer: HTMLDivElement;
+	let searchInput = $state<HTMLInputElement>(undefined!);
+	let listContainer = $state<HTMLDivElement>(undefined!);
 	let scrollTimeout: ReturnType<typeof setTimeout>;
 
 	const RECENT_KEY = 'krusty:recent_models';
@@ -219,6 +219,7 @@
 	<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
 	<div
 		class="fixed inset-0 z-50 bg-black/60"
+		role="presentation"
 		onclick={onClose}
 	></div>
 

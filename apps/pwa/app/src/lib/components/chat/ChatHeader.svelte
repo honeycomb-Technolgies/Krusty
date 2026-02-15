@@ -34,7 +34,7 @@
 	const dirCache = new Map<string, DirCache>();
 
 	// Scroll optimization
-	let dirListContainer: HTMLDivElement;
+	let dirListContainer = $state<HTMLDivElement>(undefined!);
 	let dirScrollTimeout: ReturnType<typeof setTimeout>;
 
 	function handleDirScroll() {
@@ -199,7 +199,7 @@
 
 	let isEditingTitle = $state(false);
 	let editedTitle = $state('');
-	let titleInput: HTMLInputElement;
+	let titleInput = $state<HTMLInputElement>(undefined!);
 
 	function startEditTitle() {
 		editedTitle = $sessionStore.title;
