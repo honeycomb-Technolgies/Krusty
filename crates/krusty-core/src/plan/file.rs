@@ -32,15 +32,16 @@ use std::path::PathBuf;
 // ============================================================================
 
 /// Pattern 1: "- [x] Task X.Y" or "- [X] Task X.Y" (checkbox format)
-static RE_CHECKBOX: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)- \[[xX]\] (?:\*\*)?(?:Task\s*)?(\d+\.\d+)").unwrap());
+static RE_CHECKBOX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)- \[[xX]\] (?:\*\*)?(?:Task\s*)?(\d+\.\d+)").expect("RE_CHECKBOX: valid regex")
+});
 
 /// Pattern 2: "Task X.Y complete/done/finished" variants
 static RE_TASK_FIRST: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
         r"(?i)(?:Task\s*)?(\d+\.\d+)\s+(?:is\s+)?(?:now\s+)?(?:complete|completed|done|finished)",
     )
-    .unwrap()
+    .expect("valid regex pattern")
 });
 
 /// Pattern 3: "completed/finished Task X.Y" or "I've completed task 1.1"
@@ -48,49 +49,52 @@ static RE_VERB_FIRST: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
         r"(?i)(?:I'?(?:ve)?\s+)?(?:completed|finished|done(?: with)?)\s+(?:Task\s*)?(\d+\.\d+)",
     )
-    .unwrap()
+    .expect("valid regex pattern")
 });
 
 /// Pattern 4: "✓ Task X.Y" or "✅ Task X.Y"
 static RE_CHECKMARK: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"[✓✅]\s*(?:Task\s*)?(\d+\.\d+)").unwrap());
+    Lazy::new(|| Regex::new(r"[✓✅]\s*(?:Task\s*)?(\d+\.\d+)").expect("valid regex pattern"));
 
 /// Pattern 5: "completing task X.Y" or "marked X.Y as complete"
 static RE_COMPLETING: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
         r"(?i)(?:completing|marking)\s+(?:Task\s*)?(\d+\.\d+)(?:\s+(?:as\s+)?(?:complete|done))?",
     )
-    .unwrap()
+    .expect("valid regex pattern")
 });
 
 /// Pattern 6: "have completed task X.Y" or "just completed task X.Y"
 static RE_HAVE_COMPLETED: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)(?:have|just|now)\s+(?:completed|finished|done)\s+(?:Task\s*)?(\d+\.\d+)")
-        .unwrap()
+        .expect("valid regex pattern")
 });
 
 /// Pattern 7: "that completes task X.Y" or "this completes task X.Y"
 static RE_THAT_COMPLETES: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)(?:that|this|which)\s+completes\s+(?:Task\s*)?(\d+\.\d+)").unwrap()
+    Regex::new(r"(?i)(?:that|this|which)\s+completes\s+(?:Task\s*)?(\d+\.\d+)")
+        .expect("valid regex pattern")
 });
 
 /// Pattern 8: "implemented task X.Y"
-static RE_IMPLEMENTED: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)implemented\s+(?:Task\s*)?(\d+\.\d+)").unwrap());
+static RE_IMPLEMENTED: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)implemented\s+(?:Task\s*)?(\d+\.\d+)").expect("valid regex pattern")
+});
 
 /// Pattern 9: "Task X.Y ✓" (checkmark after)
 static RE_CHECKMARK_AFTER: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)(?:Task\s*)?(\d+\.\d+)\s*[✓✅]").unwrap());
+    Lazy::new(|| Regex::new(r"(?i)(?:Task\s*)?(\d+\.\d+)\s*[✓✅]").expect("valid regex pattern"));
 
 /// Pattern 10: "Task X.Y: ... DONE" — task ID followed by any text, then DONE/done at end of line
 static RE_TASK_TRAILING_DONE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?im)(?:Task\s*)?(\d+\.\d+)[:\s].*?\b(?:DONE|done|COMPLETE|complete)\s*$").unwrap()
+    Regex::new(r"(?im)(?:Task\s*)?(\d+\.\d+)[:\s].*?\b(?:DONE|done|COMPLETE|complete)\s*$")
+        .expect("valid regex pattern")
 });
 
 /// Pattern 11: "Task X.Y: ... — DONE" — task ID with em-dash/en-dash/hyphen before status
 static RE_TASK_DASH_STATUS: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?im)(?:Task\s*)?(\d+\.\d+)[:\s].*?[—–-]\s*(?:DONE|done|complete|completed)\s*$")
-        .unwrap()
+        .expect("valid regex pattern")
 });
 
 /// All task completion patterns for efficient iteration
@@ -352,7 +356,7 @@ impl PlanPhase {
         let task_num = self.tasks.len() + 1;
         let id = format!("{}.{}", self.number, task_num);
         self.tasks.push(PlanTask::new(id, description));
-        self.tasks.last().unwrap()
+        self.tasks.last().expect("valid regex pattern")
     }
 
     /// Count completed tasks
@@ -467,7 +471,7 @@ impl PlanFile {
     pub fn add_phase(&mut self, name: impl Into<String>) -> &mut PlanPhase {
         let number = self.phases.len() + 1;
         self.phases.push(PlanPhase::new(number, name));
-        self.phases.last_mut().unwrap()
+        self.phases.last_mut().expect("valid regex pattern")
     }
 
     /// Find a task by ID (e.g., "1.2")
@@ -1228,7 +1232,7 @@ impl PlanFile {
                     p
                 } else {
                     current_phase = Some(PlanPhase::new(1, "Tasks"));
-                    current_phase.as_mut().unwrap()
+                    current_phase.as_mut().expect("valid regex pattern")
                 };
 
                 // Parse "Task X.Y: Description" or "**Task X.Y**: Description" or just description
@@ -1428,9 +1432,18 @@ mod tests {
             phase.add_task("Task one");
         }
 
-        assert!(!plan.find_task("1.1").unwrap().completed);
+        assert!(
+            !plan
+                .find_task("1.1")
+                .expect("valid regex pattern")
+                .completed
+        );
         assert!(plan.check_task("1.1"));
-        assert!(plan.find_task("1.1").unwrap().completed);
+        assert!(
+            plan.find_task("1.1")
+                .expect("valid regex pattern")
+                .completed
+        );
     }
 
     #[test]
@@ -1464,15 +1477,25 @@ mod tests {
         plan.notes = Some("Some notes here".to_string());
 
         let markdown = plan.to_markdown();
-        let parsed = PlanFile::from_markdown(&markdown).unwrap();
+        let parsed = PlanFile::from_markdown(&markdown).expect("valid regex pattern");
 
         assert_eq!(parsed.title, plan.title);
         assert_eq!(parsed.session_id, plan.session_id);
         assert_eq!(parsed.working_dir, plan.working_dir);
         assert_eq!(parsed.phases.len(), plan.phases.len());
         assert_eq!(parsed.phases[0].tasks.len(), 2);
-        assert!(parsed.find_task("1.1").unwrap().completed);
-        assert!(!parsed.find_task("1.2").unwrap().completed);
+        assert!(
+            parsed
+                .find_task("1.1")
+                .expect("valid regex pattern")
+                .completed
+        );
+        assert!(
+            !parsed
+                .find_task("1.2")
+                .expect("valid regex pattern")
+                .completed
+        );
         assert!(parsed.notes.is_some());
     }
 
@@ -1496,13 +1519,22 @@ I'll create a plan for implementing authentication.
 Let me know if you have questions!
 "#;
 
-        let plan = PlanFile::try_parse_from_response(response).unwrap();
+        let plan = PlanFile::try_parse_from_response(response).expect("valid regex pattern");
         assert_eq!(plan.title, "Authentication System");
         assert_eq!(plan.phases.len(), 2);
         assert_eq!(plan.phases[0].tasks.len(), 2);
         assert_eq!(plan.phases[1].tasks.len(), 2);
-        assert!(!plan.find_task("1.1").unwrap().completed);
-        assert!(plan.find_task("2.2").unwrap().completed);
+        assert!(
+            !plan
+                .find_task("1.1")
+                .expect("valid regex pattern")
+                .completed
+        );
+        assert!(
+            plan.find_task("2.2")
+                .expect("valid regex pattern")
+                .completed
+        );
     }
 
     #[test]
@@ -1517,7 +1549,7 @@ Let me know if you have questions!
 - [x] Done with prerequisites
 "#;
 
-        let plan = PlanFile::try_parse_from_response(response).unwrap();
+        let plan = PlanFile::try_parse_from_response(response).expect("valid regex pattern");
         assert_eq!(plan.title, "Quick Tasks");
         assert_eq!(plan.phases[0].tasks.len(), 3);
         assert_eq!(plan.phases[0].tasks[0].id, "1.1");
@@ -1553,7 +1585,12 @@ Let me know if you have questions!
         plan1.merge_from(&plan2);
 
         // Task 1.1 should now be complete
-        assert!(plan1.find_task("1.1").unwrap().completed);
+        assert!(
+            plan1
+                .find_task("1.1")
+                .expect("valid regex pattern")
+                .completed
+        );
         // Task 1.2 should still exist
         assert!(plan1.find_task("1.2").is_some());
     }
@@ -1609,7 +1646,7 @@ Let me know if you have questions!
         let result = PlanFile::from_markdown(markdown);
         // This should error because there's no "# Plan:" header
         // The try_parse_from_response requires both title and at least one task
-        assert!(result.is_err() || result.unwrap().phases.is_empty());
+        assert!(result.is_err() || result.expect("valid regex pattern").phases.is_empty());
     }
 
     #[test]
@@ -1618,7 +1655,7 @@ Let me know if you have questions!
         let result = PlanFile::from_markdown(markdown);
         // Should create plan with no phases
         assert!(result.is_ok());
-        let plan = result.unwrap();
+        let plan = result.expect("valid regex pattern");
         assert_eq!(plan.phases.len(), 0);
     }
 
@@ -1636,7 +1673,7 @@ Status: invalid_status_value
         let result = PlanFile::from_markdown(markdown);
         assert!(result.is_ok());
         // Should default to InProgress on invalid status
-        let plan = result.unwrap();
+        let plan = result.expect("valid regex pattern");
         assert_eq!(plan.status, PlanStatus::InProgress);
     }
 
@@ -1654,7 +1691,7 @@ Created: not-a-date
         let result = PlanFile::from_markdown(markdown);
         assert!(result.is_ok());
         // Should use current time on invalid date
-        let plan = result.unwrap();
+        let plan = result.expect("valid regex pattern");
         assert_ne!(plan.created_at, Utc::now());
     }
 
@@ -1669,7 +1706,7 @@ Created: not-a-date
 "#;
         let result = PlanFile::from_markdown(markdown);
         assert!(result.is_ok());
-        let plan = result.unwrap();
+        let plan = result.expect("valid regex pattern");
         // Should use phase count + 1 as fallback
         assert_eq!(plan.phases.len(), 1);
         assert_eq!(plan.phases[0].number, 1);
@@ -1684,7 +1721,7 @@ Created: not-a-date
 "#;
         let result = PlanFile::from_markdown(markdown);
         assert!(result.is_ok());
-        let plan = result.unwrap();
+        let plan = result.expect("valid regex pattern");
         // Tasks without phase should be ignored
         assert_eq!(plan.phases.len(), 0);
     }
@@ -1700,7 +1737,7 @@ Created: not-a-date
 "#;
         let result = PlanFile::from_markdown(markdown);
         assert!(result.is_ok());
-        let plan = result.unwrap();
+        let plan = result.expect("valid regex pattern");
         assert_eq!(plan.phases[0].tasks[0].id, "1.1");
         assert_eq!(plan.phases[0].tasks[0].description, "");
     }
@@ -1716,7 +1753,7 @@ Created: not-a-date
 "#;
         let result = PlanFile::from_markdown(markdown);
         assert!(result.is_ok());
-        let plan = result.unwrap();
+        let plan = result.expect("valid regex pattern");
         // Description should include everything after first colon
         assert_eq!(
             plan.phases[0].tasks[0].description,
@@ -1738,7 +1775,7 @@ Created: not-a-date
 "#;
         let result = PlanFile::from_markdown(markdown);
         assert!(result.is_ok());
-        let plan = result.unwrap();
+        let plan = result.expect("valid regex pattern");
         assert_eq!(plan.phases[0].tasks.len(), 4);
         assert_eq!(plan.phases[0].tasks[0].id, "1.1");
         assert_eq!(plan.phases[0].tasks[1].id, "1.2"); // Auto-generated
@@ -1758,7 +1795,7 @@ Created: not-a-date
 "#;
         let result = PlanFile::from_markdown(markdown);
         assert!(result.is_ok());
-        let plan = result.unwrap();
+        let plan = result.expect("valid regex pattern");
         assert_eq!(plan.phases[0].name, "");
     }
 
@@ -1778,9 +1815,13 @@ that span multiple lines.
 "#;
         let result = PlanFile::from_markdown(markdown);
         assert!(result.is_ok());
-        let plan = result.unwrap();
+        let plan = result.expect("valid regex pattern");
         assert!(plan.notes.is_some());
-        assert!(plan.notes.as_ref().unwrap().contains("important notes"));
+        assert!(plan
+            .notes
+            .as_ref()
+            .expect("valid regex pattern")
+            .contains("important notes"));
     }
 
     #[test]
@@ -1803,10 +1844,14 @@ Some notes here
 "#;
         let result = PlanFile::from_markdown(markdown);
         assert!(result.is_ok());
-        let plan = result.unwrap();
+        let plan = result.expect("valid regex pattern");
         // Phase 2 should be in notes, not parsed as a phase
         assert_eq!(plan.phases.len(), 1);
-        assert!(plan.notes.as_ref().unwrap().contains("## Phase 2"));
+        assert!(plan
+            .notes
+            .as_ref()
+            .expect("valid regex pattern")
+            .contains("## Phase 2"));
     }
 
     #[test]
@@ -1821,7 +1866,7 @@ Status: completed
 "#;
         let result = PlanFile::from_markdown(markdown);
         assert!(result.is_ok());
-        let plan = result.unwrap();
+        let plan = result.expect("valid regex pattern");
         assert_eq!(plan.title, "Test Plan");
         assert_eq!(plan.session_id, Some("abc123".to_string()));
         assert_eq!(plan.working_dir, Some("/tmp/test".to_string()));
@@ -1845,7 +1890,7 @@ Status: completed
         // Extra spaces in bracket should not match
         // Only [x] and [X] should match
         assert!(result.is_ok());
-        let _plan = result.unwrap();
+        let _plan = result.expect("valid regex pattern");
         // First one might not match if we're strict about spacing
         // Last two should match
     }
@@ -1880,7 +1925,7 @@ Status: {}
 
             let result = PlanFile::from_markdown(&markdown);
             assert!(result.is_ok());
-            let plan = result.unwrap();
+            let plan = result.expect("valid regex pattern");
             assert_eq!(
                 plan.status, expected,
                 "Status '{}' should parse to {:?}",
@@ -1902,7 +1947,7 @@ Status: {}
 "#;
         let result = PlanFile::from_markdown(markdown);
         assert!(result.is_ok());
-        let plan = result.unwrap();
+        let plan = result.expect("valid regex pattern");
         assert_eq!(plan.phases[0].tasks[0].id, "1.10");
         assert_eq!(plan.phases[0].tasks[1].id, "1.2");
     }
@@ -1965,7 +2010,12 @@ Status: {}
 
         // Both phases should exist in plan1
         assert_eq!(plan1.phases.len(), 2);
-        assert!(plan1.find_task("1.1").unwrap().completed);
+        assert!(
+            plan1
+                .find_task("1.1")
+                .expect("valid regex pattern")
+                .completed
+        );
     }
 
     #[test]

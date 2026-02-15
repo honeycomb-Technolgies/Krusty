@@ -432,6 +432,10 @@ impl App {
         let block_area = hit.area;
         let clip = hit.clip;
 
+        // Track if we handled something specific (scrollbar drag, button click) vs plain content click
+        let mut handled_specific = false;
+        let mut event_consumed = false;
+
         match hit.block_type {
             BlockType::Thinking => {
                 if let Some(block) = self.runtime.blocks.thinking.get_mut(idx) {
@@ -453,8 +457,11 @@ impl App {
                         );
                         self.ui.scroll_system.layout.dragging_scrollbar =
                             Some(DragTarget::Block(drag));
+                        handled_specific = true;
                     }
-                    block.handle_event(&event, block_area, clip);
+                    if let EventResult::Consumed = block.handle_event(&event, block_area, clip) {
+                        event_consumed = true;
+                    }
                 }
             }
             BlockType::ToolResult => {
@@ -473,8 +480,11 @@ impl App {
                         );
                         self.ui.scroll_system.layout.dragging_scrollbar =
                             Some(DragTarget::Block(drag));
+                        handled_specific = true;
                     }
-                    block.handle_event(&event, block_area, clip);
+                    if let EventResult::Consumed = block.handle_event(&event, block_area, clip) {
+                        event_consumed = true;
+                    }
                 }
             }
             BlockType::Read => {
@@ -497,8 +507,11 @@ impl App {
                         );
                         self.ui.scroll_system.layout.dragging_scrollbar =
                             Some(DragTarget::Block(drag));
+                        handled_specific = true;
                     }
-                    block.handle_event(&event, block_area, clip);
+                    if let EventResult::Consumed = block.handle_event(&event, block_area, clip) {
+                        event_consumed = true;
+                    }
                 }
             }
             BlockType::Edit => {
@@ -517,8 +530,12 @@ impl App {
                         );
                         self.ui.scroll_system.layout.dragging_scrollbar =
                             Some(DragTarget::Block(drag));
+                        handled_specific = true;
                     }
                     let result = block.handle_event(&event, block_area, clip);
+                    if let EventResult::Consumed = result {
+                        event_consumed = true;
+                    }
                     if let EventResult::Action(BlockEvent::ToggleDiffMode) = result {
                         self.runtime.blocks.diff_mode.toggle();
                         let new_mode = self.runtime.blocks.diff_mode;
@@ -546,9 +563,12 @@ impl App {
                             );
                             self.ui.scroll_system.layout.dragging_scrollbar =
                                 Some(DragTarget::Block(drag));
+                            handled_specific = true;
                         }
                     }
-                    block.handle_event(&event, block_area, clip);
+                    if let EventResult::Consumed = block.handle_event(&event, block_area, clip) {
+                        event_consumed = true;
+                    }
                 }
             }
             BlockType::WebSearch => {
@@ -568,9 +588,12 @@ impl App {
                             );
                             self.ui.scroll_system.layout.dragging_scrollbar =
                                 Some(DragTarget::Block(drag));
+                            handled_specific = true;
                         }
                     }
-                    block.handle_event(&event, block_area, clip);
+                    if let EventResult::Consumed = block.handle_event(&event, block_area, clip) {
+                        event_consumed = true;
+                    }
                 }
             }
             BlockType::Bash => {
@@ -591,20 +614,28 @@ impl App {
                         );
                         self.ui.scroll_system.layout.dragging_scrollbar =
                             Some(DragTarget::Block(drag));
+                        handled_specific = true;
                     }
-                    block.handle_event(&event, block_area, clip);
+                    if let EventResult::Consumed = block.handle_event(&event, block_area, clip) {
+                        event_consumed = true;
+                    }
                 }
             }
             BlockType::TerminalPane => {
                 self.runtime.blocks.clear_all_terminal_focus();
                 if let Some(tp) = self.runtime.blocks.terminal.get_mut(idx) {
                     let result = tp.handle_event(&event, block_area, clip);
+                    if let EventResult::Consumed = result {
+                        event_consumed = true;
+                    }
                     match result {
                         EventResult::Action(BlockEvent::Close) => {
                             self.close_terminal(idx);
+                            handled_specific = true;
                         }
                         EventResult::Action(BlockEvent::RequestFocus) => {
                             self.runtime.blocks.focus_terminal(idx);
+                            handled_specific = true;
                         }
                         EventResult::Action(BlockEvent::Pinned(is_pinned)) => {
                             if is_pinned {
@@ -621,6 +652,7 @@ impl App {
                             } else {
                                 self.runtime.blocks.pinned_terminal = None;
                             }
+                            handled_specific = true;
                         }
                         _ => {}
                     }
@@ -631,7 +663,9 @@ impl App {
             }
         }
 
-        true
+        // Return true only if we handled something specific (scrollbar drag, button click)
+        // Return false for plain content clicks to allow text selection
+        handled_specific || event_consumed
     }
 
     /// Handle mouse drag (for scrollbar dragging and text selection)

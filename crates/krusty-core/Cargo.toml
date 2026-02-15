@@ -1,6 +1,6 @@
 [package]
 name = "krusty-core"
-version = "0.3.10"
+version = "0.3.11"
 edition = "2021"
 description = "Core library for Krusty - AI, storage, tools, and extensions"
 
@@ -96,6 +96,10 @@ agent-client-protocol = { version = "0.9", features = ["unstable_session_model"]
 
 # Version Control (vendored for cross-compilation)
 git2 = { version = "0.19", features = ["vendored-libgit2", "vendored-openssl"] }
+
+# System
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3.14"

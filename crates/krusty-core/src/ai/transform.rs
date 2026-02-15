@@ -302,14 +302,14 @@ mod tests {
         assert_eq!(temperature_for_model("qwen-coder"), Some(0.55));
         assert_eq!(temperature_for_model("claude-sonnet-4"), None);
         assert_eq!(temperature_for_model("gemini-3-pro"), Some(1.0));
-        assert_eq!(temperature_for_model("glm-4.7"), Some(1.0));
-        assert_eq!(temperature_for_model("minimax-m2.1"), Some(1.0));
+        assert_eq!(temperature_for_model("GLM-5"), Some(1.0));
+        assert_eq!(temperature_for_model("minimax-m2.5"), Some(1.0));
     }
 
     #[test]
     fn test_top_p_for_model() {
         assert_eq!(top_p_for_model("qwen-coder"), Some(1.0));
-        assert_eq!(top_p_for_model("minimax-m2.1"), Some(0.95));
+        assert_eq!(top_p_for_model("minimax-m2.5"), Some(0.95));
         assert_eq!(top_p_for_model("gemini-3-pro"), Some(0.95));
         assert_eq!(top_p_for_model("claude-sonnet-4"), None);
     }
@@ -317,7 +317,7 @@ mod tests {
     #[test]
     fn test_top_k_for_model() {
         // MiniMax ignores top_k per their API docs
-        assert_eq!(top_k_for_model("minimax-m2.1"), None);
+        assert_eq!(top_k_for_model("minimax-m2.5"), None);
         assert_eq!(top_k_for_model("minimax-m2"), None);
         assert_eq!(top_k_for_model("gemini-3-pro"), Some(64));
         assert_eq!(top_k_for_model("claude-sonnet-4"), None);
@@ -327,8 +327,8 @@ mod tests {
     fn test_supports_reasoning_effort() {
         // OpenAI-compatible models (GLM, MiniMax, DeepSeek) don't support effort levels
         assert!(!supports_reasoning_effort("deepseek-r1"));
-        assert!(!supports_reasoning_effort("glm-4.7"));
-        assert!(!supports_reasoning_effort("minimax-m2.1"));
+        assert!(!supports_reasoning_effort("GLM-5"));
+        assert!(!supports_reasoning_effort("minimax-m2.5"));
         assert!(!supports_reasoning_effort("mistral-large"));
         assert!(supports_reasoning_effort("gpt-5"));
         assert!(supports_reasoning_effort("claude-sonnet-4"));
@@ -336,19 +336,19 @@ mod tests {
 
     #[test]
     fn test_chat_template_args_for_model() {
-        // GLM-4.6 with thinking enabled: returns chat_template_args
-        let args = chat_template_args_for_model("glm-4.6", true);
+        // GLM-5 with thinking enabled: returns chat_template_args
+        let args = chat_template_args_for_model("GLM-5", true);
         assert!(args.is_some());
         let binding = args.unwrap();
         let obj = binding.as_object().unwrap();
         assert_eq!(obj.get("enableThinking").unwrap().as_bool(), Some(true));
 
-        // GLM-4.6 with thinking disabled: returns None
-        let args = chat_template_args_for_model("glm-4.6", false);
+        // GLM-5 with thinking disabled: returns None
+        let args = chat_template_args_for_model("GLM-5", false);
         assert!(args.is_none());
 
-        // MiniMax M2: doesn't use chat_template_args (even with thinking enabled)
-        let args = chat_template_args_for_model("minimax-m2.1", true);
+        // MiniMax M2.5: doesn't use chat_template_args (even with thinking enabled)
+        let args = chat_template_args_for_model("minimax-m2.5", true);
         assert!(args.is_none());
 
         // Non-OpenAI-compatible model

@@ -29,6 +29,7 @@ pub struct AcpServerConfig {
 /// ACP Server that runs Krusty as an ACP-compatible agent
 pub struct AcpServer {
     agent: Arc<KrustyAgent>,
+    /// Server configuration (reserved for future use)
     #[allow(dead_code)]
     config: AcpServerConfig,
 }
@@ -156,12 +157,6 @@ impl AcpServer {
     /// Get a reference to the agent
     pub fn agent(&self) -> &KrustyAgent {
         &self.agent
-    }
-}
-
-impl Default for AcpServer {
-    fn default() -> Self {
-        Self::new().expect("Failed to create default ACP server")
     }
 }
 
@@ -303,6 +298,7 @@ fn get_provider_api_key(provider: ProviderId) -> Option<String> {
 ///
 /// Returns true if stdin is not a TTY (likely being spawned by an editor)
 /// and the `--acp` flag is present.
+#[cfg(test)]
 #[allow(dead_code)]
 pub fn should_run_acp_mode(force_acp: bool) -> bool {
     if force_acp {

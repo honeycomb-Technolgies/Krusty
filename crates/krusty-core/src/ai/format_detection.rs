@@ -34,7 +34,7 @@ mod tests {
     #[test]
     fn test_detect_api_format_minimax_provider() {
         assert!(matches!(
-            detect_api_format(ProviderId::MiniMax, "MiniMax-M2.1"),
+            detect_api_format(ProviderId::MiniMax, "MiniMax-M2.5"),
             ApiFormat::Anthropic
         ));
     }
@@ -50,7 +50,7 @@ mod tests {
     #[test]
     fn test_detect_api_format_zai_provider() {
         assert!(matches!(
-            detect_api_format(ProviderId::ZAi, "GLM-4.7"),
+            detect_api_format(ProviderId::ZAi, "GLM-5"),
             ApiFormat::Anthropic
         ));
     }

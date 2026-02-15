@@ -38,7 +38,7 @@ impl ProviderId {
         &[
             ProviderId::MiniMax,    // Default provider, always first
             ProviderId::OpenAI,     // OpenAI direct (OAuth or API key)
-            ProviderId::ZAi,        // 2 models
+            ProviderId::ZAi,        // GLM-5
             ProviderId::OpenRouter, // 100+ dynamic models, always last
         ]
     }
@@ -177,8 +177,8 @@ impl ProviderConfig {
         } else {
             // Dynamic providers need a fallback
             match self.id {
-                ProviderId::OpenRouter => "openai/gpt-5.2",
-                _ => "MiniMax-M2.1", // Ultimate fallback
+                ProviderId::OpenRouter => "openai/gpt-5.3-codex",
+                _ => "MiniMax-M2.5", // Ultimate fallback
             }
         }
     }
@@ -298,7 +298,7 @@ pub fn translate_model_or_default(model_id: &str, from: ProviderId, to: Provider
     translate_model_id(model_id, from, to).unwrap_or_else(|| {
         get_provider(to)
             .map(|p| p.default_model().to_string())
-            .unwrap_or_else(|| "MiniMax-M2.1".to_string())
+            .unwrap_or_else(|| "MiniMax-M2.5".to_string())
     })
 }
 
@@ -386,23 +386,7 @@ static BUILTIN_PROVIDERS: LazyLock<Vec<ProviderConfig>> = LazyLock::new(|| {
                 ),
                 ModelInfo::new("anthropic/claude-opus-4", "Claude Opus 4", 200_000, 16_384),
                 // OpenAI models
-                ModelInfo::new("openai/gpt-5.2", "GPT-5.2", 400_000, 128_000),
-                ModelInfo::new(
-                    "openai/gpt-5.2-instant",
-                    "GPT-5.2 Instant",
-                    400_000,
-                    128_000,
-                ),
-                ModelInfo::new(
-                    "openai/gpt-5.2-thinking",
-                    "GPT-5.2 Thinking",
-                    400_000,
-                    128_000,
-                ),
-                ModelInfo::new("openai/gpt-5.2-pro", "GPT-5.2 Pro", 400_000, 128_000),
-                ModelInfo::new("openai/gpt-5.2-codex", "GPT-5.2 Codex", 400_000, 128_000),
-                ModelInfo::new("openai/o3", "OpenAI o3", 200_000, 100_000),
-                ModelInfo::new("openai/o4-mini", "OpenAI o4-mini", 200_000, 100_000),
+                ModelInfo::new("openai/gpt-5.3-codex", "GPT-5.3 Codex", 400_000, 128_000),
                 // Google models
                 ModelInfo::new(
                     "google/gemini-2.5-pro-preview",
@@ -456,39 +440,24 @@ static BUILTIN_PROVIDERS: LazyLock<Vec<ProviderConfig>> = LazyLock::new(|| {
         ProviderConfig {
             id: ProviderId::ZAi,
             name: "Z.ai".to_string(),
-            description: "GLM Coding Plan (GLM-4.7, ~3x Claude usage)".to_string(),
+            description: "GLM Coding Plan (GLM-5)".to_string(),
             base_url: "https://api.z.ai/api/anthropic/v1/messages".to_string(),
             auth_header: AuthHeader::XApiKey,
-            models: vec![
-                ModelInfo::new("GLM-4.7", "GLM 4.7", 128_000, 16_384),
-                ModelInfo::new("GLM-4.5-Air", "GLM 4.5 Air", 128_000, 16_384),
-            ],
+            models: vec![ModelInfo::new("GLM-5", "GLM 5", 200_000, 131_072)],
             supports_tools: true,
             dynamic_models: false,
             pricing_hint: None,
             custom_headers: HashMap::new(),
         },
-        // MiniMax - M2 models (Anthropic-compatible API)
+        // MiniMax - M2.5 (Anthropic-compatible API)
         ProviderConfig {
             id: ProviderId::MiniMax,
             name: "MiniMax".to_string(),
-            description: "M2 models (fast, interleaved thinking)".to_string(),
+            description: "M2.5 (fast, interleaved thinking)".to_string(),
             base_url: "https://api.minimax.io/anthropic/v1/messages".to_string(),
             auth_header: AuthHeader::XApiKey,
             models: vec![
-                // Standard M2.1: Balanced (60 tps) - default
-                ModelInfo::new("MiniMax-M2.1", "MiniMax M2.1", 200_000, 64_000)
-                    .with_anthropic_thinking(),
-                // Lightning: Fastest (100 tps)
-                ModelInfo::new(
-                    "MiniMax-M2.1-lightning",
-                    "MiniMax M2.1 Lightning",
-                    200_000,
-                    64_000,
-                )
-                .with_anthropic_thinking(),
-                // M2: Advanced reasoning
-                ModelInfo::new("MiniMax-M2", "MiniMax M2", 200_000, 64_000)
+                ModelInfo::new("MiniMax-M2.5", "MiniMax M2.5", 204_800, 131_072)
                     .with_anthropic_thinking(),
             ],
             supports_tools: true,
@@ -501,22 +470,15 @@ static BUILTIN_PROVIDERS: LazyLock<Vec<ProviderConfig>> = LazyLock::new(|| {
         ProviderConfig {
             id: ProviderId::OpenAI,
             name: "OpenAI".to_string(),
-            description: "GPT-5.2, o3, Codex (OAuth or API key)".to_string(),
+            description: "GPT-5.3 Codex (OAuth or API key)".to_string(),
             base_url: "https://api.openai.com/v1/chat/completions".to_string(),
             auth_header: AuthHeader::Bearer,
-            models: vec![
-                // GPT-5.2 family
-                ModelInfo::new("gpt-5.2", "GPT-5.2", 400_000, 128_000),
-                ModelInfo::new("gpt-5.2-codex", "GPT-5.2 Codex", 400_000, 128_000),
-                ModelInfo::new("gpt-5.2-instant", "GPT-5.2 Instant", 400_000, 128_000),
-                ModelInfo::new("gpt-5.2-thinking", "GPT-5.2 Thinking", 400_000, 128_000),
-                // o3/o4 reasoning models
-                ModelInfo::new("o3", "OpenAI o3", 200_000, 100_000),
-                ModelInfo::new("o4-mini", "OpenAI o4-mini", 200_000, 100_000),
-                // GPT-4 family (still widely used)
-                ModelInfo::new("gpt-4o", "GPT-4o", 128_000, 16_384),
-                ModelInfo::new("gpt-4o-mini", "GPT-4o Mini", 128_000, 16_384),
-            ],
+            models: vec![ModelInfo::new(
+                "gpt-5.3-codex",
+                "GPT-5.3 Codex",
+                400_000,
+                128_000,
+            )],
             supports_tools: true,
             dynamic_models: true,
             pricing_hint: None,
@@ -578,7 +540,7 @@ mod tests {
             "https://api.minimax.io/anthropic/v1/messages"
         );
         assert_eq!(provider.auth_header, AuthHeader::XApiKey);
-        assert_eq!(provider.default_model(), "MiniMax-M2.1");
+        assert_eq!(provider.default_model(), "MiniMax-M2.5");
     }
 
     #[test]
@@ -594,7 +556,7 @@ mod tests {
     fn test_model_validation() {
         let minimax = get_provider(ProviderId::MiniMax).unwrap();
         // Valid MiniMax model
-        assert!(minimax.has_model("MiniMax-M2.1"));
+        assert!(minimax.has_model("MiniMax-M2.5"));
         // Invalid model
         assert!(!minimax.has_model("anthropic/claude-opus-4.5"));
 
@@ -641,8 +603,8 @@ mod tests {
     #[test]
     fn test_translate_model_or_default() {
         // Unknown model: fallback to provider default
-        let result = translate_model_or_default("glm-4.7", ProviderId::ZAi, ProviderId::MiniMax);
-        assert_eq!(result, "MiniMax-M2.1");
+        let result = translate_model_or_default("GLM-5", ProviderId::ZAi, ProviderId::MiniMax);
+        assert_eq!(result, "MiniMax-M2.5");
     }
 
     #[test]

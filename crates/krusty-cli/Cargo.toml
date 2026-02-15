@@ -1,6 +1,6 @@
 [package]
 name = "krusty"
-version = "0.3.10"
+version = "0.3.11"
 edition = "2021"
 description = "The most elegant coding CLI to ever exist"
 default-run = "krusty"
@@ -8,6 +8,7 @@ default-run = "krusty"
 [dependencies]
 # Core library
 krusty-core = { path = "../krusty-core" }
+krusty-server = { path = "../krusty-server" }
 
 # Async Runtime
 tokio = { version = "1.40", features = ["full"] }

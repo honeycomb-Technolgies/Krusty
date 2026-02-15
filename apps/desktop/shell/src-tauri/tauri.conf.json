@@ -1,0 +1,30 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Krusty Desktop",
+  "version": "0.1.0",
+  "identifier": "dev.krusty.desktop",
+  "build": {
+    "beforeDevCommand": "cd ../../pwa/app && bun run dev --host --port 5173",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "cd ../../pwa/app && bun run build",
+    "frontendDist": "../../../pwa/app/build"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "title": "Krusty Desktop",
+        "width": 1280,
+        "height": 860,
+        "minWidth": 1024,
+        "minHeight": 680,
+        "resizable": true
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["icons/icon.png"]
+  }
+}

@@ -65,17 +65,12 @@ pub fn get_default_temperature(model_id: &str) -> Option<f32> {
         return None;
     }
 
-    // GLM-4.6, GLM-4.7: prefer 1.0
-    if id_lower.contains("glm-4.6") || id_lower.contains("glm-4.7") {
+    // GLM models: prefer 1.0
+    if id_lower.contains("glm") {
         return Some(1.0);
     }
 
-    // GLM-4.5: 1.0
-    if id_lower.contains("glm-4.5") {
-        return Some(1.0);
-    }
-
-    // MiniMax M2: 1.0 (from OpenCode)
+    // MiniMax M2/M2.5: 1.0 (from OpenCode)
     if id_lower.contains("minimax-m2") {
         return Some(1.0);
     }
@@ -143,10 +138,10 @@ mod tests {
 
     #[test]
     fn test_is_openai_compatible_model() {
-        assert!(is_openai_compatible_model("glm-4.6"));
-        assert!(is_openai_compatible_model("GLM-4.7"));
-        assert!(is_openai_compatible_model("minimax-m2.1"));
-        assert!(is_openai_compatible_model("zai/glm-4.6"));
+        assert!(is_openai_compatible_model("GLM-5"));
+        assert!(is_openai_compatible_model("glm-5"));
+        assert!(is_openai_compatible_model("minimax-m2.5"));
+        assert!(is_openai_compatible_model("zai/glm-5"));
         assert!(!is_openai_compatible_model("claude-3.5"));
         assert!(!is_openai_compatible_model("gpt-4"));
     }
@@ -154,50 +149,49 @@ mod tests {
     #[test]
     fn test_uses_reasoning_content() {
         assert!(uses_reasoning_content("deepseek-r1"));
-        assert!(uses_reasoning_content("minimax-m2.1"));
+        assert!(uses_reasoning_content("minimax-m2.5"));
         assert!(uses_reasoning_content("minimax-m2"));
-        assert!(!uses_reasoning_content("glm-4.6"));
+        assert!(!uses_reasoning_content("glm-5"));
     }
 
     #[test]
     fn test_uses_chat_template_args() {
-        assert!(uses_chat_template_args("glm-4.6"));
-        assert!(uses_chat_template_args("zai/glm-4.5"));
+        assert!(uses_chat_template_args("GLM-5"));
+        assert!(uses_chat_template_args("zai/glm-5"));
         assert!(!uses_chat_template_args("minimax-m2"));
         assert!(!uses_chat_template_args("claude-3.5"));
     }
 
     #[test]
     fn test_get_default_temperature() {
-        assert_eq!(get_default_temperature("glm-4.6"), Some(1.0));
-        assert_eq!(get_default_temperature("glm-4.7"), Some(1.0));
-        assert_eq!(get_default_temperature("glm-4.5"), Some(1.0));
-        assert_eq!(get_default_temperature("minimax-m2.1"), Some(1.0));
+        assert_eq!(get_default_temperature("GLM-5"), Some(1.0));
+        assert_eq!(get_default_temperature("glm-5"), Some(1.0));
+        assert_eq!(get_default_temperature("minimax-m2.5"), Some(1.0));
         assert_eq!(get_default_temperature("gpt-4"), None);
     }
 
     #[test]
     fn test_get_chat_template_args() {
-        // GLM-4.6 with reasoning ON
-        let args = get_chat_template_args("glm-4.6", ReasoningMode::On);
+        // GLM-5 with reasoning ON
+        let args = get_chat_template_args("GLM-5", ReasoningMode::On);
         assert!(args.is_some());
         let binding = args.unwrap();
         let obj = binding.as_object().unwrap();
         assert_eq!(obj.get("enableThinking").unwrap().as_bool(), Some(true));
 
-        // GLM-4.6 with reasoning OFF
-        let args = get_chat_template_args("glm-4.6", ReasoningMode::Off);
+        // GLM-5 with reasoning OFF
+        let args = get_chat_template_args("GLM-5", ReasoningMode::Off);
         assert!(args.is_none());
 
-        // MiniMax M2 (doesn't use chat_template_args)
-        let args = get_chat_template_args("minimax-m2.1", ReasoningMode::On);
+        // MiniMax M2.5 (doesn't use chat_template_args)
+        let args = get_chat_template_args("minimax-m2.5", ReasoningMode::On);
         assert!(args.is_none());
     }
 
     #[test]
     fn test_get_provider_options() {
-        // MiniMax M2 with reasoning text
-        let opts = get_provider_options("minimax-m2.1", Some("thinking goes here".to_string()));
+        // MiniMax M2.5 with reasoning text
+        let opts = get_provider_options("minimax-m2.5", Some("thinking goes here".to_string()));
         assert!(opts.is_some());
         let binding = opts.unwrap();
         let obj = binding.as_object().unwrap();
@@ -208,7 +202,7 @@ mod tests {
         );
 
         // GLM (doesn't use reasoning_content)
-        let opts = get_provider_options("glm-4.6", Some("thinking".to_string()));
+        let opts = get_provider_options("GLM-5", Some("thinking".to_string()));
         assert!(opts.is_none());
     }
 

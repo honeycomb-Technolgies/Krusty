@@ -17,8 +17,10 @@ pub mod mcp;
 pub mod paths;
 pub mod plan;
 pub mod process;
+pub mod server_instance;
 pub mod skills;
 pub mod storage;
+pub mod tailscale;
 pub mod tools;
 pub mod updater;
 

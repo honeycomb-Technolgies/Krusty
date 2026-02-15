@@ -58,9 +58,6 @@ pub struct KrustyAgent {
     /// Available model configurations from all providers
     /// (model_id, provider, actual_model_id, api_key, display_name)
     available_models: RwLock<Vec<(String, ProviderId, String, String, String)>>,
-    /// Working directory (reserved for future use)
-    #[allow(dead_code)]
-    cwd: PathBuf,
 }
 
 impl KrustyAgent {
@@ -73,11 +70,10 @@ impl KrustyAgent {
             tools: tools.clone(),
             client_capabilities: RwLock::new(None),
             api_key: RwLock::new(None),
-            processor: RwLock::new(PromptProcessor::new(tools, cwd.clone())),
+            processor: RwLock::new(PromptProcessor::new(tools, cwd)),
             notification_tx: RwLock::new(None),
             current_model: RwLock::new(None),
             available_models: RwLock::new(Vec::new()),
-            cwd,
         }
     }
 
@@ -89,11 +85,10 @@ impl KrustyAgent {
             tools: tools.clone(),
             client_capabilities: RwLock::new(None),
             api_key: RwLock::new(None),
-            processor: RwLock::new(PromptProcessor::new(tools, cwd.clone())),
+            processor: RwLock::new(PromptProcessor::new(tools, cwd)),
             notification_tx: RwLock::new(None),
             current_model: RwLock::new(None),
             available_models: RwLock::new(Vec::new()),
-            cwd,
         }
     }
 
@@ -801,12 +796,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_new_session() {
+    async fn test_new_session() -> anyhow::Result<()> {
         let agent = KrustyAgent::new();
 
         let request = NewSessionRequest::new("/tmp");
-        let response = agent.new_session(request).await.unwrap();
+        let response = agent.new_session(request).await?;
 
         assert!(agent.sessions().has_session(&response.session_id));
+        Ok(())
     }
 }

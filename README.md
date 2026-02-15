@@ -7,6 +7,61 @@
 ```
 The Fun AI coding assistant. 
 
+## Repository Layout
+
+- `crates/krusty-cli` - terminal UI client
+- `crates/krusty-core` - shared AI/tools/storage/runtime
+- `crates/krusty-server` - self-hosted API server for app clients
+- `apps/pwa` - PWA app boundary
+- `apps/desktop` - desktop wrapper boundary
+- `apps/marketing` - marketing-site boundary
+
+## Self-Host Split Quickstart
+
+This repo is now split into independent runtime targets:
+
+1. `krusty-server` for API + agent/tool runtime
+2. `apps/pwa/app` for mobile/desktop browser app (installable PWA)
+3. `apps/desktop/shell` for native desktop wrapper around the same PWA surface
+4. `apps/marketing/site` for static website content only
+
+No Kubernetes setup is required in the current self-host phase.
+
+### 1) Start server
+
+```bash
+cargo run -p krusty-server
+```
+
+### 2) Start PWA app
+
+```bash
+cd apps/pwa/app
+npm ci
+npm run dev
+```
+
+Optional API override:
+
+```bash
+VITE_API_BASE=http://localhost:3000/api npm run dev
+```
+
+### 3) Run desktop wrapper (optional)
+
+```bash
+cd apps/desktop/shell
+npm ci
+npm run dev
+```
+
+### 4) Run marketing site (optional)
+
+```bash
+cd apps/marketing/site
+python3 -m http.server 8080
+```
+
 ## Installation
 
 ### Quick Install (Linux/macOS)
@@ -31,6 +86,12 @@ cargo build --release
 ./target/release/krusty
 ```
 
+Run the self-host server:
+
+```bash
+cargo run -p krusty-server
+```
+
 ### GitHub Releases
 
 Download prebuilt binaries from [Releases](https://github.com/BurgessTG/Krusty/releases):
@@ -44,10 +105,10 @@ Krusty supports multiple AI providers. Add API keys via `/auth` in the TUI.
 
 | Provider | Models |
 |----------|--------|
-| **MiniMax** | MiniMax M2.1 Lightning, MiniMax M2.1, MiniMax M2 |
-| **OpenAI** | GPT 5.2 Codex, GPT 5.2 |
+| **MiniMax** | MiniMax M2.5|
+| **OpenAI** | GPT 5.3 Codex |
 | **OpenRouter** | 100+ Frontier and OSS models |
-| **Z.ai** | GLM-4.7, GLM-4.5-Air |
+| **Z.ai** | GLM-5|
 
 Switch providers and models anytime with `/model` or `Ctrl+M`.
 
