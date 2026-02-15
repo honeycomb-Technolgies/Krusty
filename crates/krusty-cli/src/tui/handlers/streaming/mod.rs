@@ -361,7 +361,9 @@ impl App {
         let (tx, rx) = mpsc::unbounded_channel();
         self.runtime.streaming.start_stream(rx);
 
-        tokio::spawn(async move {
+        // Spawn streaming task in background.
+        // JoinHandle is dropped - streaming communicated via channel.
+        let _handle = tokio::spawn(async move {
             tokio::select! {
                 _ = cancel_token.cancelled() => {
                     let _ = tx.send(StreamPart::Error {

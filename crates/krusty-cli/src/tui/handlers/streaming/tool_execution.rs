@@ -661,7 +661,10 @@ impl App {
         let plan_mode = self.ui.work_mode == crate::tui::app::WorkMode::Plan;
         let current_model = self.runtime.current_model.clone();
 
-        tokio::spawn(async move {
+        // Spawn tool execution in background.
+        // JoinHandle is dropped - results communicated via channel.
+        // If task panics, caller will hang waiting for channel (rare edge case).
+        let _handle = tokio::spawn(async move {
             let mut tool_results: Vec<Content> = Vec::new();
 
             for tool_call in tools_to_execute {

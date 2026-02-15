@@ -481,9 +481,11 @@ mod tests {
     }
 
     #[test]
-    fn test_default_model() {
-        let provider = get_provider(ProviderId::MiniMax).unwrap();
+    fn test_default_model() -> anyhow::Result<()> {
+        let provider = get_provider(ProviderId::MiniMax)
+            .ok_or_else(|| anyhow::anyhow!("MiniMax provider not configured"))?;
         let model = provider.default_model();
         assert!(model.contains("MiniMax"));
+        Ok(())
     }
 }
