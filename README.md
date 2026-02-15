@@ -105,10 +105,10 @@ Krusty supports multiple AI providers. Add API keys via `/auth` in the TUI.
 
 | Provider | Models |
 |----------|--------|
-| **MiniMax** | MiniMax M2.1 Lightning, MiniMax M2.1, MiniMax M2 |
-| **OpenAI** | GPT 5.2 Codex, GPT 5.2 |
+| **MiniMax** | MiniMax M2.5|
+| **OpenAI** | GPT 5.3 Codex |
 | **OpenRouter** | 100+ Frontier and OSS models |
-| **Z.ai** | GLM-4.7, GLM-4.5-Air |
+| **Z.ai** | GLM-5|
 
 Switch providers and models anytime with `/model` or `Ctrl+M`.
 
