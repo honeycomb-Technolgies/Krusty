@@ -5,7 +5,6 @@
 ▐█.█▌▐█•█▌▐█▄█▌▐█▄▪▐█ ▐█▌· ▐█▀·.
 ·▀  ▀.▀  ▀ ▀▀▀  ▀▀▀▀  ▀▀▀   ▀ •
 ```
-The Fun AI coding assistant.
 
 ## Overview
 
