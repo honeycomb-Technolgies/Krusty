@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Krusty | Download</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="wrap">
+      <div class="topbar">
+        <div class="brand">KRUSTY</div>
+        <nav>
+          <a href="./index.html">Home</a>
+          <a href="./privacy.html">Privacy</a>
+          <a href="./terms.html">Terms</a>
+        </nav>
+      </div>
+    </header>
+    <main class="wrap">
+      <section class="hero compact">
+        <h1>Get Krusty</h1>
+        <p>One binary gives you the TUI, web server, and editor integration. Free, no account required.</p>
+      </section>
+
+      <section class="grid">
+        <article class="card">
+          <h3>Build from source</h3>
+          <div class="code-block">
+            <code>git clone https://github.com/honeycomb-Technologies/Krusty.git<br/>
+cd Krusty<br/>
+cargo build --release -p krusty</code>
+          </div>
+          <p>Binary output at <code>target/release/krusty</code>. Requires Rust toolchain.</p>
+        </article>
+        <article class="card">
+          <h3>Desktop app</h3>
+          <div class="code-block">
+            <code>cd apps/desktop/shell<br/>
+bun install<br/>
+bun run build</code>
+          </div>
+          <p>Builds native <code>.deb</code>, <code>.rpm</code>, and <code>.AppImage</code> packages via Tauri.</p>
+        </article>
+        <article class="card">
+          <h3>Quick start</h3>
+          <div class="code-block">
+            <code># Terminal mode<br/>
+krusty<br/><br/>
+# Web server + PWA<br/>
+krusty serve<br/><br/>
+# Editor integration<br/>
+krusty acp</code>
+          </div>
+          <p>First run prompts for provider selection and API key.</p>
+        </article>
+      </section>
+
+      <section class="legal compact">
+        <h2>Supported providers</h2>
+        <p>Bring your own API key from any supported provider:</p>
+        <ul>
+          <li><strong>MiniMax</strong> &mdash; Default provider</li>
+          <li><strong>OpenAI</strong> &mdash; API key or OAuth</li>
+          <li><strong>Z.AI</strong> &mdash; GLM-5 models</li>
+          <li><strong>OpenRouter</strong> &mdash; 100+ models from multiple providers</li>
+        </ul>
+      </section>
+
+      <div class="footer">Free and open source under the project license.</div>
+    </main>
+  </body>
+</html>

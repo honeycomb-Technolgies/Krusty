@@ -3,8 +3,8 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Krusty | Marketing Site</title>
-    <meta name="description" content="Krusty is a local-first AI coding assistant for self-hosted teams." />
+    <title>Krusty | AI Coding Assistant</title>
+    <meta name="description" content="Krusty is a self-hosted AI coding assistant. One binary, every surface: terminal, browser, desktop." />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -15,7 +15,7 @@
       <div class="topbar">
         <div class="brand">KRUSTY</div>
         <nav>
-          <a href="./pricing.html">Pricing</a>
+          <a href="./download.html">Download</a>
           <a href="./privacy.html">Privacy</a>
           <a href="./terms.html">Terms</a>
         </nav>
@@ -24,34 +24,62 @@
 
     <main class="wrap">
       <section class="hero">
-        <h1>AI coding workflow, self-hosted and phone-ready.</h1>
+        <h1>One binary. Terminal, browser, desktop.</h1>
         <p>
-          Krusty gives teams a local-first coding assistant with a deploy-your-own server,
-          plus a PWA and desktop path for access from anywhere.
+          Krusty is a self-hosted AI coding assistant. Run <code>krusty serve</code> and
+          get a full-featured PWA on any device — or use the TUI and desktop app.
+          Your keys, your machine, your data.
         </p>
         <div class="actions">
-          <a class="btn primary" href="https://github.com/BurgessTG/Krusty#self-host-split-quickstart" target="_blank" rel="noreferrer">Self-Host App</a>
-          <a class="btn" href="https://github.com/BurgessTG/Krusty" target="_blank" rel="noreferrer">GitHub</a>
-          <a class="btn" href="../../RESTRUCTURE_ROADMAP.md">Roadmap</a>
+          <a class="btn primary" href="./download.html">Get Krusty</a>
+          <a class="btn" href="https://github.com/honeycomb-Technologies/Krusty" target="_blank" rel="noreferrer">GitHub</a>
+          <a class="btn" href="https://github.com/honeycomb-Technologies/Krusty/blob/dev/README.md" target="_blank" rel="noreferrer">Docs</a>
         </div>
       </section>
 
       <section class="grid">
         <article class="card">
-          <h3>Self-Hosted Core</h3>
-          <p>Run `krusty-server` on your own infrastructure. Keep data and execution paths under your control.</p>
+          <h3><code>krusty</code></h3>
+          <p>Full TUI with multi-provider AI, tools, MCP, extensions, and gamepad support. Your daily driver in the terminal.</p>
         </article>
         <article class="card">
-          <h3>PWA + Desktop</h3>
-          <p>Use the same app surface from mobile browser install or a desktop shell wrapper.</p>
+          <h3><code>krusty serve</code></h3>
+          <p>Starts an API server with the PWA embedded. Access from your phone, tablet, or any browser. Tailscale auto-detected for remote access.</p>
         </article>
         <article class="card">
-          <h3>Marketing Separate</h3>
-          <p>This site remains static and clean while product runtime lives in dedicated app targets.</p>
+          <h3>Desktop App</h3>
+          <p>Native wrapper that starts the server internally or reuses a running instance. Same PWA, native window.</p>
         </article>
       </section>
 
-      <div class="footer">© Krusty. Marketing-only surface, product app lives separately.</div>
+      <section class="how-it-works">
+        <h2>How it works</h2>
+        <div class="steps">
+          <div class="step">
+            <span class="step-num">1</span>
+            <div>
+              <strong>Install</strong>
+              <p>Download a single binary or build from source. No Docker, no cloud account.</p>
+            </div>
+          </div>
+          <div class="step">
+            <span class="step-num">2</span>
+            <div>
+              <strong>Configure</strong>
+              <p>First run prompts for your AI provider and API key. Credentials stored locally in <code>~/.krusty</code>.</p>
+            </div>
+          </div>
+          <div class="step">
+            <span class="step-num">3</span>
+            <div>
+              <strong>Use everywhere</strong>
+              <p><code>krusty</code> for TUI. <code>krusty serve</code> for browser access. <code>krusty acp</code> for editor integration.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="footer">Free and open source. No cloud dependency, no telemetry.</div>
     </main>
   </body>
 </html>

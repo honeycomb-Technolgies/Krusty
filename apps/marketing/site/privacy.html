@@ -3,7 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Krusty Privacy</title>
+    <title>Krusty | Privacy</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
@@ -12,7 +15,7 @@
         <div class="brand">KRUSTY</div>
         <nav>
           <a href="./index.html">Home</a>
-          <a href="./pricing.html">Pricing</a>
+          <a href="./download.html">Download</a>
           <a href="./terms.html">Terms</a>
         </nav>
       </div>
@@ -20,15 +23,21 @@
     <main class="wrap">
       <article class="legal">
         <h1>Privacy</h1>
-        <p>Last updated: February 14, 2026</p>
-        <h2>Self-Hosted Data</h2>
-        <p>When self-hosted, your server and infrastructure controls data retention and access policy.</p>
-        <h2>Marketing Site</h2>
-        <p>This website is static and does not process chat sessions or coding workspace content.</p>
-        <h2>Future Accounts</h2>
-        <p>Account-related privacy terms will be published when managed hosting features are introduced.</p>
+        <p>Last updated: February 15, 2026</p>
+
+        <h2>Your data stays local</h2>
+        <p>Krusty runs entirely on your machine. Sessions, credentials, and workspace files are stored in <code>~/.krusty</code> and never leave your device unless you explicitly send them to an AI provider via API calls.</p>
+
+        <h2>AI provider communication</h2>
+        <p>When you use Krusty, your prompts and tool outputs are sent to the AI provider you configured (MiniMax, OpenAI, Z.AI, or OpenRouter). Each provider's own privacy policy governs how they handle that data. Krusty does not proxy, log, or retain any data in transit.</p>
+
+        <h2>This website</h2>
+        <p>This marketing site is static HTML. It does not use cookies, analytics, or tracking scripts. No personal data is collected.</p>
+
+        <h2>No telemetry</h2>
+        <p>Krusty does not phone home, collect usage metrics, or send crash reports. The binary makes no network requests except those you initiate (AI provider calls, MCP servers, Tailscale).</p>
       </article>
-      <div class="footer">Questions: open an issue in the main repository.</div>
+      <div class="footer">Questions: <a href="https://github.com/honeycomb-Technologies/Krusty/issues">open an issue</a>.</div>
     </main>
   </body>
 </html>

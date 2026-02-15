@@ -53,6 +53,7 @@ nav a {
 
 nav a:hover { color: var(--ink); }
 
+/* Hero */
 .hero {
   margin: 2.5rem 0;
   background: color-mix(in oklab, var(--card), transparent 12%);
@@ -62,16 +63,37 @@ nav a:hover { color: var(--ink); }
   box-shadow: 0 18px 40px rgba(17, 22, 31, 0.08);
 }
 
+.hero.compact {
+  margin: 2rem 0 1.5rem;
+  padding: 1.6rem 2.2rem;
+}
+
 .hero h1 {
   margin: 0;
   font-size: clamp(2rem, 4vw, 3.6rem);
   line-height: 1.04;
 }
 
+.hero.compact h1 {
+  font-size: clamp(1.6rem, 3vw, 2.4rem);
+}
+
 .hero p {
   max-width: 720px;
   margin: 1rem 0 1.5rem;
   color: var(--muted);
+}
+
+.hero.compact p {
+  margin: 0.6rem 0 0;
+}
+
+.hero code {
+  font-family: "IBM Plex Mono", monospace;
+  background: rgba(11, 110, 245, 0.08);
+  padding: 0.15em 0.4em;
+  border-radius: 5px;
+  font-size: 0.92em;
 }
 
 .actions {
@@ -96,6 +118,7 @@ nav a:hover { color: var(--ink); }
   border-color: color-mix(in oklab, var(--brand), black 15%);
 }
 
+/* Card grid */
 .grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -110,8 +133,90 @@ nav a:hover { color: var(--ink); }
 }
 
 .card h3 { margin: 0; font-size: 1rem; }
+.card h3 code {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
 .card p { margin: 0.55rem 0 0; color: var(--muted); font-size: 0.92rem; }
 
+/* Code blocks */
+.code-block {
+  background: var(--ink);
+  color: #d4d8e0;
+  border-radius: 8px;
+  padding: 0.75rem 0.9rem;
+  margin: 0.6rem 0;
+  overflow-x: auto;
+}
+
+.code-block code {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+/* How it works steps */
+.how-it-works {
+  margin: 2rem 0;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 1.4rem;
+}
+
+.how-it-works h2 {
+  margin: 0 0 1rem;
+  font-size: 1.2rem;
+}
+
+.steps {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.step {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+.step-num {
+  font-family: "IBM Plex Mono", monospace;
+  font-weight: 600;
+  font-size: 0.85rem;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 50%;
+  background: var(--brand);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 0.15rem;
+}
+
+.step strong {
+  font-size: 0.98rem;
+}
+
+.step p {
+  margin: 0.2rem 0 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.step code {
+  font-family: "IBM Plex Mono", monospace;
+  background: rgba(11, 110, 245, 0.08);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  font-size: 0.88em;
+}
+
+/* Footer */
 .footer {
   margin: 2rem 0 2.6rem;
   color: var(--muted);
@@ -119,6 +224,16 @@ nav a:hover { color: var(--ink); }
   text-align: center;
 }
 
+.footer a {
+  color: var(--brand);
+  text-decoration: none;
+}
+
+.footer a:hover {
+  text-decoration: underline;
+}
+
+/* Legal pages */
 .legal {
   margin: 2.4rem auto;
   background: var(--card);
@@ -127,31 +242,26 @@ nav a:hover { color: var(--ink); }
   padding: 1.4rem;
 }
 
+.legal.compact {
+  margin: 1rem auto 2rem;
+}
+
 .legal h1 { margin-top: 0; font-size: 1.9rem; }
 .legal h2 { font-size: 1.1rem; margin-bottom: 0.4rem; }
 .legal p { color: var(--muted); font-size: 0.96rem; }
+.legal ul { color: var(--muted); font-size: 0.96rem; padding-left: 1.2rem; }
+.legal li { margin-bottom: 0.3rem; }
 
-.pricing {
-  margin: 2.2rem 0;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.9rem;
+.legal code {
+  font-family: "IBM Plex Mono", monospace;
+  background: rgba(11, 110, 245, 0.08);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  font-size: 0.9em;
 }
-
-.price {
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  padding: 1.2rem;
-}
-
-.price h2 { margin: 0; font-size: 1.2rem; }
-.price .tag { color: var(--muted); font-size: 0.9rem; }
-.price strong { font-size: 1.8rem; display: block; margin-top: 0.5rem; }
 
 @media (max-width: 820px) {
-  .grid,
-  .pricing {
+  .grid {
     grid-template-columns: 1fr;
   }
 }

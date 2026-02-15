@@ -1,6 +1,6 @@
 # Reorganization Roadmap
 
-This roadmap keeps the product split clean for self-hosting and future SaaS additions.
+This roadmap tracks the product restructure into a single-binary, self-hosted architecture.
 
 ## Step 1: Server Baseline in `krusty-public` (Completed)
 - Added `crates/krusty-server` and wired it into the workspace.
@@ -25,7 +25,42 @@ This roadmap keeps the product split clean for self-hosting and future SaaS addi
 - Wired Tauri `beforeDevCommand`/`beforeBuildCommand` to run PWA automatically.
 - Isolated shell Rust manifest from workspace resolution conflicts.
 
-## Step 5: Cleanup and Cutover (In Progress)
-- Added CI split jobs for Rust workspace, PWA check/build, and marketing static smoke checks.
+## Step 5: Unified Architecture (Completed)
+- Converted `krusty-server` from standalone binary to library crate.
+- PWA frontend embedded in server binary via `rust-embed` with SPA fallback.
+- Added `krusty serve` CLI subcommand with first-run setup wizard.
+- Desktop app starts server internally or reuses existing instance via PID file detection.
+- Added Tailscale module for automatic HTTPS on tailnet.
+- Switched frontend tooling from npm to bun.
+- Marketing site updated: removed "Future Managed" tier, positioned as distribution + docs only.
+
+## Step 6: CI and Distribution (In Progress)
+- CI split jobs for Rust workspace, PWA check/build, and marketing static smoke checks.
 - Documented self-host run path and boundaries in root `README.md` and `crates/krusty-server/README.md`.
 - Remaining: final release packaging + distribution checks for desktop binaries.
+
+## Architecture Summary
+
+```
+krusty              CLI binary (TUI, serve, acp)
+├── krusty serve    Starts API server with embedded PWA
+├── krusty acp      Editor integration via ACP protocol
+└── (default)       Terminal UI
+
+krusty-server       Library crate (no binary)
+├── Axum routes     Sessions, chat, tools, files, models
+├── PWA assets      Embedded via rust-embed at compile time
+└── SPA fallback    index.html for client-side routing
+
+krusty-core         Shared library
+├── AI providers    MiniMax, OpenAI, Z.AI, OpenRouter
+├── Tools           File ops, shell, search, etc.
+├── Tailscale       Device detection, serve, URL resolution
+├── Instance mgmt   PID file + health check
+└── Storage         SQLite at ~/.krusty/krusty.db
+
+Desktop app         Tauri wrapper
+└── Starts server   Or reuses running instance
+```
+
+No cloud tier. No managed hosting. Single binary, bring your own API key.
