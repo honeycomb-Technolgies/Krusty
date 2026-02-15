@@ -39,6 +39,17 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libudev-dev
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Build PWA frontend
+        run: |
+          cd apps/pwa/app
+          bun install
+          bun run build
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:

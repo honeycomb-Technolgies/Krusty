@@ -2,10 +2,15 @@
 //!
 //! Detects Tailscale, resolves device URLs, and manages `tailscale serve`
 //! for exposing the Krusty server with automatic HTTPS on the tailnet.
+//!
+//! Uses the `/krusty/` path prefix to avoid clashing with other services
+//! that may already be using `tailscale serve` on the same machine.
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::process::Command;
+
+const SERVE_PATH: &str = "/krusty/";
 
 #[derive(Debug, Clone)]
 pub struct TailscaleInfo {
@@ -74,24 +79,27 @@ pub fn device_info() -> Result<TailscaleInfo> {
     })
 }
 
-/// Get the HTTPS URL for this device on the tailnet.
+/// Get the HTTPS URL for Krusty on the tailnet (includes /krusty/ path).
 pub fn device_url(_port: u16) -> Result<String> {
     let info = device_info()?;
     if !info.online {
         anyhow::bail!("Tailscale is installed but this device is offline");
     }
-    // When using `tailscale serve`, Tailscale handles TLS on port 443
-    // so the URL is just https://<dns-name> without a port
-    Ok(format!("https://{}", info.dns_name))
+    Ok(format!("https://{}{}", info.dns_name, SERVE_PATH))
 }
 
-/// Run `tailscale serve --bg <port>` to expose a local port on the tailnet with HTTPS.
+/// Run `tailscale serve --bg --set-path /krusty/ <port>` to expose on a unique path.
 ///
-/// This sets up a reverse proxy: tailnet HTTPS traffic → localhost:<port>.
-/// The `--bg` flag runs it in the background persistently.
+/// Uses /krusty/ to avoid clashing with other services on the same tailnet device.
 pub fn serve(port: u16) -> Result<()> {
     let output = Command::new("tailscale")
-        .args(["serve", "--bg", &format!("{}", port)])
+        .args([
+            "serve",
+            "--bg",
+            "--set-path",
+            SERVE_PATH,
+            &format!("{}", port),
+        ])
         .output()
         .context("Failed to run `tailscale serve`")?;
 
@@ -100,14 +108,18 @@ pub fn serve(port: u16) -> Result<()> {
         anyhow::bail!("tailscale serve failed: {}", stderr.trim());
     }
 
-    tracing::info!("Tailscale serve configured: HTTPS → localhost:{}", port);
+    tracing::info!(
+        "Tailscale serve configured: HTTPS{} → localhost:{}",
+        SERVE_PATH,
+        port
+    );
     Ok(())
 }
 
-/// Stop `tailscale serve` for the given port.
-pub fn serve_stop(port: u16) -> Result<()> {
+/// Stop `tailscale serve` for the krusty path.
+pub fn serve_stop(_port: u16) -> Result<()> {
     let output = Command::new("tailscale")
-        .args(["serve", "--remove", &format!("{}", port)])
+        .args(["serve", "--remove", SERVE_PATH])
         .output()
         .context("Failed to run `tailscale serve --remove`")?;
 
@@ -119,7 +131,7 @@ pub fn serve_stop(port: u16) -> Result<()> {
     Ok(())
 }
 
-/// Full Tailscale setup: detect, expose, return URL.
+/// Full Tailscale setup: detect, expose on /krusty/, return URL.
 /// Returns None if Tailscale is not available (non-fatal).
 pub fn setup_tailscale_serve(port: u16) -> Option<String> {
     if !is_installed() {
@@ -134,7 +146,6 @@ pub fn setup_tailscale_serve(port: u16) -> Option<String> {
         Ok(_) => {
             if let Err(e) = serve(port) {
                 tracing::warn!("Failed to setup tailscale serve: {}", e);
-                // Still try to return the URL — serve might already be configured
             }
             device_url(port).ok()
         }
