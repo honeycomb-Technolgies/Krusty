@@ -46,12 +46,12 @@ pub mod types;
 /// Embedded PWA frontend assets.
 ///
 /// At compile time, rust-embed includes all files from the PWA build directory.
-/// In debug builds with no build directory present, this will be empty and the
-/// server gracefully falls back to API-only mode.
+/// When the build directory is absent, this will be empty and the server
+/// gracefully falls back to API-only mode.
 #[derive(Embed)]
 #[folder = "../../apps/pwa/app/build"]
 #[prefix = ""]
-#[cfg_attr(debug_assertions, allow_missing = true)]
+#[allow_missing = true]
 struct PwaAssets;
 
 /// Configuration for starting the server.
