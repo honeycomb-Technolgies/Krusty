@@ -139,7 +139,7 @@
 
 <style>
 	.timeline-entry {
-		/* Each entry is a separate visual block */
+		display: block;
 	}
 
 	:global(.message-bubble .prose) {

@@ -10,10 +10,10 @@
 	import { sessionStore, sendMessage, stopGeneration, type Attachment } from '$stores/session';
 
 	let inputValue = $state('');
-	let inputElement: HTMLTextAreaElement;
-	let messagesContainer: HTMLDivElement;
-	let fileInput: HTMLInputElement;
-	let imageInput: HTMLInputElement;
+	let inputElement = $state<HTMLTextAreaElement>(undefined!);
+	let messagesContainer = $state<HTMLDivElement>(undefined!);
+	let fileInput = $state<HTMLInputElement>(undefined!);
+	let imageInput = $state<HTMLInputElement>(undefined!);
 	let attachedFiles = $state<File[]>([]);
 
 	function handleSubmit() {
