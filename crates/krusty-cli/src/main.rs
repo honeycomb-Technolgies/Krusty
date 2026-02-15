@@ -3,6 +3,7 @@
 //! A terminal-based AI coding assistant with:
 //! - Multi-provider AI with API key authentication
 //! - Single-mode Chat UI with slash commands
+//! - `krusty serve` — unified server + PWA + Tailscale
 //! - Clean architecture from day one
 
 use anyhow::Result;
@@ -11,6 +12,7 @@ use clap::{Parser, Subcommand};
 // Re-export core modules for TUI usage
 use krusty_core::{acp, agent, ai, constants, extensions, paths, plan, process, storage, tools};
 
+mod serve;
 mod tui;
 
 /// Krusty - AI Coding Assistant
@@ -34,6 +36,17 @@ enum Commands {
     /// - KRUSTY_PROVIDER + KRUSTY_API_KEY (+ optional KRUSTY_MODEL)
     /// - Or provider-specific: ANTHROPIC_API_KEY, OPENROUTER_API_KEY, etc.
     Acp,
+
+    /// Start the Krusty web server with embedded PWA frontend
+    ///
+    /// Launches the API server with the PWA bundled into the binary.
+    /// On first run, prompts for provider and API key configuration.
+    /// Automatically configures Tailscale for remote access if available.
+    Serve {
+        /// Port to listen on
+        #[arg(short, long, default_value_t = 3000)]
+        port: u16,
+    },
 }
 
 /// Restore terminal state - called on panic or unexpected exit
@@ -49,7 +62,16 @@ fn restore_terminal() {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Set up panic hook to restore terminal state
+    let cli = Cli::parse();
+
+    // Serve mode has its own logging (stdout), skip TUI logging setup
+    if matches!(cli.command, Some(Commands::Serve { .. })) {
+        if let Some(Commands::Serve { port }) = cli.command {
+            return serve::run(port).await;
+        }
+    }
+
+    // Set up panic hook to restore terminal state (TUI/ACP modes)
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
         restore_terminal();
@@ -62,13 +84,11 @@ async fn main() -> Result<()> {
         eprintln!("Failed to create log directory: {}", e);
     }
 
-    // Create null device path based on platform
     #[cfg(unix)]
     let null_device = "/dev/null";
     #[cfg(windows)]
     let null_device = "NUL";
 
-    // Try to create log file, fall back to null device if that fails
     let log_file = match std::fs::File::create(log_dir.join("krusty.log")) {
         Ok(file) => file,
         Err(e) => {
@@ -83,7 +103,6 @@ async fn main() -> Result<()> {
                         "Failed to create null device {}: {}, logging disabled",
                         null_device, e
                     );
-                    // Return a dummy writer that discards output
                     return Err(e.into());
                 }
             }
@@ -100,23 +119,18 @@ async fn main() -> Result<()> {
         .init();
 
     // Apply any pending update before starting TUI
-    // This writes a persistent marker file that the TUI reads to show a toast
     if let Ok(Some(version)) = krusty_core::updater::apply_pending_update() {
         tracing::info!("Applied pending update to v{}", version);
     }
 
-    let cli = Cli::parse();
-
     match cli.command {
         Some(Commands::Acp) => {
-            // ACP mode: run as Agent Client Protocol server
-            // All communication happens via stdin/stdout JSON-RPC
             tracing::info!("Starting Krusty in ACP server mode");
             let server = acp::AcpServer::new()?;
             server.run().await?;
         }
+        Some(Commands::Serve { .. }) => unreachable!(),
         None => {
-            // Default: Start TUI chat
             let mut app = tui::App::new().await;
             app.run().await?;
         }

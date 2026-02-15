@@ -1,13 +1,22 @@
 //! Krusty Server
 //!
 //! Self-hosted API server for chat, tools, sessions, and local workspace access.
+//! This is a library crate — the server is started via `start_server()`.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::{http::Method, middleware, routing::get, Json, Router};
+use axum::{
+    body::Body,
+    http::{header, Method, Response, StatusCode, Uri},
+    middleware,
+    response::IntoResponse,
+    routing::get,
+    Json, Router,
+};
+use rust_embed::Embed;
 use serde::Serialize;
 use tokio::sync::RwLock;
 use tower_http::{
@@ -29,33 +38,51 @@ use krusty_core::storage::Database;
 use krusty_core::tools::implementations::register_all_tools;
 use krusty_core::tools::registry::ToolRegistry;
 
-mod auth;
-mod error;
-mod routes;
-mod types;
+pub mod auth;
+pub mod error;
+pub mod routes;
+pub mod types;
+
+/// Embedded PWA frontend assets.
+///
+/// At compile time, rust-embed includes all files from the PWA build directory.
+/// In debug builds with no build directory present, this will be empty and the
+/// server gracefully falls back to API-only mode.
+#[derive(Embed)]
+#[folder = "../../apps/pwa/app/build"]
+#[prefix = ""]
+#[cfg_attr(debug_assertions, allow_missing = true)]
+struct PwaAssets;
+
+/// Configuration for starting the server.
+pub struct ServerConfig {
+    /// Port to listen on (default: 3000).
+    pub port: u16,
+    /// Working directory for file/tools APIs.
+    pub working_dir: PathBuf,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            port: 3000,
+            working_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        }
+    }
+}
 
 /// Shared application state.
 #[derive(Clone)]
 pub struct AppState {
-    /// SQLite database path (opened per request).
     pub db_path: Arc<PathBuf>,
-    /// Default working directory for file/tools APIs.
     pub working_dir: Arc<PathBuf>,
-    /// Base AI client (None when no credentials configured).
     pub ai_client: Option<Arc<AiClient>>,
-    /// Tool registry with built-in tools.
     pub tool_registry: Arc<ToolRegistry>,
-    /// Process registry for background commands.
     pub process_registry: Arc<ProcessRegistry>,
-    /// Model registry for available models.
     pub model_registry: SharedModelRegistry,
-    /// API credential store.
     pub credential_store: Arc<RwLock<CredentialStore>>,
-    /// MCP manager for local MCP servers.
     pub mcp_manager: Arc<McpManager>,
-    /// User hooks manager.
     pub hook_manager: Arc<RwLock<UserHookManager>>,
-    /// Skills manager.
     pub skills_manager: Arc<RwLock<SkillsManager>>,
 }
 
@@ -71,7 +98,7 @@ fn parse_provider(s: &str) -> Option<ProviderId> {
 }
 
 /// Build an AI client from configured credentials and env overrides.
-fn create_ai_client(credentials: &CredentialStore) -> Option<AiClient> {
+pub fn create_ai_client(credentials: &CredentialStore) -> Option<AiClient> {
     let provider = std::env::var("KRUSTY_PROVIDER")
         .ok()
         .as_deref()
@@ -153,17 +180,9 @@ async fn initialize_models(registry: &SharedModelRegistry, credentials: &Credent
     }
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive(tracing::Level::INFO.into()),
-        )
-        .init();
-
+/// Build the Axum router with all routes and embedded PWA assets.
+pub async fn build_router(config: &ServerConfig) -> anyhow::Result<(Router, AppState)> {
     let db_path = paths::config_dir().join("krusty.db");
-    let working_dir = std::env::current_dir()?;
     let _db = Database::new(&db_path)?;
 
     let credential_store_inner = CredentialStore::load().unwrap_or_default();
@@ -177,7 +196,7 @@ async fn main() -> anyhow::Result<()> {
     let model_registry = create_model_registry();
     initialize_models(&model_registry, &credential_store_inner).await;
 
-    let mcp_manager = Arc::new(McpManager::new(working_dir.clone()));
+    let mcp_manager = Arc::new(McpManager::new(config.working_dir.clone()));
     if let Err(e) = mcp_manager.load_config().await {
         tracing::warn!("Failed to load MCP config: {}", e);
     } else if let Err(e) = mcp_manager.connect_all().await {
@@ -193,7 +212,7 @@ async fn main() -> anyhow::Result<()> {
 
     let state = AppState {
         db_path: Arc::new(db_path),
-        working_dir: Arc::new(working_dir.clone()),
+        working_dir: Arc::new(config.working_dir.clone()),
         ai_client,
         tool_registry,
         process_registry,
@@ -201,7 +220,9 @@ async fn main() -> anyhow::Result<()> {
         credential_store,
         mcp_manager,
         hook_manager: Arc::new(RwLock::new(hook_manager_inner)),
-        skills_manager: Arc::new(RwLock::new(SkillsManager::with_defaults(&working_dir))),
+        skills_manager: Arc::new(RwLock::new(SkillsManager::with_defaults(
+            &config.working_dir,
+        ))),
     };
 
     let cors = CorsLayer::new()
@@ -216,7 +237,6 @@ async fn main() -> anyhow::Result<()> {
         .allow_headers(Any);
 
     let app = Router::new()
-        .route("/", get(root))
         .route("/health", get(health))
         .nest(
             "/api",
@@ -225,13 +245,20 @@ async fn main() -> anyhow::Result<()> {
                 auth::auth_middleware,
             )),
         )
+        .fallback(serve_pwa)
         .layer(cors)
         .layer(TraceLayer::new_for_http())
-        .with_state(state);
+        .with_state(state.clone());
 
-    let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
-    let addr: SocketAddr = format!("0.0.0.0:{port}").parse()?;
-    tracing::info!("Starting krusty-server on http://{}", addr);
+    Ok((app, state))
+}
+
+/// Start the Krusty server and block until shutdown.
+pub async fn start_server(config: ServerConfig) -> anyhow::Result<()> {
+    let addr: SocketAddr = format!("0.0.0.0:{}", config.port).parse()?;
+    let (app, _state) = build_router(&config).await?;
+
+    tracing::info!("Krusty server listening on http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(
@@ -243,8 +270,49 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn root() -> &'static str {
-    "Krusty Server"
+/// Serve embedded PWA assets with SPA fallback.
+async fn serve_pwa(uri: Uri) -> impl IntoResponse {
+    let path = uri.path().trim_start_matches('/');
+
+    // Try exact file match first
+    if let Some(file) = PwaAssets::get(path) {
+        let mime = mime_guess::from_path(path).first_or_octet_stream();
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, mime.as_ref())
+            .header(header::CACHE_CONTROL, cache_control(path))
+            .body(Body::from(file.data.to_vec()))
+            .unwrap();
+    }
+
+    // SPA fallback: serve index.html for all non-file routes
+    match PwaAssets::get("index.html") {
+        Some(index) => Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+            .header(header::CACHE_CONTROL, "no-cache")
+            .body(Body::from(index.data.to_vec()))
+            .unwrap(),
+        None => Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/plain")
+            .body(Body::from(
+                "Krusty API server running. PWA frontend not embedded in this build.",
+            ))
+            .unwrap(),
+    }
+}
+
+/// Cache-control header value based on file type.
+fn cache_control(path: &str) -> &'static str {
+    if path.contains("/_app/immutable/") {
+        // SvelteKit immutable assets — hash in filename, cache forever
+        "public, max-age=31536000, immutable"
+    } else if path.ends_with(".html") {
+        "no-cache"
+    } else {
+        "public, max-age=3600"
+    }
 }
 
 async fn health() -> Json<HealthResponse> {
