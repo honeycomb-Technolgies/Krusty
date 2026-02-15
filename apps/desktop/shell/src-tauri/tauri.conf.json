@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "dev.krusty.desktop",
   "build": {
-    "beforeDevCommand": "cd ../../pwa/app && npm run dev -- --host --port 5173",
+    "beforeDevCommand": "cd ../../pwa/app && bun run dev --host --port 5173",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "cd ../../pwa/app && npm run build",
+    "beforeBuildCommand": "cd ../../pwa/app && bun run build",
     "frontendDist": "../../../pwa/app/build"
   },
   "app": {

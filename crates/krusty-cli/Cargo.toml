@@ -8,6 +8,7 @@ default-run = "krusty"
 [dependencies]
 # Core library
 krusty-core = { path = "../krusty-core" }
+krusty-server = { path = "../krusty-server" }
 
 # Async Runtime
 tokio = { version = "1.40", features = ["full"] }

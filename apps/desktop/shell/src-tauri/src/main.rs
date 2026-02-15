@@ -1,7 +1,74 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use krusty_core::server_instance;
+
+const DEFAULT_PORT: u16 = 3000;
+
 fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive(tracing::Level::INFO.into()),
+        )
+        .init();
+
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+    let port = rt.block_on(ensure_server_running());
+
     tauri::Builder::default()
+        .setup(move |app| {
+            if let Some(window) = app.webview_windows().values().next() {
+                let url = format!("http://localhost:{}", port);
+                let _ = window.navigate(url.parse().unwrap());
+            }
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running krusty desktop shell");
+}
+
+/// Ensure a Krusty server is running — reuse existing or start a new one.
+async fn ensure_server_running() -> u16 {
+    // Check for already-running server
+    if let Some(instance) = server_instance::detect_running_server().await {
+        tracing::info!(
+            "Reusing existing Krusty server on port {} (PID {})",
+            instance.port,
+            instance.pid
+        );
+        return instance.port;
+    }
+
+    // No server running — start one in the background
+    let port = DEFAULT_PORT;
+    tracing::info!("Starting embedded Krusty server on port {}", port);
+
+    let config = krusty_server::ServerConfig {
+        port,
+        ..Default::default()
+    };
+
+    // Write PID file before spawning
+    if let Err(e) = server_instance::write_pid_file(port) {
+        tracing::warn!("Failed to write PID file: {}", e);
+    }
+
+    tokio::spawn(async move {
+        if let Err(e) = krusty_server::start_server(config).await {
+            tracing::error!("Embedded server failed: {}", e);
+            server_instance::remove_pid_file();
+        }
+    });
+
+    // Wait for server to become healthy
+    for _ in 0..50 {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        if server_instance::probe_health(port).await {
+            tracing::info!("Embedded server is ready");
+            return port;
+        }
+    }
+
+    tracing::warn!("Server health check timed out, proceeding anyway");
+    port
 }
