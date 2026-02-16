@@ -39,6 +39,10 @@ use krusty_core::storage::Database;
 use krusty_core::tools::implementations::register_all_tools;
 use krusty_core::tools::registry::ToolRegistry;
 
+type SessionGuard = Arc<Mutex<()>>;
+type SessionLockMap = HashMap<String, (SessionGuard, Instant)>;
+type PendingApprovalMap = HashMap<String, tokio::sync::oneshot::Sender<bool>>;
+
 pub mod auth;
 pub mod error;
 pub mod push;
@@ -90,9 +94,9 @@ pub struct AppState {
     pub hook_manager: Arc<RwLock<UserHookManager>>,
     pub skills_manager: Arc<RwLock<SkillsManager>>,
     /// Per-session locks to prevent concurrent agentic loops on the same session.
-    pub session_locks: Arc<RwLock<HashMap<String, (Arc<Mutex<()>>, Instant)>>>,
+    pub session_locks: Arc<RwLock<SessionLockMap>>,
     /// Pending tool approval channels for supervised permission mode.
-    pub pending_approvals: Arc<RwLock<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
+    pub pending_approvals: Arc<RwLock<PendingApprovalMap>>,
     /// Web Push notification service (None if VAPID init failed).
     pub push_service: Option<Arc<push::PushService>>,
 }
