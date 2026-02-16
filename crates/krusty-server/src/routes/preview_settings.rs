@@ -4,7 +4,7 @@ use std::ops::RangeInclusive;
 
 use axum::{
     extract::{Path, State},
-    routing::{delete, get, patch, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};

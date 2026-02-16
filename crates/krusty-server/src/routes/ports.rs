@@ -1,6 +1,6 @@
 //! Preview / port-forwarding endpoints.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -59,6 +59,12 @@ struct PortListResponse {
     discovery_error: Option<String>,
 }
 
+#[derive(Debug)]
+struct ProcessSearchEntry<'a> {
+    process: &'a ProcessInfo,
+    command_lower: String,
+}
+
 async fn list_ports(
     State(state): State<AppState>,
     user: Option<CurrentUser>,
@@ -93,21 +99,26 @@ async fn list_ports(
         .into_iter()
         .filter(|p| p.is_running())
         .collect();
-    let mut tracked_by_pid = HashMap::new();
+    let mut tracked_by_pid = HashMap::with_capacity(running_processes.len());
+    let mut running_process_search = Vec::with_capacity(running_processes.len());
     for process in &running_processes {
         if let Some(pid) = process.pid {
             tracked_by_pid.insert(pid, process);
         }
+        running_process_search.push(ProcessSearchEntry {
+            process,
+            command_lower: process.command.to_ascii_lowercase(),
+        });
     }
 
-    let blocked_ports: BTreeSet<u16> = settings.blocked_ports.iter().copied().collect();
-    let hidden_ports: BTreeSet<u16> = settings.hidden_ports.iter().copied().collect();
-    let pinned_ports: BTreeSet<u16> = settings.pinned_ports.iter().copied().collect();
+    let blocked_ports: HashSet<u16> = settings.blocked_ports.iter().copied().collect();
+    let hidden_ports: HashSet<u16> = settings.hidden_ports.iter().copied().collect();
+    let pinned_ports: HashSet<u16> = settings.pinned_ports.iter().copied().collect();
 
     let mut candidate_ports: BTreeSet<u16> = discovered_by_port.keys().copied().collect();
     candidate_ports.extend(pinned_ports.iter().copied());
 
-    let mut ports = Vec::new();
+    let mut ports = Vec::with_capacity(candidate_ports.len());
     for port in candidate_ports {
         if port == state.server_port
             || blocked_ports.contains(&port)
@@ -128,7 +139,7 @@ async fn list_ports(
         .to_string();
 
         let process_hint =
-            resolve_process_hint(port, listener, &tracked_by_pid, &running_processes);
+            resolve_process_hint(port, listener, &tracked_by_pid, &running_process_search);
         let description = process_hint.and_then(|p| p.description.clone());
         let command = process_hint.map(|p| p.command.clone());
         let pid = process_hint.and_then(|p| p.pid);
@@ -257,7 +268,7 @@ async fn proxy_http_request(
 
     let mut upstream = proxy_http_client()
         .request(method, &upstream_url)
-        .body(body_bytes.to_vec());
+        .body(body_bytes);
 
     for (name, value) in &request_headers {
         if should_forward_request_header(name) {
@@ -322,7 +333,7 @@ async fn proxy_websocket(client_socket: WebSocket, upstream_url: String) {
             match msg {
                 Message::Text(text) => {
                     if upstream_tx
-                        .send(UpstreamMessage::Text(text.to_string().into()))
+                        .send(UpstreamMessage::Text(text.to_string()))
                         .await
                         .is_err()
                     {
@@ -331,7 +342,7 @@ async fn proxy_websocket(client_socket: WebSocket, upstream_url: String) {
                 }
                 Message::Binary(binary) => {
                     if upstream_tx
-                        .send(UpstreamMessage::Binary(binary.to_vec().into()))
+                        .send(UpstreamMessage::Binary(binary.to_vec()))
                         .await
                         .is_err()
                     {
@@ -340,7 +351,7 @@ async fn proxy_websocket(client_socket: WebSocket, upstream_url: String) {
                 }
                 Message::Ping(data) => {
                     if upstream_tx
-                        .send(UpstreamMessage::Ping(data.to_vec().into()))
+                        .send(UpstreamMessage::Ping(data.to_vec()))
                         .await
                         .is_err()
                     {
@@ -349,7 +360,7 @@ async fn proxy_websocket(client_socket: WebSocket, upstream_url: String) {
                 }
                 Message::Pong(data) => {
                     if upstream_tx
-                        .send(UpstreamMessage::Pong(data.to_vec().into()))
+                        .send(UpstreamMessage::Pong(data.to_vec()))
                         .await
                         .is_err()
                     {
@@ -372,7 +383,7 @@ async fn proxy_websocket(client_socket: WebSocket, upstream_url: String) {
             match msg {
                 UpstreamMessage::Text(text) => {
                     if client_tx
-                        .send(Message::Text(text.to_string().into()))
+                        .send(Message::Text(text.to_string()))
                         .await
                         .is_err()
                     {
@@ -380,17 +391,17 @@ async fn proxy_websocket(client_socket: WebSocket, upstream_url: String) {
                     }
                 }
                 UpstreamMessage::Binary(data) => {
-                    if client_tx.send(Message::Binary(data.into())).await.is_err() {
+                    if client_tx.send(Message::Binary(data)).await.is_err() {
                         break;
                     }
                 }
                 UpstreamMessage::Ping(data) => {
-                    if client_tx.send(Message::Ping(data.into())).await.is_err() {
+                    if client_tx.send(Message::Ping(data)).await.is_err() {
                         break;
                     }
                 }
                 UpstreamMessage::Pong(data) => {
-                    if client_tx.send(Message::Pong(data.into())).await.is_err() {
+                    if client_tx.send(Message::Pong(data)).await.is_err() {
                         break;
                     }
                 }
@@ -424,7 +435,7 @@ fn resolve_process_hint<'a>(
     port: u16,
     listener: Option<&TcpListenerInfo>,
     tracked_by_pid: &'a HashMap<u32, &'a ProcessInfo>,
-    running_processes: &'a [ProcessInfo],
+    running_processes: &'a [ProcessSearchEntry<'a>],
 ) -> Option<&'a ProcessInfo> {
     if let Some(listener) = listener {
         for pid in &listener.pids {
@@ -439,13 +450,16 @@ fn resolve_process_hint<'a>(
     let needle_port_sep = format!("--port {}", port);
     let needle_short = format!("-p {}", port);
 
-    running_processes.iter().find(|process| {
-        let command = process.command.to_ascii_lowercase();
-        command.contains(&needle_colon)
-            || command.contains(&needle_port_eq)
-            || command.contains(&needle_port_sep)
-            || command.contains(&needle_short)
-    })
+    running_processes
+        .iter()
+        .find(|entry| {
+            let command = entry.command_lower.as_str();
+            command.contains(&needle_colon)
+                || command.contains(&needle_port_eq)
+                || command.contains(&needle_port_sep)
+                || command.contains(&needle_short)
+        })
+        .map(|entry| entry.process)
 }
 
 fn infer_display_name(port: u16, description: Option<&str>, command: Option<&str>) -> String {
@@ -454,30 +468,22 @@ fn infer_display_name(port: u16, description: Option<&str>, command: Option<&str
     }
 
     if let Some(command) = command {
-        let c = command.to_ascii_lowercase();
-        if c.contains("vite") {
-            return "Vite Dev Server".to_string();
-        }
-        if c.contains("next") {
-            return "Next.js Dev Server".to_string();
-        }
-        if c.contains("webpack") {
-            return "Webpack Dev Server".to_string();
-        }
-        if c.contains("astro") {
-            return "Astro Dev Server".to_string();
-        }
-        if c.contains("nuxt") {
-            return "Nuxt Dev Server".to_string();
-        }
-        if c.contains("storybook") {
-            return "Storybook".to_string();
-        }
-        if c.contains("uvicorn") || c.contains("gunicorn") {
-            return "Python Web Server".to_string();
-        }
-        if c.contains("http.server") {
-            return "Python HTTP Server".to_string();
+        const DISPLAY_HINTS: [(&str, &str); 9] = [
+            ("vite", "Vite Dev Server"),
+            ("next", "Next.js Dev Server"),
+            ("webpack", "Webpack Dev Server"),
+            ("astro", "Astro Dev Server"),
+            ("nuxt", "Nuxt Dev Server"),
+            ("storybook", "Storybook"),
+            ("uvicorn", "Python Web Server"),
+            ("gunicorn", "Python Web Server"),
+            ("http.server", "Python HTTP Server"),
+        ];
+        let command = command.to_ascii_lowercase();
+        for (needle, label) in DISPLAY_HINTS {
+            if command.contains(needle) {
+                return label.to_string();
+            }
         }
     }
 
@@ -501,9 +507,7 @@ fn infer_http_like(
     let name = name.to_ascii_lowercase();
     let desc = description.unwrap_or_default().to_ascii_lowercase();
     let cmd = command.unwrap_or_default().to_ascii_lowercase();
-    let combined = format!("{} {} {}", name, desc, cmd);
-
-    [
+    const HTTP_KEYWORDS: [&str; 13] = [
         "vite",
         "next",
         "webpack",
@@ -517,9 +521,10 @@ fn infer_http_like(
         "flask",
         "django",
         "rails",
-    ]
-    .iter()
-    .any(|keyword| combined.contains(keyword))
+    ];
+    HTTP_KEYWORDS
+        .iter()
+        .any(|keyword| name.contains(keyword) || desc.contains(keyword) || cmd.contains(keyword))
 }
 
 fn build_upstream_path(path: Option<&str>, query: Option<&str>) -> String {
