@@ -17,6 +17,35 @@
 
 	let { toolCall }: Props = $props();
 	let isExpanded = $state(false);
+	let elapsedSeconds = $state(0);
+	let startTime: number | null = $state(null);
+	let timerInterval: ReturnType<typeof setInterval> | null = null;
+
+	// Track elapsed time while tool is running
+	$effect(() => {
+		if (toolCall.status === 'running') {
+			if (!startTime) startTime = Date.now();
+			timerInterval = setInterval(() => {
+				elapsedSeconds = Math.floor((Date.now() - startTime!) / 1000);
+			}, 1000);
+		} else {
+			if (timerInterval) {
+				clearInterval(timerInterval);
+				timerInterval = null;
+			}
+		}
+
+		return () => {
+			if (timerInterval) clearInterval(timerInterval);
+		};
+	});
+
+	// Auto-expand bash tools when streaming output starts
+	$effect(() => {
+		if (toolCall.name === 'bash' && toolCall.status === 'running' && toolCall.output) {
+			isExpanded = true;
+		}
+	});
 
 	const iconMap: Record<string, typeof Terminal> = {
 		bash: Terminal,
@@ -32,7 +61,8 @@
 		running: 'border-blue-500/50 bg-blue-500/10',
 		success: 'border-green-500/50 bg-green-500/10',
 		error: 'border-red-500/50 bg-red-500/10',
-		pending: 'border-border bg-muted/50'
+		pending: 'border-border bg-muted/50',
+		awaiting_approval: 'border-amber-500/50 bg-amber-500/10'
 	}[toolCall.status] || 'border-border bg-muted/50');
 
 	// Format tool description from arguments
@@ -72,6 +102,9 @@
 				<span class="font-medium">{toolCall.name}</span>
 				{#if toolCall.status === 'running'}
 					<Loader2 class="h-3.5 w-3.5 animate-spin text-blue-500" />
+					<span class="text-xs text-muted-foreground tabular-nums">{elapsedSeconds}s</span>
+				{:else if toolCall.status === 'awaiting_approval'}
+					<span class="text-xs font-medium text-amber-500">Awaiting approval</span>
 				{:else if toolCall.status === 'success'}
 					<CheckIcon class="h-3.5 w-3.5 text-green-500" />
 				{:else if toolCall.status === 'error'}

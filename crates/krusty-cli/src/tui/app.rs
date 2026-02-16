@@ -14,8 +14,13 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use futures::StreamExt;
-use ratatui::{backend::CrosstermBackend, Terminal};
-use std::{io, path::PathBuf, sync::Arc, time::Duration};
+use ratatui::{backend::CrosstermBackend, style::Color, Terminal};
+use std::{
+    io,
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tokio::sync::RwLock;
 
 use crate::agent::{AgentCancellation, AgentConfig, AgentEventBus, AgentState, UserHookManager};
@@ -27,6 +32,7 @@ use crate::extensions::WasmHost;
 use crate::plan::{PlanFile, PlanManager};
 use crate::process::ProcessRegistry;
 use crate::storage::{CredentialStore, Preferences, SessionManager};
+use crate::tools::registry::PermissionMode;
 use crate::tools::ToolRegistry;
 use crate::tui::animation::MenuAnimator;
 use crate::tui::input::{AutocompletePopup, MultiLineInput};
@@ -77,6 +83,50 @@ impl WorkMode {
         match self {
             WorkMode::Build => WorkMode::Plan,
             WorkMode::Plan => WorkMode::Build,
+        }
+    }
+}
+
+/// Thinking intensity level for Tab-cycling in the TUI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThinkingLevel {
+    Off,
+    Low,
+    Medium,
+    High,
+    XHigh,
+}
+
+impl ThinkingLevel {
+    pub fn is_enabled(self) -> bool {
+        !matches!(self, Self::Off)
+    }
+
+    pub fn cycle_codex(self) -> Self {
+        match self {
+            Self::Off => Self::Low,
+            Self::Low => Self::Medium,
+            Self::Medium => Self::High,
+            Self::High => Self::XHigh,
+            Self::XHigh => Self::Off,
+        }
+    }
+
+    pub fn toggle_basic(self) -> Self {
+        if self.is_enabled() {
+            Self::Off
+        } else {
+            Self::Medium
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::XHigh => "xhigh",
         }
     }
 }
@@ -206,6 +256,10 @@ pub struct AppRuntime {
     pub running_process_count: usize,
     /// Oldest running process elapsed time
     pub running_process_elapsed: Option<std::time::Duration>,
+    /// Cached git status for status bar display
+    pub git_status: Option<krusty_core::git::GitStatusSummary>,
+    /// Last git status poll timestamp
+    pub last_git_status_poll: Instant,
     /// Working directory
     pub working_dir: PathBuf,
     /// Current session ID
@@ -232,8 +286,8 @@ pub struct AppRuntime {
     pub agent_config: AgentConfig,
     /// Agent cancellation token
     pub cancellation: AgentCancellation,
-    /// Extended thinking mode enabled
-    pub thinking_enabled: bool,
+    /// Extended thinking level (Tab cycles levels for Codex models)
+    pub thinking_level: ThinkingLevel,
     /// Streaming state machine
     pub streaming: StreamingManager,
     /// Clipboard images pending resolution
@@ -244,6 +298,8 @@ pub struct AppRuntime {
     pub tool_results: ToolResultCache,
     /// Attached files mapping
     pub attached_files: std::collections::HashMap<String, PathBuf>,
+    /// Permission mode (supervised/autonomous)
+    pub permission_mode: PermissionMode,
     /// Exploration budget tracking
     pub exploration_budget_count: usize,
     /// Just updated flag
@@ -274,6 +330,8 @@ impl AppRuntime {
             process_registry,
             running_process_count: 0,
             running_process_elapsed: None,
+            git_status: None,
+            last_git_status_poll: Instant::now() - Duration::from_secs(60),
             working_dir,
             current_session_id: None,
             session_title: None,
@@ -287,12 +345,13 @@ impl AppRuntime {
             agent_state: AgentState::new(),
             agent_config: AgentConfig::default(),
             cancellation: AgentCancellation::new(),
-            thinking_enabled: false,
+            thinking_level: ThinkingLevel::Off,
             streaming: StreamingManager::new(),
             pending_clipboard_images: std::collections::HashMap::new(),
             blocks: BlockManager::new(),
             tool_results: ToolResultCache::new(),
             attached_files: std::collections::HashMap::new(),
+            permission_mode: PermissionMode::Supervised,
             exploration_budget_count: 0,
             just_updated: false,
             update_status: None,
@@ -373,6 +432,42 @@ impl App {
 
         // Ultimate fallback to default constant
         crate::constants::ai::CONTEXT_WINDOW_TOKENS
+    }
+
+    /// Whether Tab should cycle Codex thinking levels.
+    pub fn is_codex_thinking_mode(&self) -> bool {
+        self.runtime.active_provider == ProviderId::OpenAI
+            && self
+                .runtime
+                .current_model
+                .to_ascii_lowercase()
+                .contains("codex")
+    }
+
+    /// Handle Tab thinking toggle/cycle.
+    pub fn cycle_thinking_level(&mut self) {
+        self.runtime.thinking_level = if self.is_codex_thinking_mode() {
+            self.runtime.thinking_level.cycle_codex()
+        } else {
+            self.runtime.thinking_level.toggle_basic()
+        };
+        tracing::info!(
+            model = %self.runtime.current_model,
+            codex_mode = self.is_codex_thinking_mode(),
+            thinking_level = self.runtime.thinking_level.label(),
+            "Updated thinking level"
+        );
+    }
+
+    /// Input border color based on thinking intensity.
+    pub fn thinking_border_color(&self) -> Color {
+        match self.runtime.thinking_level {
+            ThinkingLevel::Off => self.ui.theme.border_color,
+            ThinkingLevel::Low => self.ui.theme.mode_view_color,
+            ThinkingLevel::Medium => self.ui.theme.accent_color,
+            ThinkingLevel::High => self.ui.theme.warning_color,
+            ThinkingLevel::XHigh => self.ui.theme.error_color,
+        }
     }
 
     /// Clear the active plan and sync UI state
@@ -697,6 +792,9 @@ impl App {
             }
             self.runtime.running_process_elapsed =
                 self.runtime.process_registry.try_oldest_running_elapsed();
+
+            // Refresh git status for status bar (throttled inside handler).
+            self.poll_git_status();
 
             // Keep process popup updated while open (non-blocking)
             if self.ui.popup == Popup::ProcessList {

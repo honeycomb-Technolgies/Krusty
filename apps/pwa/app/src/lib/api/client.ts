@@ -1,5 +1,8 @@
 const API_BASE = (import.meta.env.VITE_API_BASE || '/api').replace(/\/+$/, '');
 
+const STREAM_ACTIVITY_TIMEOUT = 30_000; // 30 seconds
+const STREAM_CHECK_INTERVAL = 5_000; // Check every 5 seconds
+
 // ============================================================================
 // Type Definitions
 // ============================================================================
@@ -63,18 +66,70 @@ export interface TreeEntry {
 	children?: TreeEntry[];
 }
 
+/** Git status summary */
+export interface GitStatusResponse {
+	in_repo: boolean;
+	repo_root: string | null;
+	branch: string | null;
+	head: string | null;
+	upstream: string | null;
+	branch_files: number;
+	branch_additions: number;
+	branch_deletions: number;
+	pr_number: number | null;
+	ahead: number;
+	behind: number;
+	staged: number;
+	modified: number;
+	untracked: number;
+	conflicted: number;
+	total_changes: number;
+}
+
+/** Git branch item */
+export interface GitBranch {
+	name: string;
+	is_current: boolean;
+	upstream: string | null;
+}
+
+/** Git branch list response */
+export interface GitBranchesResponse {
+	repo_root: string;
+	branches: GitBranch[];
+}
+
+/** Git worktree item */
+export interface GitWorktree {
+	path: string;
+	branch: string | null;
+	head: string | null;
+	is_current: boolean;
+}
+
+/** Git worktree list response */
+export interface GitWorktreesResponse {
+	repo_root: string;
+	worktrees: GitWorktree[];
+}
+
 /** SSE stream event types */
 export type StreamEvent =
 	| { type: 'text_delta'; delta: string }
 	| { type: 'thinking_delta'; thinking: string }
 	| { type: 'tool_call_start'; id: string; name: string }
 	| { type: 'tool_call_complete'; id: string; name: string; arguments: Record<string, unknown> }
+	| { type: 'tool_executing'; id: string; name: string }
+	| { type: 'tool_output_delta'; id: string; delta: string }
 	| { type: 'tool_result'; id: string; output: string; is_error: boolean }
 	| { type: 'plan_update'; items: PlanItem[] }
 	| { type: 'mode_change'; mode: string; reason?: string }
 	| { type: 'plan_complete'; tool_call_id: string; title: string; task_count: number }
 	| { type: 'usage'; prompt_tokens: number; completion_tokens: number }
 	| { type: 'title_update'; title: string }
+	| { type: 'tool_approval_required'; id: string; name: string; arguments: Record<string, unknown> }
+	| { type: 'tool_approved'; id: string }
+	| { type: 'tool_denied'; id: string }
 	| { type: 'finish'; session_id: string }
 	| { type: 'error'; error: string };
 
@@ -157,7 +212,7 @@ export const apiClient = {
 	deleteSession: (id: string) =>
 		request<void>(`/sessions/${id}`, { method: 'DELETE' }),
 
-	updateSession: (id: string, data: { title?: string }) =>
+	updateSession: (id: string, data: { title?: string; working_dir?: string }) =>
 		request<SessionResponse>(`/sessions/${id}`, {
 			method: 'PATCH',
 			body: JSON.stringify(data)
@@ -203,6 +258,27 @@ export const apiClient = {
 			`/files/tree?${root ? `root=${encodeURIComponent(root)}&` : ''}depth=${depth}`
 		),
 
+	// Git
+	getGitStatus: (path?: string) =>
+		request<GitStatusResponse>(`/git/status${path ? `?path=${encodeURIComponent(path)}` : ''}`),
+
+	getGitBranches: (path?: string) =>
+		request<GitBranchesResponse>(`/git/branches${path ? `?path=${encodeURIComponent(path)}` : ''}`),
+
+	getGitWorktrees: (path?: string) =>
+		request<GitWorktreesResponse>(`/git/worktrees${path ? `?path=${encodeURIComponent(path)}` : ''}`),
+
+	checkoutGitBranch: (branch: string, path?: string, create = false, startPoint?: string) =>
+		request<GitStatusResponse>('/git/checkout', {
+			method: 'POST',
+			body: JSON.stringify({
+				path,
+				branch,
+				create,
+				start_point: startPoint
+			})
+		}),
+
 	// Tools
 	executeTool: (toolName: string, params: Record<string, unknown>) =>
 		request<{ output: string; is_error: boolean }>('/tools/execute', {
@@ -216,6 +292,12 @@ export const apiClient = {
 		request<void>('/chat/tool-result', {
 			method: 'POST',
 			body: JSON.stringify({ session_id: sessionId, tool_call_id: toolCallId, result })
+		}),
+
+	submitToolApproval: (sessionId: string, toolCallId: string, approved: boolean) =>
+		request<{ status: string }>('/chat/tool-approval', {
+			method: 'POST',
+			body: JSON.stringify({ session_id: sessionId, tool_call_id: toolCallId, approved })
 		}),
 
 };
@@ -243,6 +325,7 @@ interface ChatRequest {
 	content?: ContentBlock[]; // For multi-modal (text + images)
 	model?: string;
 	thinking_enabled?: boolean;
+	permission_mode?: 'supervised' | 'autonomous';
 }
 
 export interface PlanItem {
@@ -256,6 +339,10 @@ interface StreamCallbacks {
 	onToolCallStart: (id: string, name: string) => void;
 	onToolCallComplete: (id: string, name: string, args: Record<string, unknown>) => void;
 	onToolResult: (id: string, output: string, isError: boolean) => void;
+	onToolOutputDelta: (id: string, delta: string) => void;
+	onToolApprovalRequired?: (id: string, name: string, args: Record<string, unknown>) => void;
+	onToolApproved?: (id: string) => void;
+	onToolDenied?: (id: string) => void;
 	onPlanUpdate: (items: PlanItem[]) => void;
 	onModeChange: (mode: string, reason?: string) => void;
 	onPlanComplete: (toolCallId: string, title: string, taskCount: number) => void;
@@ -303,12 +390,23 @@ export async function streamToolResult(
 
 	const decoder = new TextDecoder();
 	let buffer = '';
+	let lastActivity = Date.now();
+
+	// Activity timeout check
+	const timeoutInterval = setInterval(() => {
+		if (Date.now() - lastActivity > STREAM_ACTIVITY_TIMEOUT) {
+			clearInterval(timeoutInterval);
+			reader.cancel().catch(() => {});
+			callbacks.onError('Stream timeout: no data received for 30 seconds');
+		}
+	}, STREAM_CHECK_INTERVAL);
 
 	try {
 		while (true) {
 			const { done, value } = await reader.read();
 			if (done) break;
 
+			lastActivity = Date.now();
 			buffer += decoder.decode(value, { stream: true });
 			const lines = buffer.split('\n');
 			buffer = lines.pop() || '';
@@ -321,8 +419,8 @@ export async function streamToolResult(
 					try {
 						const event = JSON.parse(data);
 						handleEvent(event, callbacks);
-					} catch {
-						// Ignore parse errors
+					} catch (e) {
+						console.warn('[SSE] Parse error:', data, e);
 					}
 				}
 			}
@@ -333,6 +431,8 @@ export async function streamToolResult(
 		} else {
 			callbacks.onError(err instanceof Error ? err.message : 'Stream error');
 		}
+	} finally {
+		clearInterval(timeoutInterval);
 	}
 }
 
@@ -368,12 +468,23 @@ export async function streamChat(
 
 	const decoder = new TextDecoder();
 	let buffer = '';
+	let lastActivity = Date.now();
+
+	// Activity timeout check
+	const timeoutInterval = setInterval(() => {
+		if (Date.now() - lastActivity > STREAM_ACTIVITY_TIMEOUT) {
+			clearInterval(timeoutInterval);
+			reader.cancel().catch(() => {});
+			callbacks.onError('Stream timeout: no data received for 30 seconds');
+		}
+	}, STREAM_CHECK_INTERVAL);
 
 	try {
 		while (true) {
 			const { done, value } = await reader.read();
 			if (done) break;
 
+			lastActivity = Date.now();
 			buffer += decoder.decode(value, { stream: true });
 			const lines = buffer.split('\n');
 			buffer = lines.pop() || '';
@@ -386,8 +497,8 @@ export async function streamChat(
 					try {
 						const event = JSON.parse(data);
 						handleEvent(event, callbacks);
-					} catch {
-						// Ignore parse errors
+					} catch (e) {
+						console.warn('[SSE] Parse error:', data, e);
 					}
 				}
 			}
@@ -398,6 +509,8 @@ export async function streamChat(
 		} else {
 			callbacks.onError(err instanceof Error ? err.message : 'Stream error');
 		}
+	} finally {
+		clearInterval(timeoutInterval);
 	}
 }
 
@@ -414,6 +527,12 @@ function handleEvent(event: StreamEvent, callbacks: StreamCallbacks) {
 			break;
 		case 'tool_call_complete':
 			callbacks.onToolCallComplete(event.id, event.name, event.arguments);
+			break;
+		case 'tool_executing':
+			// Heartbeat - no-op (activity timeout updated by read loop)
+			break;
+		case 'tool_output_delta':
+			callbacks.onToolOutputDelta(event.id, event.delta);
 			break;
 		case 'tool_result':
 			callbacks.onToolResult(event.id, event.output, event.is_error);
@@ -432,6 +551,15 @@ function handleEvent(event: StreamEvent, callbacks: StreamCallbacks) {
 			break;
 		case 'title_update':
 			callbacks.onTitleUpdate(event.title);
+			break;
+		case 'tool_approval_required':
+			callbacks.onToolApprovalRequired?.(event.id, event.name, event.arguments);
+			break;
+		case 'tool_approved':
+			callbacks.onToolApproved?.(event.id);
+			break;
+		case 'tool_denied':
+			callbacks.onToolDenied?.(event.id);
 			break;
 		case 'finish':
 			callbacks.onFinish(event.session_id);

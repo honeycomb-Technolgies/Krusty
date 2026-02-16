@@ -275,6 +275,24 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Update session working directory.
+    ///
+    /// Pass `None` to clear the working directory.
+    pub fn update_session_working_dir(
+        &self,
+        session_id: &str,
+        working_dir: Option<&str>,
+    ) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+
+        self.db.conn().execute(
+            "UPDATE sessions SET working_dir = ?1, updated_at = ?2 WHERE id = ?3",
+            params![working_dir, now, session_id],
+        )?;
+
+        Ok(())
+    }
+
     /// Update session token count
     pub fn update_token_count(&self, session_id: &str, token_count: usize) -> Result<()> {
         self.db.conn().execute(
@@ -817,6 +835,27 @@ mod tests {
             .expect("Session should exist");
 
         assert_eq!(session.title, "Updated Title");
+    }
+
+    #[test]
+    fn test_update_session_working_dir() {
+        // Test updating session working directory
+        let (db, _temp) = create_test_db();
+        let manager = SessionManager::new(db);
+
+        let session_id = manager
+            .create_session("Session", Some("claude-3-5-sonnet"), Some("/tmp"))
+            .expect("Failed to create session");
+
+        manager
+            .update_session_working_dir(&session_id, Some("/home/user/project"))
+            .expect("Failed to update working dir");
+
+        let session = manager
+            .get_session(&session_id)
+            .expect("Failed to get session")
+            .expect("Session should exist");
+        assert_eq!(session.working_dir, Some("/home/user/project".to_string()));
     }
 
     #[test]

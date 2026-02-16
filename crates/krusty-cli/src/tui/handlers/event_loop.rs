@@ -6,6 +6,7 @@ use crate::tui::app::{App, View};
 use crate::tui::polling::{
     poll_bash_output, poll_build_progress, poll_explore_progress, PollAction, PollResult,
 };
+use std::time::{Duration, Instant};
 
 impl App {
     /// Poll bash output channel and update BashBlock with streaming output
@@ -36,6 +37,32 @@ impl App {
     /// Poll terminal panes for PTY output and update cursor animations
     pub(crate) fn poll_terminal_panes(&mut self) {
         self.runtime.blocks.poll_terminals();
+    }
+
+    /// Poll git status on an interval for status bar updates.
+    pub(crate) fn poll_git_status(&mut self) {
+        const GIT_POLL_INTERVAL: Duration = Duration::from_secs(2);
+
+        let now = Instant::now();
+        if now.duration_since(self.runtime.last_git_status_poll) < GIT_POLL_INTERVAL {
+            return;
+        }
+        self.runtime.last_git_status_poll = now;
+
+        match krusty_core::git::status(&self.runtime.working_dir) {
+            Ok(new_status) => {
+                if self.runtime.git_status.as_ref() != new_status.as_ref() {
+                    self.runtime.git_status = new_status;
+                    self.ui.needs_redraw = true;
+                }
+            }
+            Err(err) => {
+                tracing::debug!("Failed to poll git status: {}", err);
+                if self.runtime.git_status.take().is_some() {
+                    self.ui.needs_redraw = true;
+                }
+            }
+        }
     }
 
     /// Process actions returned from polling operations

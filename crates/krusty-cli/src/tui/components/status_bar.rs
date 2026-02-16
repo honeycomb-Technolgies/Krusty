@@ -20,6 +20,7 @@ pub fn render_status_bar(
     theme: &Theme,
     model: &str,
     cwd: &Path,
+    git_status: Option<&krusty_core::git::GitStatusSummary>,
     context_tokens: Option<(usize, usize)>, // (used, max)
     running_processes: usize,
     process_elapsed: Option<Duration>,
@@ -41,6 +42,37 @@ pub fn render_status_bar(
 
     // Calculate left width: space + cwd + " │ " + model
     let mut left_width: u16 = 1 + cwd_display.width() as u16 + 3 + model_short.width() as u16;
+
+    // Git summary in compact diff format:
+    // 50 files +5162 -700
+    // Hidden when there are no branch/local changes.
+    if let Some(git) = git_status {
+        let has_changes =
+            git.total_changes() > 0 || git.branch_additions > 0 || git.branch_deletions > 0;
+        if has_changes {
+            let files_text = format!("{} files ", git.branch_files);
+            let plus_text = format!("+{}", git.branch_additions);
+            let minus_text = format!(" -{}", git.branch_deletions);
+
+            left_width += 3
+                + files_text.width() as u16
+                + plus_text.width() as u16
+                + minus_text.width() as u16;
+            left_spans.push(Span::styled(" │ ", Style::default().fg(theme.dim_color)));
+            left_spans.push(Span::styled(
+                files_text,
+                Style::default().fg(theme.dim_color),
+            ));
+            left_spans.push(Span::styled(
+                plus_text,
+                Style::default().fg(theme.success_color),
+            ));
+            left_spans.push(Span::styled(
+                minus_text,
+                Style::default().fg(theme.error_color),
+            ));
+        }
+    }
 
     // Add context indicator if available (fixed width to prevent flashing)
     if let Some((used, max)) = context_tokens {

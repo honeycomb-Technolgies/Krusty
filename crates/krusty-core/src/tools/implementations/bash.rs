@@ -32,7 +32,7 @@ impl Tool for BashTool {
     }
 
     fn description(&self) -> &str {
-        "Execute shell commands for git, build tools (cargo/npm/make), and system utilities. \
+        "Execute shell commands for git, build tools (cargo/bun/make), and system utilities. \
          For file operations use specialized tools: Read, Write, Edit, Glob, Grep. \
          Set run_in_background:true for servers/watchers."
     }

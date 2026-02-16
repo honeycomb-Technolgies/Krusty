@@ -2,7 +2,7 @@
 
 use anyhow::{anyhow, Result};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use tokio::sync::mpsc;
 use tracing::{debug, info};
 
@@ -146,6 +146,8 @@ fn check_for_updates_dev(repo_path: &PathBuf) -> Result<Option<UpdateInfo>> {
     let fetch_status = Command::new("git")
         .args(["fetch", "origin", "main", "--quiet"])
         .current_dir(repo_path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()?;
 
     if !fetch_status.success() {

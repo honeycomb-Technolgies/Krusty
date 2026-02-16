@@ -3,11 +3,13 @@
 //! Handles SSE streaming responses from different providers.
 
 use anyhow::Result;
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt};
 use serde_json::Value;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, error, info, warn};
+use url::Url;
 
 use super::config::CallOptions;
 use super::core::{AiClient, KRUSTY_SYSTEM_PROMPT};
@@ -254,6 +256,9 @@ impl AiClient {
                 "Using ChatGPT Codex format for {} (OAuth)",
                 self.config().model
             );
+            return self
+                .call_streaming_chatgpt_codex_ws(messages, options, call_start)
+                .await;
         } else {
             info!(
                 "Using OpenAI chat/completions format for {}",
@@ -286,68 +291,53 @@ impl AiClient {
 
         let max_tokens = options.max_tokens.unwrap_or(self.config().max_tokens);
 
-        // Build request body based on API type
-        let body = if is_chatgpt_codex {
-            // ChatGPT Codex API format (different from standard Responses API)
-            self.build_chatgpt_codex_body(
-                &messages,
-                &system_prompt,
-                max_tokens,
-                options,
-                &format_handler,
-            )
+        // Standard OpenAI format (Chat Completions or Responses API)
+        let openai_messages = format_handler.convert_messages(&messages, Some(self.provider_id()));
+
+        // Responses API uses "input", Chat Completions uses "messages"
+        let (messages_key, max_tokens_key) = if matches!(
+            self.config().api_format,
+            crate::ai::models::ApiFormat::OpenAIResponses
+        ) {
+            ("input", "max_output_tokens")
         } else {
-            // Standard OpenAI format (Chat Completions or Responses API)
-            let openai_messages =
-                format_handler.convert_messages(&messages, Some(self.provider_id()));
-
-            // Responses API uses "input", Chat Completions uses "messages"
-            let (messages_key, max_tokens_key) = if matches!(
-                self.config().api_format,
-                crate::ai::models::ApiFormat::OpenAIResponses
-            ) {
-                ("input", "max_output_tokens")
-            } else {
-                ("messages", "max_tokens")
-            };
-
-            let mut body = serde_json::json!({
-                "model": self.config().model,
-                "stream": true,
-            });
-            body[max_tokens_key] = serde_json::json!(max_tokens);
-            body[messages_key] = serde_json::json!(openai_messages);
-
-            // Add system message at the start
-            if let Some(sys) = system_prompt {
-                if let Some(msgs) = body.get_mut(messages_key).and_then(|m| m.as_array_mut()) {
-                    msgs.insert(
-                        0,
-                        serde_json::json!({
-                            "role": "system",
-                            "content": sys
-                        }),
-                    );
-                }
-            }
-
-            // Add temperature
-            if options.thinking.is_none() {
-                if let Some(temp) = options.temperature {
-                    body["temperature"] = serde_json::json!(temp);
-                }
-            }
-
-            // Add tools
-            if let Some(tools) = &options.tools {
-                let openai_tools = format_handler.convert_tools(tools);
-                if !openai_tools.is_empty() {
-                    body["tools"] = serde_json::json!(openai_tools);
-                }
-            }
-
-            body
+            ("messages", "max_tokens")
         };
+
+        let mut body = serde_json::json!({
+            "model": self.config().model,
+            "stream": true,
+        });
+        body[max_tokens_key] = serde_json::json!(max_tokens);
+        body[messages_key] = serde_json::json!(openai_messages);
+
+        // Add system message at the start
+        if let Some(sys) = system_prompt {
+            if let Some(msgs) = body.get_mut(messages_key).and_then(|m| m.as_array_mut()) {
+                msgs.insert(
+                    0,
+                    serde_json::json!({
+                        "role": "system",
+                        "content": sys
+                    }),
+                );
+            }
+        }
+
+        // Add temperature
+        if options.thinking.is_none() {
+            if let Some(temp) = options.temperature {
+                body["temperature"] = serde_json::json!(temp);
+            }
+        }
+
+        // Add tools
+        if let Some(tools) = &options.tools {
+            let openai_tools = format_handler.convert_tools(tools);
+            if !openai_tools.is_empty() {
+                body["tools"] = serde_json::json!(openai_tools);
+            }
+        }
 
         debug!("OpenAI request to: {}", self.config().api_url());
 
@@ -397,6 +387,286 @@ impl AiClient {
                 }
             }
             info!("OpenAI stream ended after {} chunks", chunk_count);
+            processor.finish().await;
+        });
+
+        Ok(rx)
+    }
+
+    /// Streaming call for ChatGPT Codex over WebSocket (no SSE fallback).
+    async fn call_streaming_chatgpt_codex_ws(
+        &self,
+        messages: Vec<ModelMessage>,
+        options: &CallOptions,
+        call_start: Instant,
+    ) -> Result<mpsc::UnboundedReceiver<StreamPart>> {
+        let format_handler = OpenAIFormat::new(self.config().api_format);
+
+        let system: String = messages
+            .iter()
+            .filter(|m| m.role == Role::System)
+            .filter_map(|m| {
+                m.content.iter().find_map(|c| match c {
+                    Content::Text { text } => Some(text.clone()),
+                    _ => None,
+                })
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        let system_prompt = if !system.is_empty() {
+            Some(format!("{}\n\n{}", KRUSTY_SYSTEM_PROMPT, system))
+        } else if options.system_prompt.is_some() {
+            options.system_prompt.clone()
+        } else {
+            Some(KRUSTY_SYSTEM_PROMPT.to_string())
+        };
+
+        let max_tokens = options.max_tokens.unwrap_or(self.config().max_tokens);
+        let body = self.build_chatgpt_codex_body(
+            &messages,
+            &system_prompt,
+            max_tokens,
+            options,
+            &format_handler,
+        );
+
+        let ws_url = Self::resolve_codex_ws_url(&self.config().api_url())?;
+        let mut request = self.build_websocket_request(
+            ws_url.as_str(),
+            &[
+                ("OpenAI-Beta", "responses_websockets=2026-02-06"),
+                ("originator", "krusty"),
+            ],
+        )?;
+        if let Some(session_id) = &options.session_id {
+            match session_id.parse::<tokio_tungstenite::tungstenite::http::HeaderValue>() {
+                Ok(value) => {
+                    request.headers_mut().insert("session_id", value);
+                }
+                Err(e) => {
+                    warn!("Invalid Codex session_id header '{}': {}", session_id, e);
+                }
+            }
+        }
+
+        info!("Connecting ChatGPT Codex websocket: {}", ws_url);
+        let (mut ws_stream, _) = match connect_async(request).await {
+            Ok(pair) => pair,
+            Err(e) => {
+                warn!(
+                    "ChatGPT Codex websocket connect failed ({}), falling back to HTTP streaming",
+                    e
+                );
+                return self
+                    .call_streaming_chatgpt_codex_http(body, call_start)
+                    .await;
+            }
+        };
+        info!(
+            "ChatGPT Codex websocket connected in {:?}",
+            call_start.elapsed()
+        );
+
+        let create_payload = Self::codex_ws_create_payload(body.clone());
+        if let Err(e) = ws_stream
+            .send(Message::Text(create_payload.to_string()))
+            .await
+        {
+            warn!(
+                "ChatGPT Codex websocket send failed ({}), falling back to HTTP streaming",
+                e
+            );
+            return self
+                .call_streaming_chatgpt_codex_http(body, call_start)
+                .await;
+        }
+
+        let first_ws_message = (tokio::time::timeout(Duration::from_secs(2), ws_stream.next())
+            .await)
+            .unwrap_or_default();
+
+        if matches!(
+            first_ws_message,
+            Some(Ok(Message::Close(_))) | Some(Err(_)) | None
+        ) {
+            warn!(
+                "ChatGPT Codex websocket closed before first event, falling back to HTTP streaming"
+            );
+            return self
+                .call_streaming_chatgpt_codex_http(body, call_start)
+                .await;
+        }
+
+        let (tx, rx, buffer_tx, buffer_rx) = create_streaming_channels();
+        spawn_buffer_processor(buffer_rx, tx.clone());
+        let tx_err = tx.clone();
+
+        let mut processor = SseStreamProcessor::new(tx, buffer_tx);
+        let parser = OpenAIParser::new();
+
+        tokio::spawn(async move {
+            let (_write, mut read) = ws_stream.split();
+
+            let mut saw_completion = false;
+            let mut pending_first = first_ws_message;
+
+            loop {
+                let msg = if let Some(msg) = pending_first.take() {
+                    msg
+                } else {
+                    match read.next().await {
+                        Some(msg) => msg,
+                        None => break,
+                    }
+                };
+
+                match msg {
+                    Ok(Message::Text(text)) => {
+                        let payload = text.to_string();
+                        if let Ok(json) = serde_json::from_str::<Value>(&payload) {
+                            let event_type =
+                                json.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                            if matches!(event_type, "error" | "response.failed")
+                                || event_type.contains("error")
+                            {
+                                let detail = Self::codex_ws_error_message(&json)
+                                    .unwrap_or_else(|| "unknown websocket error".to_string());
+                                let _ = tx_err.send(StreamPart::Error {
+                                    error: format!("Codex websocket API error: {}", detail),
+                                });
+                                break;
+                            }
+                            if matches!(event_type, "response.done" | "response.completed") {
+                                saw_completion = true;
+                            }
+                        }
+                        if let Err(e) = processor.process_sse_data(&payload, &parser).await {
+                            let _ = tx_err.send(StreamPart::Error {
+                                error: format!("Codex websocket parsing error: {}", e),
+                            });
+                            break;
+                        }
+                        if saw_completion {
+                            break;
+                        }
+                    }
+                    Ok(Message::Binary(bytes)) => {
+                        let payload = String::from_utf8_lossy(&bytes).to_string();
+                        if let Ok(json) = serde_json::from_str::<Value>(&payload) {
+                            let event_type =
+                                json.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                            if matches!(event_type, "error" | "response.failed")
+                                || event_type.contains("error")
+                            {
+                                let detail = Self::codex_ws_error_message(&json)
+                                    .unwrap_or_else(|| "unknown websocket error".to_string());
+                                let _ = tx_err.send(StreamPart::Error {
+                                    error: format!("Codex websocket API error: {}", detail),
+                                });
+                                break;
+                            }
+                            if matches!(event_type, "response.done" | "response.completed") {
+                                saw_completion = true;
+                            }
+                        }
+                        if let Err(e) = processor.process_sse_data(&payload, &parser).await {
+                            let _ = tx_err.send(StreamPart::Error {
+                                error: format!("Codex websocket parsing error: {}", e),
+                            });
+                            break;
+                        }
+                        if saw_completion {
+                            break;
+                        }
+                    }
+                    Ok(Message::Close(frame)) => {
+                        if !saw_completion {
+                            let (code, reason) = frame
+                                .as_ref()
+                                .map(|f| (f.code.to_string(), f.reason.to_string()))
+                                .unwrap_or_else(|| {
+                                    ("no close code".to_string(), "no close reason".to_string())
+                                });
+                            let _ = tx_err.send(StreamPart::Error {
+                                error: format!(
+                                    "Codex websocket closed before completion (websocket-only mode): code={}, reason={}",
+                                    code, reason
+                                ),
+                            });
+                        }
+                        break;
+                    }
+                    Ok(Message::Ping(_)) | Ok(Message::Pong(_)) => {}
+                    Ok(Message::Frame(_)) => {}
+                    Err(e) => {
+                        let _ = tx_err.send(StreamPart::Error {
+                            error: format!("Codex websocket stream error: {}", e),
+                        });
+                        break;
+                    }
+                }
+            }
+
+            processor.finish().await;
+        });
+
+        Ok(rx)
+    }
+
+    async fn call_streaming_chatgpt_codex_http(
+        &self,
+        body: Value,
+        call_start: Instant,
+    ) -> Result<mpsc::UnboundedReceiver<StreamPart>> {
+        let request = self
+            .build_request(&self.config().api_url())
+            .header("OpenAI-Beta", "responses=experimental");
+
+        info!("Falling back to ChatGPT Codex HTTP streaming");
+        let response = request.json(&body).send().await?;
+        let request_duration = call_start.elapsed();
+
+        let status = response.status();
+        info!(
+            "ChatGPT Codex HTTP response: {} in {:?}",
+            status, request_duration
+        );
+
+        if !status.is_success() {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(anyhow::anyhow!(
+                "ChatGPT Codex HTTP fallback error: {} - {}",
+                status,
+                error_text
+            ));
+        }
+
+        let (tx, rx, buffer_tx, buffer_rx) = create_streaming_channels();
+        spawn_buffer_processor(buffer_rx, tx.clone());
+        let mut processor = SseStreamProcessor::new(tx, buffer_tx);
+        let parser = OpenAIParser::new();
+
+        let stream = response.bytes_stream();
+        tokio::spawn(async move {
+            tokio::pin!(stream);
+            while let Some(chunk) = stream.next().await {
+                match chunk {
+                    Ok(bytes) => {
+                        if let Err(e) = processor.process_chunk(bytes, &parser).await {
+                            warn!("Codex HTTP fallback stream parse error: {}", e);
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Codex HTTP fallback stream read error: {}", e);
+                        break;
+                    }
+                }
+            }
             processor.finish().await;
         });
 
@@ -729,6 +999,96 @@ impl AiClient {
         beta_headers
     }
 
+    fn resolve_codex_ws_url(api_url: &str) -> Result<Url> {
+        let mut url = Url::parse(api_url)
+            .map_err(|e| anyhow::anyhow!("Invalid Codex API URL '{}': {}", api_url, e))?;
+
+        url.set_scheme(if url.scheme() == "https" { "wss" } else { "ws" })
+            .map_err(|_| anyhow::anyhow!("Failed to set websocket scheme for '{}'", api_url))?;
+
+        Ok(url)
+    }
+
+    pub(crate) fn codex_ws_create_payload(body: Value) -> Value {
+        match body {
+            Value::Object(mut object) => {
+                object.insert(
+                    "type".to_string(),
+                    Value::String("response.create".to_string()),
+                );
+                Value::Object(object)
+            }
+            other => serde_json::json!({
+                "type": "response.create",
+                "response": other
+            }),
+        }
+    }
+
+    pub(crate) fn codex_ws_error_message(event: &Value) -> Option<String> {
+        if let Some(message) = event.get("message").and_then(|m| m.as_str()) {
+            if !message.is_empty() {
+                return Some(message.to_string());
+            }
+        }
+
+        if let Some(message) = event
+            .pointer("/error/message")
+            .and_then(|m| m.as_str())
+            .or_else(|| {
+                event
+                    .pointer("/response/error/message")
+                    .and_then(|m| m.as_str())
+            })
+            .or_else(|| {
+                event
+                    .pointer("/response/status_details/error/message")
+                    .and_then(|m| m.as_str())
+            })
+        {
+            if !message.is_empty() {
+                return Some(message.to_string());
+            }
+        }
+
+        if let Some(error_text) = event.get("error").and_then(|e| e.as_str()) {
+            if !error_text.is_empty() {
+                return Some(error_text.to_string());
+            }
+        }
+
+        let error_type = event
+            .pointer("/error/type")
+            .and_then(|t| t.as_str())
+            .or_else(|| {
+                event
+                    .pointer("/response/error/type")
+                    .and_then(|t| t.as_str())
+            });
+        let error_code = event
+            .pointer("/error/code")
+            .and_then(|t| t.as_str())
+            .or_else(|| {
+                event
+                    .pointer("/response/error/code")
+                    .and_then(|t| t.as_str())
+            });
+        match (error_type, error_code) {
+            (Some(error_type), Some(error_code))
+                if !error_type.is_empty() || !error_code.is_empty() =>
+            {
+                Some(format!("{} ({})", error_type, error_code))
+            }
+            (Some(error_type), None) if !error_type.is_empty() => Some(error_type.to_string()),
+            (None, Some(error_code)) if !error_code.is_empty() => Some(error_code.to_string()),
+            _ => None,
+        }
+    }
+
+    fn codex_prompt_cache_key(options: &CallOptions) -> Option<String> {
+        options.session_id.clone()
+    }
+
     /// Build request body for ChatGPT Codex API
     ///
     /// ChatGPT Codex has a completely different format than standard OpenAI APIs.
@@ -861,11 +1221,14 @@ impl AiClient {
             }
         }
 
-        // Generate a cache key UUID
-        let cache_key = uuid::Uuid::new_v4().to_string();
+        let prompt_cache_key = Self::codex_prompt_cache_key(options);
 
         // Determine if thinking/reasoning is enabled
         let thinking_enabled = options.thinking.is_some();
+        let reasoning_effort = options
+            .codex_reasoning_effort
+            .unwrap_or(super::config::CodexReasoningEffort::Medium)
+            .as_str();
 
         // Build Codex request body - exact format from reverse-engineering
         let mut body = serde_json::json!({
@@ -874,22 +1237,32 @@ impl AiClient {
             "input": input_messages,
             "tools": [],
             "tool_choice": "auto",
-            "parallel_tool_calls": false,
+            "parallel_tool_calls": options.codex_parallel_tool_calls,
             "store": false,
             "stream": true,
-            "prompt_cache_key": cache_key
+            "include": [],
+            "text": {
+                "verbosity": "medium"
+            }
         });
 
+        if let Some(cache_key) = prompt_cache_key {
+            body["prompt_cache_key"] = serde_json::json!(cache_key);
+        }
+
         // Add reasoning config based on thinking toggle
-        // When enabled: use maximum reasoning (xhigh) with auto summary
+        // When enabled: map to configured Codex effort with auto summary
         // When disabled: no reasoning
         if thinking_enabled {
             body["reasoning"] = serde_json::json!({
-                "effort": "xhigh",
+                "effort": reasoning_effort,
                 "summary": "auto"
             });
             body["include"] = serde_json::json!(["reasoning.encrypted_content"]);
-            debug!("ChatGPT Codex: reasoning enabled (effort=xhigh, summary=auto)");
+            debug!(
+                "ChatGPT Codex: reasoning enabled (effort={}, summary=auto)",
+                reasoning_effort
+            );
         } else {
             debug!("ChatGPT Codex: reasoning disabled");
         }

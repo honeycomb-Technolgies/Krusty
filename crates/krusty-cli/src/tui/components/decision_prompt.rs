@@ -22,6 +22,10 @@ pub enum PromptType {
     PlanConfirm,
     /// AskUserQuestion tool from Claude
     AskUserQuestion,
+    /// Tool approval in supervised permission mode
+    ToolApproval,
+    /// Permission mode selection
+    PermissionSelect,
 }
 
 /// A single option in a question
@@ -160,6 +164,65 @@ impl DecisionPrompt {
         self.answers.clear();
         self.prompt_type = PromptType::AskUserQuestion;
         self.tool_use_id = Some(tool_use_id);
+        self.custom_input_mode = false;
+        self.visible = true;
+    }
+
+    /// Show tool approval prompt (supervised mode)
+    pub fn show_tool_approval(&mut self, tool_names: Vec<String>, tool_use_ids: Vec<String>) {
+        let question = PromptQuestion {
+            question: format!("Approve execution of: {}?", tool_names.join(", ")),
+            header: "Permission".to_string(),
+            options: vec![
+                PromptOption {
+                    label: "Approve".to_string(),
+                    description: Some("Execute the tool(s)".to_string()),
+                },
+                PromptOption {
+                    label: "Deny".to_string(),
+                    description: Some("Block execution".to_string()),
+                },
+            ],
+            multi_select: false,
+        };
+        self.questions = vec![question];
+        self.current_index = 0;
+        self.selected_option = 0;
+        self.scroll_offset = 0;
+        self.toggled_options.clear();
+        self.answers.clear();
+        self.prompt_type = PromptType::ToolApproval;
+        // Store first tool_use_id; the rest are carried by the caller
+        self.tool_use_id = tool_use_ids.into_iter().next();
+        self.custom_input_mode = false;
+        self.visible = true;
+    }
+
+    /// Show permission mode selection prompt
+    pub fn show_permission_select(&mut self, current_is_supervised: bool) {
+        let question = PromptQuestion {
+            question: "Select permission mode".to_string(),
+            header: "Permissions".to_string(),
+            options: vec![
+                PromptOption {
+                    label: "Supervised".to_string(),
+                    description: Some("Approve write tools before execution".to_string()),
+                },
+                PromptOption {
+                    label: "Autonomous".to_string(),
+                    description: Some("Auto-execute all tools".to_string()),
+                },
+            ],
+            multi_select: false,
+        };
+        self.questions = vec![question];
+        self.current_index = 0;
+        self.selected_option = if current_is_supervised { 0 } else { 1 };
+        self.scroll_offset = 0;
+        self.toggled_options.clear();
+        self.answers.clear();
+        self.prompt_type = PromptType::PermissionSelect;
+        self.tool_use_id = None;
         self.custom_input_mode = false;
         self.visible = true;
     }

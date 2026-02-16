@@ -3,10 +3,13 @@
 //! Non-streaming calls with tool support, used by sub-agents.
 
 use anyhow::Result;
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::time::Instant;
+use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, error, info};
+use url::Url;
 
 use super::core::AiClient;
 use crate::ai::format::response::{
@@ -164,7 +167,7 @@ impl AiClient {
         }));
 
         // Convert each message
-        for msg in messages {
+        for msg in &messages {
             let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("user");
             let content = msg.get("content");
 
@@ -339,7 +342,7 @@ impl AiClient {
         // Convert messages from Anthropic to Codex format
         let mut codex_input: Vec<Value> = vec![];
 
-        for msg in messages {
+        for msg in &messages {
             let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("user");
             let content = msg.get("content");
 
@@ -462,61 +465,63 @@ impl AiClient {
             })
             .collect();
 
-        // Generate cache key
-        let cache_key = uuid::Uuid::new_v4().to_string();
-
-        // Build Codex request body - MUST use stream=true (Codex API requirement)
         let mut body = serde_json::json!({
             "model": model,
             "instructions": system_prompt,
             "input": codex_input,
             "tools": codex_tools,
             "tool_choice": "auto",
-            "parallel_tool_calls": false,
+            "parallel_tool_calls": true,
             "store": false,
-            "stream": true,  // Codex API REQUIRES streaming
-            "prompt_cache_key": cache_key
+            "stream": true,
+            "text": {
+                "verbosity": "medium"
+            }
         });
 
-        // Add reasoning when thinking is enabled (xhigh effort for maximum reasoning)
         if thinking_enabled {
             body["reasoning"] = serde_json::json!({
-                "effort": "xhigh",
+                "effort": "medium",
                 "summary": "auto"
             });
             body["include"] = serde_json::json!(["reasoning.encrypted_content"]);
         }
 
-        // Remove tools if empty
         if codex_tools.is_empty() {
             body.as_object_mut().unwrap().remove("tools");
             body.as_object_mut().unwrap().remove("tool_choice");
         }
 
-        let request = self.build_request(&self.config().api_url());
-        let response = match request.json(&body).send().await {
-            Ok(r) => r,
-            Err(e) => {
-                error!(error = %e, elapsed_ms = start.elapsed().as_millis() as u64, "Sub-agent Codex API request failed");
-                return Err(anyhow::anyhow!("API request failed: {}", e));
-            }
-        };
+        let ws_url = Self::resolve_codex_ws_url_for_tools(&self.config().api_url())?;
+        let request = self.build_websocket_request(
+            ws_url.as_str(),
+            &[
+                ("OpenAI-Beta", "responses_websockets=2026-02-06"),
+                ("originator", "krusty"),
+            ],
+        )?;
 
-        let status = response.status();
-        info!(status = %status, elapsed_ms = start.elapsed().as_millis() as u64, "Sub-agent Codex API streaming response started");
+        info!("Connecting sub-agent Codex websocket: {}", ws_url);
+        let (mut ws_stream, _) = connect_async(request).await.map_err(|e| {
+            anyhow::anyhow!(
+                "Sub-agent Codex websocket connection failed (websocket-only mode): {}",
+                e
+            )
+        })?;
 
-        if !status.is_success() {
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            error!("API error response: {} - {}", status, error_text);
-            return Err(anyhow::anyhow!("API error: {} - {}", status, error_text));
-        }
+        let create_payload = Self::codex_ws_create_payload(body);
+        ws_stream
+            .send(Message::Text(create_payload.to_string()))
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Sub-agent Codex websocket request send failed (websocket-only mode): {}",
+                    e
+                )
+            })?;
 
-        // Collect the streaming response
         let collected_response = self
-            .collect_codex_streaming_response(response, model)
+            .collect_codex_websocket_response(&mut ws_stream, model)
             .await?;
 
         info!(
@@ -526,146 +531,173 @@ impl AiClient {
         Ok(collected_response)
     }
 
-    /// Collect a streaming Codex response into a single Anthropic-format response
-    async fn collect_codex_streaming_response(
+    /// Collect a websocket Codex response into a single Anthropic-format response.
+    async fn collect_codex_websocket_response<S>(
         &self,
-        response: reqwest::Response,
+        stream: &mut S,
         model: &str,
-    ) -> Result<Value> {
+    ) -> Result<Value>
+    where
+        S: futures::Stream<
+                Item = std::result::Result<Message, tokio_tungstenite::tungstenite::Error>,
+            > + Unpin,
+    {
         let mut text_content = String::new();
-        let mut tool_calls: Vec<Value> = vec![];
-        let mut current_tool_id = String::new();
-        let mut current_tool_name = String::new();
-        let mut current_tool_args = String::new();
-        let mut stop_reason = "end_turn".to_string();
+        let mut tool_order: Vec<String> = Vec::new();
+        let mut pending_tools: HashMap<String, (String, String)> = HashMap::new();
+        let mut item_to_call_id: HashMap<String, String> = HashMap::new();
+        let mut saw_completion = false;
+        let mut finish_reason = "end_turn".to_string();
 
-        let mut stream = response.bytes_stream();
-        let mut buffer = String::new();
-
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk?;
-            let chunk_str = String::from_utf8_lossy(&chunk);
-            buffer.push_str(&chunk_str);
-
-            // Process complete SSE lines
-            while let Some(newline_pos) = buffer.find('\n') {
-                let line = buffer[..newline_pos].trim().to_string();
-                buffer = buffer[newline_pos + 1..].to_string();
-
-                if line.is_empty() || line == "data: [DONE]" {
-                    continue;
+        while let Some(msg) = stream.next().await {
+            let payload = match msg? {
+                Message::Text(text) => text.to_string(),
+                Message::Binary(bytes) => String::from_utf8_lossy(&bytes).to_string(),
+                Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => continue,
+                Message::Close(frame) => {
+                    if !saw_completion {
+                        let (code, reason) = frame
+                            .as_ref()
+                            .map(|f| (f.code.to_string(), f.reason.to_string()))
+                            .unwrap_or_else(|| {
+                                ("no close code".to_string(), "no close reason".to_string())
+                            });
+                        return Err(anyhow::anyhow!(
+                            "Sub-agent Codex websocket closed before completion (websocket-only mode): code={}, reason={}",
+                            code, reason
+                        ));
+                    }
+                    break;
                 }
+            };
 
-                if let Some(data) = line.strip_prefix("data: ") {
-                    if let Ok(json) = serde_json::from_str::<Value>(data) {
-                        let event_type = json.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            let Ok(json) = serde_json::from_str::<Value>(&payload) else {
+                continue;
+            };
 
-                        match event_type {
-                            "response.output_text.delta" => {
-                                if let Some(delta) = json.get("delta").and_then(|d| d.as_str()) {
-                                    text_content.push_str(delta);
+            let event_type = json.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            match event_type {
+                "error" | "response.failed" => {
+                    let message = Self::codex_ws_error_message(&json)
+                        .unwrap_or_else(|| "unknown websocket error".to_string());
+                    return Err(anyhow::anyhow!(
+                        "Sub-agent Codex websocket API error: {}",
+                        message
+                    ));
+                }
+                "response.output_text.delta" => {
+                    if let Some(delta) = json.get("delta").and_then(|d| d.as_str()) {
+                        text_content.push_str(delta);
+                    }
+                }
+                "response.output_item.added" | "response.output_item.done" => {
+                    if let Some(item) = json.get("item") {
+                        if item.get("type").and_then(|t| t.as_str()) != Some("function_call") {
+                            continue;
+                        }
+                        let call_id = item
+                            .get("call_id")
+                            .and_then(|i| i.as_str())
+                            .or_else(|| item.get("id").and_then(|i| i.as_str()))
+                            .unwrap_or("")
+                            .to_string();
+                        if call_id.is_empty() {
+                            continue;
+                        }
+                        if let Some(item_id) = item
+                            .get("id")
+                            .and_then(|i| i.as_str())
+                            .filter(|id| !id.is_empty())
+                        {
+                            item_to_call_id.insert(item_id.to_string(), call_id.clone());
+                        }
+
+                        let name = item
+                            .get("name")
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        if !pending_tools.contains_key(&call_id) {
+                            tool_order.push(call_id.clone());
+                            pending_tools.insert(call_id.clone(), (name.clone(), String::new()));
+                            debug!("Sub-agent Codex tool call start: {} ({})", name, call_id);
+                        }
+
+                        if let Some(arguments) = item.get("arguments").and_then(|a| a.as_str()) {
+                            if let Some((_, args_buf)) = pending_tools.get_mut(&call_id) {
+                                if args_buf.is_empty() {
+                                    args_buf.push_str(arguments);
                                 }
                             }
-                            "response.output_item.added" => {
-                                if let Some(item) = json.get("item") {
-                                    if item.get("type").and_then(|t| t.as_str())
-                                        == Some("function_call")
-                                    {
-                                        current_tool_id = item
-                                            .get("call_id")
-                                            .and_then(|i| i.as_str())
-                                            .unwrap_or("")
-                                            .to_string();
-                                        current_tool_name = item
-                                            .get("name")
-                                            .and_then(|n| n.as_str())
-                                            .unwrap_or("")
-                                            .to_string();
-                                        current_tool_args.clear();
-                                        debug!(
-                                            "Codex tool call start: {} ({})",
-                                            current_tool_name, current_tool_id
-                                        );
-                                    }
-                                }
-                            }
-                            "response.function_call_arguments.delta" => {
-                                if let Some(delta) = json.get("delta").and_then(|d| d.as_str()) {
-                                    current_tool_args.push_str(delta);
-                                }
-                            }
-                            "response.function_call_arguments.done" => {
-                                // Get final arguments if provided
-                                if let Some(args) = json.get("arguments").and_then(|a| a.as_str()) {
-                                    if current_tool_args.is_empty() {
-                                        current_tool_args = args.to_string();
-                                    }
-                                }
-                                // Complete the tool call
-                                if !current_tool_name.is_empty() {
-                                    let input: Value = serde_json::from_str(&current_tool_args)
-                                        .unwrap_or(Value::Null);
-                                    tool_calls.push(serde_json::json!({
-                                        "type": "tool_use",
-                                        "id": current_tool_id,
-                                        "name": current_tool_name,
-                                        "input": input
-                                    }));
-                                    debug!(
-                                        "Codex tool call complete: {} args_len={}",
-                                        current_tool_name,
-                                        current_tool_args.len()
-                                    );
-                                    stop_reason = "tool_use".to_string();
-                                    current_tool_name.clear();
-                                    current_tool_id.clear();
-                                    current_tool_args.clear();
-                                }
-                            }
-                            "response.done" | "response.completed" => {
-                                // Finalize any pending tool call
-                                if !current_tool_name.is_empty() {
-                                    let input: Value = serde_json::from_str(&current_tool_args)
-                                        .unwrap_or(Value::Null);
-                                    tool_calls.push(serde_json::json!({
-                                        "type": "tool_use",
-                                        "id": current_tool_id,
-                                        "name": current_tool_name,
-                                        "input": input
-                                    }));
-                                    stop_reason = "tool_use".to_string();
-                                }
-                            }
-                            "response.usage" => {
-                                // Log usage for sub-agents (handle both naming conventions)
-                                let usage_obj = json.get("usage").unwrap_or(&json);
-                                let input_tokens = usage_obj
-                                    .get("input_tokens")
-                                    .or_else(|| usage_obj.get("input"))
-                                    .and_then(|t| t.as_u64())
-                                    .unwrap_or(0);
-                                let output_tokens = usage_obj
-                                    .get("output_tokens")
-                                    .or_else(|| usage_obj.get("output"))
-                                    .and_then(|t| t.as_u64())
-                                    .unwrap_or(0);
-                                if input_tokens > 0 || output_tokens > 0 {
-                                    debug!(
-                                        "Sub-agent Codex usage: input={}, output={}",
-                                        input_tokens, output_tokens
-                                    );
-                                }
-                            }
-                            _ => {}
                         }
                     }
                 }
+                "response.function_call_arguments.delta" => {
+                    if let Some(delta) = json.get("delta").and_then(|d| d.as_str()) {
+                        if let Some(call_id) = Self::resolve_codex_tool_call_id(
+                            &json,
+                            &item_to_call_id,
+                            &pending_tools,
+                        ) {
+                            if let Some((_, args_buf)) = pending_tools.get_mut(&call_id) {
+                                args_buf.push_str(delta);
+                            }
+                        }
+                    }
+                }
+                "response.function_call_arguments.done" => {
+                    if let Some(call_id) =
+                        Self::resolve_codex_tool_call_id(&json, &item_to_call_id, &pending_tools)
+                    {
+                        if let Some(arguments) = json.get("arguments").and_then(|a| a.as_str()) {
+                            if let Some((_, args_buf)) = pending_tools.get_mut(&call_id) {
+                                if args_buf.is_empty() {
+                                    args_buf.push_str(arguments);
+                                }
+                            }
+                        }
+                    }
+                }
+                "response.usage" => {
+                    let usage_obj = json.get("usage").unwrap_or(&json);
+                    let input_tokens = usage_obj
+                        .get("input_tokens")
+                        .or_else(|| usage_obj.get("input"))
+                        .and_then(|t| t.as_u64())
+                        .unwrap_or(0);
+                    let output_tokens = usage_obj
+                        .get("output_tokens")
+                        .or_else(|| usage_obj.get("output"))
+                        .and_then(|t| t.as_u64())
+                        .unwrap_or(0);
+                    if input_tokens > 0 || output_tokens > 0 {
+                        debug!(
+                            "Sub-agent Codex usage: input={}, output={}",
+                            input_tokens, output_tokens
+                        );
+                    }
+                }
+                "response.done" | "response.completed" => {
+                    saw_completion = true;
+                    if let Some(response) = json.get("response") {
+                        if response.get("status").and_then(|s| s.as_str()) == Some("incomplete") {
+                            let reason = response
+                                .get("incomplete_details")
+                                .and_then(|d| d.get("reason"))
+                                .and_then(|r| r.as_str())
+                                .unwrap_or("incomplete");
+                            if matches!(reason, "max_output_tokens" | "max_tokens" | "length") {
+                                finish_reason = "max_tokens".to_string();
+                            }
+                        }
+                    }
+                    break;
+                }
+                _ => {}
             }
         }
 
-        // Build Anthropic-format response
         let mut content: Vec<Value> = vec![];
-
         if !text_content.is_empty() {
             content.push(serde_json::json!({
                 "type": "text",
@@ -673,13 +705,95 @@ impl AiClient {
             }));
         }
 
-        content.extend(tool_calls);
+        let mut has_tool_calls = false;
+        for call_id in tool_order {
+            if let Some((name, args_json)) = pending_tools.remove(&call_id) {
+                let input = if args_json.is_empty() {
+                    serde_json::json!({})
+                } else {
+                    serde_json::from_str::<Value>(&args_json)
+                        .unwrap_or_else(|_| serde_json::json!({ "raw": args_json }))
+                };
+                content.push(serde_json::json!({
+                    "type": "tool_use",
+                    "id": call_id,
+                    "name": name,
+                    "input": input
+                }));
+                has_tool_calls = true;
+            }
+        }
+        for (call_id, (name, args_json)) in pending_tools {
+            let input = if args_json.is_empty() {
+                serde_json::json!({})
+            } else {
+                serde_json::from_str::<Value>(&args_json)
+                    .unwrap_or_else(|_| serde_json::json!({ "raw": args_json }))
+            };
+            content.push(serde_json::json!({
+                "type": "tool_use",
+                "id": call_id,
+                "name": name,
+                "input": input
+            }));
+            has_tool_calls = true;
+        }
+
+        if has_tool_calls {
+            finish_reason = "tool_use".to_string();
+        }
+
+        if !saw_completion {
+            return Err(anyhow::anyhow!(
+                "Sub-agent Codex websocket ended before response completion (websocket-only mode)"
+            ));
+        }
 
         Ok(serde_json::json!({
             "content": content,
-            "stop_reason": stop_reason,
+            "stop_reason": finish_reason,
             "model": model
         }))
+    }
+
+    fn resolve_codex_tool_call_id(
+        json: &Value,
+        item_to_call_id: &HashMap<String, String>,
+        pending_tools: &HashMap<String, (String, String)>,
+    ) -> Option<String> {
+        if let Some(call_id) = json
+            .get("call_id")
+            .and_then(|i| i.as_str())
+            .filter(|id| !id.is_empty())
+        {
+            return Some(call_id.to_string());
+        }
+
+        if let Some(item_id) = json
+            .get("item_id")
+            .and_then(|i| i.as_str())
+            .filter(|id| !id.is_empty())
+        {
+            if let Some(call_id) = item_to_call_id.get(item_id) {
+                return Some(call_id.clone());
+            }
+        }
+
+        if pending_tools.len() == 1 {
+            return pending_tools.keys().next().cloned();
+        }
+
+        None
+    }
+
+    fn resolve_codex_ws_url_for_tools(api_url: &str) -> Result<Url> {
+        let mut url = Url::parse(api_url)
+            .map_err(|e| anyhow::anyhow!("Invalid Codex API URL '{}': {}", api_url, e))?;
+
+        url.set_scheme(if url.scheme() == "https" { "wss" } else { "ws" })
+            .map_err(|_| anyhow::anyhow!("Failed to set websocket scheme for '{}'", api_url))?;
+
+        Ok(url)
     }
 
     /// Call with tools using Google format (non-streaming)

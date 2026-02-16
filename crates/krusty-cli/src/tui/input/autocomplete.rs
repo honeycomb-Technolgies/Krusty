@@ -309,6 +309,11 @@ pub fn get_all_commands() -> Vec<CommandSuggestion> {
             aliases: vec![],
             description: "Configure tool execution hooks",
         },
+        CommandSuggestion {
+            primary: "/permissions",
+            aliases: vec!["perm"],
+            description: "Toggle supervised/autonomous mode",
+        },
     ]
 }
 

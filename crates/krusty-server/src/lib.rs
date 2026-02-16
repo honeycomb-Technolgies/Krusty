@@ -18,7 +18,7 @@ use axum::{
 };
 use rust_embed::Embed;
 use serde::Serialize;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tower_http::{
     cors::{Any, CorsLayer},
     trace::TraceLayer,
@@ -84,6 +84,10 @@ pub struct AppState {
     pub mcp_manager: Arc<McpManager>,
     pub hook_manager: Arc<RwLock<UserHookManager>>,
     pub skills_manager: Arc<RwLock<SkillsManager>>,
+    /// Per-session locks to prevent concurrent agentic loops on the same session.
+    pub session_locks: Arc<RwLock<HashMap<String, Arc<Mutex<()>>>>>,
+    /// Pending tool approval channels for supervised permission mode.
+    pub pending_approvals: Arc<RwLock<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
 }
 
 /// Parse provider from environment value.
@@ -119,29 +123,47 @@ pub fn create_ai_client(credentials: &CredentialStore) -> Option<AiClient> {
         std::env::var(env_key).ok()
     });
 
-    let api_key = match auth {
-        Some(key) => key,
-        None => {
-            tracing::warn!(
-                "No credentials found for provider {}; chat API will be unavailable until credentials are configured",
-                provider
-            );
-            return None;
-        }
-    };
+    let (config, api_key) = if provider == ProviderId::OpenAI {
+        let config = AiClientConfig::for_openai_with_auth_detection(&model, credentials);
+        let resolved = krusty_core::auth::resolve_openai_auth(credentials, &model);
 
-    let config = if provider == ProviderId::OpenAI {
-        AiClientConfig::for_openai_with_auth_detection(&model, credentials)
+        let auth = resolved
+            .credential
+            .or_else(|| std::env::var("OPENAI_API_KEY").ok());
+        let api_key = match auth {
+            Some(key) => key,
+            None => {
+                tracing::warn!(
+                    "No OpenAI credentials found for resolved auth mode ({:?}); chat API unavailable",
+                    resolved.auth_type
+                );
+                return None;
+            }
+        };
+        (config, api_key)
     } else {
-        AiClientConfig {
-            model,
-            max_tokens: constants::ai::MAX_OUTPUT_TOKENS,
-            base_url: Some(provider_cfg.base_url.clone()),
-            auth_header: provider_cfg.auth_header,
-            provider_id: provider,
-            api_format: Default::default(),
-            custom_headers: provider_cfg.custom_headers.clone(),
-        }
+        let api_key = match auth {
+            Some(key) => key,
+            None => {
+                tracing::warn!(
+                    "No credentials found for provider {}; chat API will be unavailable until credentials are configured",
+                    provider
+                );
+                return None;
+            }
+        };
+        (
+            AiClientConfig {
+                model,
+                max_tokens: constants::ai::MAX_OUTPUT_TOKENS,
+                base_url: Some(provider_cfg.base_url.clone()),
+                auth_header: provider_cfg.auth_header,
+                provider_id: provider,
+                api_format: Default::default(),
+                custom_headers: provider_cfg.custom_headers.clone(),
+            },
+            api_key,
+        )
     };
 
     Some(AiClient::new(config, api_key))
@@ -223,6 +245,8 @@ pub async fn build_router(config: &ServerConfig) -> anyhow::Result<(Router, AppS
         skills_manager: Arc::new(RwLock::new(SkillsManager::with_defaults(
             &config.working_dir,
         ))),
+        session_locks: Arc::new(RwLock::new(HashMap::new())),
+        pending_approvals: Arc::new(RwLock::new(HashMap::new())),
     };
 
     let cors = CorsLayer::new()

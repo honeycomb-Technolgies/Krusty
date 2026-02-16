@@ -14,7 +14,7 @@ export interface ToolCall {
 	description?: string;
 	arguments?: Record<string, unknown>;
 	output?: string;
-	status: 'pending' | 'running' | 'success' | 'error';
+	status: 'pending' | 'running' | 'success' | 'error' | 'awaiting_approval';
 }
 
 export interface ChatMessage {
@@ -22,15 +22,24 @@ export interface ChatMessage {
 	content: string;
 	thinking?: string;
 	toolCalls?: ToolCall[];
+	isQueued?: boolean;
 }
 
 export type SessionMode = 'build' | 'plan';
+export type PermissionMode = 'supervised' | 'autonomous';
+
+interface QueuedMessage {
+	content: string;
+	attachments: Attachment[];
+}
 
 interface SessionState {
 	sessionId: string | null;
 	title: string;
 	mode: SessionMode;
+	permissionMode: PermissionMode;
 	messages: ChatMessage[];
+	queuedMessages: QueuedMessage[];
 	isLoading: boolean;
 	isStreaming: boolean;
 	isThinking: boolean;
@@ -40,11 +49,21 @@ interface SessionState {
 	error: string | null;
 }
 
+function loadPermissionMode(): PermissionMode {
+	try {
+		const stored = localStorage.getItem('krusty-permission-mode');
+		if (stored === 'supervised' || stored === 'autonomous') return stored;
+	} catch { /* ignore */ }
+	return 'supervised';
+}
+
 const initialState: SessionState = {
 	sessionId: null,
 	title: 'New Chat',
 	mode: 'build',
+	permissionMode: loadPermissionMode(),
 	messages: [],
+	queuedMessages: [],
 	isLoading: false,
 	isStreaming: false,
 	isThinking: false,
@@ -128,6 +147,16 @@ export async function sendMessage(content: string, attachments: Attachment[] = [
 		? `${content}\n\n[Attachments: ${attachments.map(a => a.file.name).join(', ')}]`
 		: content;
 
+	// Queue message if currently streaming
+	if (state.isStreaming) {
+		sessionStore.update((s) => ({
+			...s,
+			queuedMessages: [...s.queuedMessages, { content, attachments }],
+			messages: [...s.messages, { role: 'user', content: displayContent, isQueued: true }]
+		}));
+		return;
+	}
+
 	// Add user message
 	sessionStore.update((s) => ({
 		...s,
@@ -139,6 +168,12 @@ export async function sendMessage(content: string, attachments: Attachment[] = [
 
 	// Create abort controller for cancellation
 	abortController = new AbortController();
+
+	// Start state polling as fallback for stream death recovery
+	const pollingSessionId = state.sessionId;
+	if (pollingSessionId) {
+		startStatePolling(pollingSessionId);
+	}
 
 	try {
 		// Build content blocks if we have attachments
@@ -153,7 +188,8 @@ export async function sendMessage(content: string, attachments: Attachment[] = [
 				session_id: state.sessionId ?? undefined,
 				message: content,
 				content: contentBlocks,
-				thinking_enabled: state.thinkingEnabled
+				thinking_enabled: state.thinkingEnabled,
+				permission_mode: state.permissionMode
 			},
 			{
 				onTextDelta: (delta) => {
@@ -194,7 +230,7 @@ export async function sendMessage(content: string, attachments: Attachment[] = [
 						return { ...s, messages };
 					});
 				},
-				onToolCallComplete: (id, name, args) => {
+				onToolCallComplete: (id, _name, args) => {
 					const toolCalls = assistantMessage.toolCalls?.map((tc) =>
 						tc.id === id ? { ...tc, arguments: args } : tc
 					);
@@ -213,6 +249,22 @@ export async function sendMessage(content: string, attachments: Attachment[] = [
 					const toolCalls = assistantMessage.toolCalls?.map((tc): ToolCall =>
 						tc.id === id
 							? { ...tc, output, status: isError ? 'error' : 'success' }
+							: tc
+					);
+					assistantMessage.toolCalls = toolCalls;
+					sessionStore.update((s) => {
+						const messages = [...s.messages];
+						const lastIdx = messages.length - 1;
+						if (messages[lastIdx]?.role === 'assistant') {
+							messages[lastIdx] = { ...assistantMessage };
+						}
+						return { ...s, messages };
+					});
+				},
+				onToolOutputDelta: (id, delta) => {
+					const toolCalls = assistantMessage.toolCalls?.map((tc): ToolCall =>
+						tc.id === id
+							? { ...tc, output: (tc.output || '') + delta }
 							: tc
 					);
 					assistantMessage.toolCalls = toolCalls;
@@ -254,29 +306,84 @@ export async function sendMessage(content: string, attachments: Attachment[] = [
 						return { ...s, messages };
 					});
 				},
-				onUsage: (promptTokens, completionTokens) => {
-					// promptTokens is the context size for this request - shows how full context is
+				onToolApprovalRequired: (id, name, args) => {
+					const toolCalls = assistantMessage.toolCalls?.map((tc): ToolCall =>
+						tc.id === id ? { ...tc, arguments: args, status: 'awaiting_approval' } : tc
+					);
+					assistantMessage.toolCalls = toolCalls;
+					sessionStore.update((s) => {
+						const messages = [...s.messages];
+						const lastIdx = messages.length - 1;
+						if (messages[lastIdx]?.role === 'assistant') {
+							messages[lastIdx] = { ...assistantMessage };
+						}
+						return { ...s, messages };
+					});
+				},
+				onToolApproved: (id) => {
+					const toolCalls = assistantMessage.toolCalls?.map((tc): ToolCall =>
+						tc.id === id ? { ...tc, status: 'running' } : tc
+					);
+					assistantMessage.toolCalls = toolCalls;
+					sessionStore.update((s) => {
+						const messages = [...s.messages];
+						const lastIdx = messages.length - 1;
+						if (messages[lastIdx]?.role === 'assistant') {
+							messages[lastIdx] = { ...assistantMessage };
+						}
+						return { ...s, messages };
+					});
+				},
+				onToolDenied: (id) => {
+					const toolCalls = assistantMessage.toolCalls?.map((tc): ToolCall =>
+						tc.id === id ? { ...tc, status: 'error', output: 'Denied by user' } : tc
+					);
+					assistantMessage.toolCalls = toolCalls;
+					sessionStore.update((s) => {
+						const messages = [...s.messages];
+						const lastIdx = messages.length - 1;
+						if (messages[lastIdx]?.role === 'assistant') {
+							messages[lastIdx] = { ...assistantMessage };
+						}
+						return { ...s, messages };
+					});
+				},
+				onUsage: (promptTokens, _completionTokens) => {
 					sessionStore.update((s) => ({
 						...s,
-						tokenCount: promptTokens // Context size, not cumulative
+						tokenCount: promptTokens
 					}));
 				},
 				onTitleUpdate: (title) => {
-					// Haiku generated a better title
 					sessionStore.update((s) => ({ ...s, title }));
-					// Refresh sessions list to show updated title in sidebar
 					loadSessions();
 				},
 				onFinish: (sessionId) => {
+					const currentState = get(sessionStore);
+					const queued = currentState.queuedMessages;
+
+					// Clear queued flags on displayed messages
+					const messages = currentState.messages.map(m =>
+						m.isQueued ? { ...m, isQueued: false } : m
+					);
+
 					sessionStore.update((s) => ({
 						...s,
 						sessionId,
+						messages,
+						queuedMessages: [],
 						isStreaming: false,
 						isThinking: false,
 						thinkingContent: ''
 					}));
-					// Refresh sessions list to show new/updated session
 					loadSessions();
+
+					// Auto-dispatch queued messages
+					if (queued.length > 0) {
+						const combinedContent = queued.map(q => q.content).join('\n\n');
+						const combinedAttachments = queued.flatMap(q => q.attachments);
+						setTimeout(() => sendMessage(combinedContent, combinedAttachments), 50);
+					}
 				},
 				onError: (error) => {
 					sessionStore.update((s) => ({
@@ -296,6 +403,8 @@ export async function sendMessage(content: string, attachments: Attachment[] = [
 			isStreaming: false,
 			error: err instanceof Error ? err.message : 'Unknown error'
 		}));
+	} finally {
+		stopStatePolling();
 	}
 }
 
@@ -509,6 +618,9 @@ export async function submitToolResult(toolCallId: string, result: string) {
 	// Create abort controller for cancellation
 	abortController = new AbortController();
 
+	// Start state polling as fallback for stream death recovery
+	startStatePolling(state.sessionId);
+
 	// Create a NEW assistant message for this response - don't merge with previous
 	let assistantMessage: ChatMessage = { role: 'assistant', content: '', thinking: '', toolCalls: [] };
 
@@ -564,7 +676,7 @@ export async function submitToolResult(toolCallId: string, result: string) {
 						return { ...s, messages };
 					});
 				},
-				onToolCallComplete: (id, name, args) => {
+				onToolCallComplete: (id, _name, args) => {
 					const toolCalls = assistantMessage.toolCalls?.map((tc) =>
 						tc.id === id ? { ...tc, arguments: args } : tc
 					);
@@ -583,6 +695,22 @@ export async function submitToolResult(toolCallId: string, result: string) {
 					const toolCalls = assistantMessage.toolCalls?.map((tc): ToolCall =>
 						tc.id === id
 							? { ...tc, output, status: isError ? 'error' : 'success' }
+							: tc
+					);
+					assistantMessage.toolCalls = toolCalls;
+					sessionStore.update((s) => {
+						const messages = [...s.messages];
+						const lastIdx = messages.length - 1;
+						if (messages[lastIdx]?.role === 'assistant') {
+							messages[lastIdx] = { ...assistantMessage };
+						}
+						return { ...s, messages };
+					});
+				},
+				onToolOutputDelta: (id, delta) => {
+					const toolCalls = assistantMessage.toolCalls?.map((tc): ToolCall =>
+						tc.id === id
+							? { ...tc, output: (tc.output || '') + delta }
 							: tc
 					);
 					assistantMessage.toolCalls = toolCalls;
@@ -624,11 +752,10 @@ export async function submitToolResult(toolCallId: string, result: string) {
 						return { ...s, messages };
 					});
 				},
-				onUsage: (promptTokens, completionTokens) => {
-					// promptTokens is the context size for this request - shows how full context is
+				onUsage: (promptTokens, _completionTokens) => {
 					sessionStore.update((s) => ({
 						...s,
-						tokenCount: promptTokens // Context size, not cumulative
+						tokenCount: promptTokens
 					}));
 				},
 				onTitleUpdate: (title) => {
@@ -636,14 +763,29 @@ export async function submitToolResult(toolCallId: string, result: string) {
 					loadSessions();
 				},
 				onFinish: (sessionId) => {
+					const currentState = get(sessionStore);
+					const queued = currentState.queuedMessages;
+
+					const messages = currentState.messages.map(m =>
+						m.isQueued ? { ...m, isQueued: false } : m
+					);
+
 					sessionStore.update((s) => ({
 						...s,
 						sessionId,
+						messages,
+						queuedMessages: [],
 						isStreaming: false,
 						isThinking: false,
 						thinkingContent: ''
 					}));
 					loadSessions();
+
+					if (queued.length > 0) {
+						const combinedContent = queued.map(q => q.content).join('\n\n');
+						const combinedAttachments = queued.flatMap(q => q.attachments);
+						setTimeout(() => sendMessage(combinedContent, combinedAttachments), 50);
+					}
 				},
 				onError: (error) => {
 					sessionStore.update((s) => ({
@@ -663,6 +805,8 @@ export async function submitToolResult(toolCallId: string, result: string) {
 			isStreaming: false,
 			error: err instanceof Error ? err.message : 'Unknown error'
 		}));
+	} finally {
+		stopStatePolling();
 	}
 }
 
@@ -698,4 +842,24 @@ export function stopStatePolling() {
 		clearInterval(statePollingInterval);
 		statePollingInterval = null;
 	}
+}
+
+export function togglePermissionMode() {
+	sessionStore.update((s) => {
+		const newMode: PermissionMode = s.permissionMode === 'supervised' ? 'autonomous' : 'supervised';
+		try { localStorage.setItem('krusty-permission-mode', newMode); } catch { /* ignore */ }
+		return { ...s, permissionMode: newMode };
+	});
+}
+
+export async function approveToolCall(toolCallId: string) {
+	const state = get(sessionStore);
+	if (!state.sessionId) return;
+	await apiClient.submitToolApproval(state.sessionId, toolCallId, true);
+}
+
+export async function denyToolCall(toolCallId: string) {
+	const state = get(sessionStore);
+	if (!state.sessionId) return;
+	await apiClient.submitToolApproval(state.sessionId, toolCallId, false);
 }

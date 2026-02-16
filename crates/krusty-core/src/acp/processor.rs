@@ -164,6 +164,8 @@ impl PromptProcessor {
                     Some(tool_defs.clone())
                 },
                 enable_caching: true,
+                session_id: Some(session.id.to_string()),
+                codex_parallel_tool_calls: true,
                 ..Default::default()
             };
 

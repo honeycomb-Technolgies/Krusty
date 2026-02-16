@@ -15,6 +15,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use url::Url;
 
+use super::extract_openai_account_id;
 use super::pkce::PkceVerifier;
 use super::types::{OAuthConfig, OAuthTokenData};
 
@@ -113,13 +114,20 @@ impl BrowserOAuthFlow {
 
         let expires_at = token_response.expires_in.map(|secs| now + secs);
 
+        let account_id = extract_openai_account_id(&token_response.access_token).or_else(|| {
+            token_response
+                .id_token
+                .as_deref()
+                .and_then(extract_openai_account_id)
+        });
+
         Ok(OAuthTokenData {
             access_token: token_response.access_token,
             refresh_token: token_response.refresh_token,
             id_token: token_response.id_token,
             expires_at,
             last_refresh: now,
-            account_id: None,
+            account_id,
         })
     }
 

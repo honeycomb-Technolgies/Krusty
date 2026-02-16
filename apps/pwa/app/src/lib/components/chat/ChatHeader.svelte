@@ -3,6 +3,8 @@
 	import { sessionStore, updateSessionTitle, setMode, initSession, type SessionMode } from '$stores/session';
 	import { planStore, setPlanVisible } from '$stores/plan';
 	import { createSession, getLastDirectory, loadDirectories, sessionsStore } from '$stores/sessions';
+	import { gitStore, refreshGit, checkoutBranch, switchWorktree, startGitPolling, stopGitPolling } from '$stores/git';
+	import { workspaceStore } from '$stores/workspace';
 	import { apiClient } from '$api/client';
 	import { onMount } from 'svelte';
 
@@ -36,6 +38,8 @@
 	// Scroll optimization
 	let dirListContainer = $state<HTMLDivElement>(undefined!);
 	let dirScrollTimeout: ReturnType<typeof setTimeout>;
+	let isSwitchingBranch = $state(false);
+	let isSwitchingWorktree = $state(false);
 
 	function handleDirScroll() {
 		dirListContainer?.classList.add('dir-scrolling');
@@ -49,6 +53,11 @@
 		loadDirectories();
 		// Pre-fetch home directory for instant first open
 		prefetchDirectory();
+		void refreshGit(true);
+		startGitPolling();
+		return () => {
+			stopGitPolling();
+		};
 	});
 
 	async function prefetchDirectory(path?: string) {
@@ -241,6 +250,52 @@
 		const parts = path.split('/').filter(Boolean);
 		return parts.slice(-2).join('/') || path;
 	}
+
+	function shouldShowGitSummary(): boolean {
+		if (!$gitStore.status?.in_repo) return false;
+		return $gitStore.status.total_changes > 0
+			|| $gitStore.status.branch_additions > 0
+			|| $gitStore.status.branch_deletions > 0;
+	}
+
+	function currentWorktreePath(): string {
+		const current = $gitStore.worktrees.find((w) => w.is_current);
+		return current?.path ?? $workspaceStore.directory ?? '';
+	}
+
+	async function handleBranchChange(event: Event) {
+		const select = event.currentTarget as HTMLSelectElement;
+		const branch = select.value;
+		if (!branch || branch === $gitStore.status?.branch) return;
+
+		isSwitchingBranch = true;
+		try {
+			await checkoutBranch(branch);
+		} catch (err) {
+			console.error('Branch checkout failed:', err);
+			alert(err instanceof Error ? err.message : 'Failed to switch branch');
+			await refreshGit(false);
+		} finally {
+			isSwitchingBranch = false;
+		}
+	}
+
+	async function handleWorktreeChange(event: Event) {
+		const select = event.currentTarget as HTMLSelectElement;
+		const nextPath = select.value;
+		if (!nextPath || nextPath === $workspaceStore.directory) return;
+
+		isSwitchingWorktree = true;
+		try {
+			await switchWorktree(nextPath, $sessionStore.sessionId);
+		} catch (err) {
+			console.error('Worktree switch failed:', err);
+			alert(err instanceof Error ? err.message : 'Failed to switch worktree');
+			await refreshGit(false);
+		} finally {
+			isSwitchingWorktree = false;
+		}
+	}
 </script>
 
 <svelte:window on:keydown={showNewSessionModal ? handleModalKeyDown : undefined} />
@@ -330,6 +385,53 @@
 
 	<!-- Right: Token count + Pinch + New session -->
 	<div class="flex items-center gap-2">
+		{#if $gitStore.status?.in_repo}
+			{#if shouldShowGitSummary()}
+				<span
+					class="hidden lg:inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/30 px-2 py-1 text-xs"
+					title="Git status"
+				>
+					<span class="text-muted-foreground">{$gitStore.status.branch_files} files</span>
+					<span class="text-green-500">+{$gitStore.status.branch_additions}</span>
+					<span class="text-red-500">-{$gitStore.status.branch_deletions}</span>
+				</span>
+			{/if}
+
+			{#if $gitStore.worktrees.length > 1}
+				<select
+					class="hidden xl:block max-w-[180px] rounded-md border border-input bg-background px-2 py-1 text-xs"
+					title="Switch git worktree"
+					value={currentWorktreePath()}
+					onchange={handleWorktreeChange}
+					disabled={isSwitchingWorktree || $sessionStore.isStreaming}
+				>
+					{#each $gitStore.worktrees as wt (wt.path)}
+						<option value={wt.path}>
+							{wt.is_current ? '• ' : ''}{getShortPath(wt.path)}
+						</option>
+					{/each}
+				</select>
+			{/if}
+
+			{#if $gitStore.branches.length > 0}
+				<select
+					class="hidden md:block max-w-[160px] rounded-md border border-input bg-background px-2 py-1 text-xs"
+					title="Switch git branch"
+					value={$gitStore.status.branch ?? ''}
+					onchange={handleBranchChange}
+					disabled={isSwitchingBranch || $sessionStore.isStreaming}
+				>
+					{#each $gitStore.branches as branch (branch.name)}
+						<option value={branch.name}>{branch.is_current ? '• ' : ''}{branch.name}</option>
+					{/each}
+				</select>
+			{/if}
+		{/if}
+
+		{#if $gitStore.isLoading || isSwitchingBranch || isSwitchingWorktree}
+			<Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
+		{/if}
+
 		{#if $sessionStore.tokenCount > 0}
 			{@const status = getContextStatus($sessionStore.tokenCount)}
 			<span class="text-sm {status.color}" title="Context usage: {Math.round($sessionStore.tokenCount / CONTEXT_LIMIT * 100)}% of {formatTokens(CONTEXT_LIMIT)} limit">

@@ -21,6 +21,7 @@ pub use storage::OAuthTokenStore;
 pub use types::{AuthMethod, OAuthConfig, OAuthTokenData};
 
 use anyhow::{Context, Result};
+use base64::Engine;
 use serde::Deserialize;
 
 use crate::ai::providers::ProviderId;
@@ -40,31 +41,202 @@ pub enum OpenAIAuthType {
     None,
 }
 
-/// Detect which type of OpenAI authentication is configured
+/// OpenAI auth selection mode.
 ///
-/// Checks for API key first (takes precedence), then OAuth token.
-/// Returns the auth type that determines which endpoint to use.
-pub fn detect_openai_auth_type(credentials: &CredentialStore) -> OpenAIAuthType {
-    // Check for API key first (takes precedence)
-    if credentials.get(&ProviderId::OpenAI).is_some() {
-        return OpenAIAuthType::ApiKey;
-    }
+/// - `Auto`: Prefer OAuth for Codex models, otherwise prefer API key.
+/// - `OAuth`: Require ChatGPT OAuth token.
+/// - `ApiKey`: Require API key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenAIAuthMode {
+    Auto,
+    OAuth,
+    ApiKey,
+}
 
-    // Check for OAuth token
-    if let Ok(oauth_store) = OAuthTokenStore::load() {
-        if let Some(token) = oauth_store.get(&ProviderId::OpenAI) {
-            if !token.is_expired() {
-                return OpenAIAuthType::ChatGptOAuth;
+impl OpenAIAuthMode {
+    /// Parse auth mode from `KRUSTY_OPENAI_AUTH_MODE`.
+    ///
+    /// Supported values: `auto`, `oauth`, `api_key`.
+    pub fn from_env() -> Self {
+        match std::env::var("KRUSTY_OPENAI_AUTH_MODE")
+            .ok()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "oauth" => Self::OAuth,
+            "api_key" => Self::ApiKey,
+            _ => Self::Auto,
+        }
+    }
+}
+
+/// Resolved OpenAI auth information for a model.
+#[derive(Debug, Clone)]
+pub struct OpenAIAuthResolution {
+    pub auth_type: OpenAIAuthType,
+    pub credential: Option<String>,
+    pub account_id: Option<String>,
+}
+
+/// Resolve OpenAI auth type + credential for a specific model.
+pub fn resolve_openai_auth(credentials: &CredentialStore, model: &str) -> OpenAIAuthResolution {
+    let mode = OpenAIAuthMode::from_env();
+    let is_codex_model = model.to_ascii_lowercase().contains("codex");
+
+    let api_key = credentials.get(&ProviderId::OpenAI).cloned();
+    let oauth = load_openai_oauth_credential();
+
+    match mode {
+        OpenAIAuthMode::OAuth => {
+            if let Some((access_token, account_id)) = oauth {
+                OpenAIAuthResolution {
+                    auth_type: OpenAIAuthType::ChatGptOAuth,
+                    credential: Some(access_token),
+                    account_id,
+                }
+            } else {
+                OpenAIAuthResolution {
+                    auth_type: OpenAIAuthType::None,
+                    credential: None,
+                    account_id: None,
+                }
             }
-            if token.refresh_token.is_some()
-                && try_refresh_oauth_token_blocking(ProviderId::OpenAI).is_some()
-            {
-                return OpenAIAuthType::ChatGptOAuth;
+        }
+        OpenAIAuthMode::ApiKey => {
+            if let Some(key) = api_key {
+                OpenAIAuthResolution {
+                    auth_type: OpenAIAuthType::ApiKey,
+                    credential: Some(key),
+                    account_id: None,
+                }
+            } else {
+                OpenAIAuthResolution {
+                    auth_type: OpenAIAuthType::None,
+                    credential: None,
+                    account_id: None,
+                }
+            }
+        }
+        OpenAIAuthMode::Auto => {
+            // Codex performs best with ChatGPT OAuth path when available.
+            if is_codex_model {
+                if let Some((access_token, account_id)) = oauth.clone() {
+                    return OpenAIAuthResolution {
+                        auth_type: OpenAIAuthType::ChatGptOAuth,
+                        credential: Some(access_token),
+                        account_id,
+                    };
+                }
+                if let Some(key) = api_key {
+                    return OpenAIAuthResolution {
+                        auth_type: OpenAIAuthType::ApiKey,
+                        credential: Some(key),
+                        account_id: None,
+                    };
+                }
+            } else if let Some(key) = api_key {
+                return OpenAIAuthResolution {
+                    auth_type: OpenAIAuthType::ApiKey,
+                    credential: Some(key),
+                    account_id: None,
+                };
+            }
+
+            if let Some((access_token, account_id)) = oauth {
+                OpenAIAuthResolution {
+                    auth_type: OpenAIAuthType::ChatGptOAuth,
+                    credential: Some(access_token),
+                    account_id,
+                }
+            } else {
+                OpenAIAuthResolution {
+                    auth_type: OpenAIAuthType::None,
+                    credential: None,
+                    account_id: None,
+                }
             }
         }
     }
+}
 
-    OpenAIAuthType::None
+/// Extract ChatGPT account id from OpenAI JWT-like tokens.
+///
+/// Expected claim path:
+/// `https://api.openai.com/auth.chatgpt_account_id`
+pub fn extract_openai_account_id(token: &str) -> Option<String> {
+    let payload = decode_jwt_payload(token)?;
+    let auth_obj = payload.get("https://api.openai.com/auth")?;
+    let account_id = auth_obj.get("chatgpt_account_id")?.as_str()?;
+    if account_id.is_empty() {
+        None
+    } else {
+        Some(account_id.to_string())
+    }
+}
+
+fn decode_jwt_payload(token: &str) -> Option<serde_json::Value> {
+    let mut parts = token.split('.');
+    let _header = parts.next()?;
+    let payload_b64 = parts.next()?;
+    let _signature = parts.next()?;
+
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload_b64)
+        .or_else(|_| {
+            // JWT payload can include optional padding depending on issuer/runtime.
+            let mut padded = payload_b64.to_string();
+            while padded.len() % 4 != 0 {
+                padded.push('=');
+            }
+            base64::engine::general_purpose::URL_SAFE.decode(padded)
+        })
+        .ok()?;
+
+    serde_json::from_slice::<serde_json::Value>(&decoded).ok()
+}
+
+fn load_openai_oauth_credential() -> Option<(String, Option<String>)> {
+    let oauth_store = OAuthTokenStore::load().ok()?;
+    let token = oauth_store.get(&ProviderId::OpenAI)?;
+
+    if token.is_expired() {
+        if token.refresh_token.is_some() {
+            let refreshed = try_refresh_oauth_token_blocking(ProviderId::OpenAI)?;
+            let account_id = refreshed
+                .account_id
+                .clone()
+                .or_else(|| extract_openai_account_id(&refreshed.access_token))
+                .or_else(|| {
+                    refreshed
+                        .id_token
+                        .as_deref()
+                        .and_then(extract_openai_account_id)
+                });
+            return Some((refreshed.access_token, account_id));
+        }
+        return None;
+    }
+
+    let account_id = token
+        .account_id
+        .clone()
+        .or_else(|| extract_openai_account_id(&token.access_token))
+        .or_else(|| {
+            token
+                .id_token
+                .as_deref()
+                .and_then(extract_openai_account_id)
+        });
+    Some((token.access_token.clone(), account_id))
+}
+
+/// Detect which type of OpenAI authentication is configured.
+///
+/// Uses `resolve_openai_auth` with codex-aware defaults.
+pub fn detect_openai_auth_type(credentials: &CredentialStore) -> OpenAIAuthType {
+    resolve_openai_auth(credentials, "gpt-5.3-codex").auth_type
 }
 
 #[derive(Deserialize)]
@@ -120,13 +292,22 @@ pub async fn refresh_oauth_token(provider_id: ProviderId) -> Result<OAuthTokenDa
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
+    let account_id = extract_openai_account_id(&token_response.access_token)
+        .or_else(|| {
+            token_response
+                .id_token
+                .as_deref()
+                .and_then(extract_openai_account_id)
+        })
+        .or(token.account_id.clone());
+
     let refreshed = OAuthTokenData {
         access_token: token_response.access_token,
         refresh_token: token_response.refresh_token.or(token.refresh_token.clone()),
         id_token: token_response.id_token.or(token.id_token),
         expires_at: token_response.expires_in.map(|secs| now + secs),
         last_refresh: now,
-        account_id: token.account_id,
+        account_id,
     };
 
     let mut store = OAuthTokenStore::load().context("Failed to reload OAuth token store")?;

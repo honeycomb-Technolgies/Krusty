@@ -16,7 +16,7 @@ pub mod thinking;
 pub mod tools;
 
 // Re-export main types
-pub use config::{AiClientConfig, CallOptions};
+pub use config::{AiClientConfig, CallOptions, CodexReasoningEffort};
 pub use core::AiClient;
 pub use core::KRUSTY_SYSTEM_PROMPT;
 pub use request_builder::{BuildOptions, RequestBuilder};

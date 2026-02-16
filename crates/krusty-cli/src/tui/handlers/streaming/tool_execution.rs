@@ -576,6 +576,30 @@ impl App {
             || has_set_dependency
             || has_plan_mode;
 
+        // Supervised mode: intercept Write-category tools for approval
+        if self.runtime.permission_mode == krusty_core::tools::registry::PermissionMode::Supervised
+        {
+            let write_tools: Vec<_> = tool_calls
+                .iter()
+                .filter(|t| {
+                    krusty_core::tools::registry::tool_category(&t.name)
+                        == krusty_core::tools::registry::ToolCategory::Write
+                })
+                .collect();
+
+            if !write_tools.is_empty() {
+                let names: Vec<String> = write_tools.iter().map(|t| t.name.clone()).collect();
+                let ids: Vec<String> = write_tools.iter().map(|t| t.id.clone()).collect();
+
+                // Store the full tool_calls for later execution after approval
+                self.runtime.queued_tools.extend(tool_calls);
+
+                // Show approval prompt
+                self.ui.decision_prompt.show_tool_approval(names, ids);
+                return;
+            }
+        }
+
         if tool_calls.is_empty() {
             if has_ask_user {
                 self.stop_streaming();
@@ -913,6 +937,43 @@ impl App {
         }
     }
 
+    /// Handle tool approval decision from DecisionPrompt
+    pub(crate) fn handle_tool_approval_answer(
+        &mut self,
+        answers: &[crate::tui::components::PromptAnswer],
+    ) {
+        use crate::tui::components::PromptAnswer;
+
+        let approved = matches!(answers.first(), Some(PromptAnswer::Selected(0)));
+        let queued = std::mem::take(&mut self.runtime.queued_tools);
+
+        if approved {
+            // Re-run spawn_tool_execution; the supervised check will be skipped
+            // because queued_tools is now empty and we temporarily set Autonomous
+            let prev = self.runtime.permission_mode;
+            self.runtime.permission_mode = krusty_core::tools::registry::PermissionMode::Autonomous;
+            self.spawn_tool_execution(queued);
+            self.runtime.permission_mode = prev;
+        } else {
+            // Denied - generate error results for each queued write tool
+            let mut results: Vec<Content> = Vec::new();
+            for tool in &queued {
+                results.push(Content::ToolResult {
+                    tool_use_id: tool.id.clone(),
+                    output: serde_json::Value::String("Denied by user".to_string()),
+                    is_error: Some(true),
+                });
+            }
+            // Include any pending results from intercepted plan tools
+            let pending = std::mem::take(&mut self.runtime.pending_tool_results);
+            results.extend(pending);
+            if !results.is_empty() {
+                self.stop_streaming();
+                self.handle_tool_results(results);
+            }
+        }
+    }
+
     /// Handle completed tool results
     pub fn handle_tool_results(&mut self, tool_results: Vec<Content>) {
         if tool_results.is_empty() {
@@ -982,30 +1043,19 @@ impl App {
             return;
         }
 
-        // Inject exploration budget warning if threshold exceeded
+        // Keep exploration budget tracking internal. Do not inject warning text into model context.
         const EXPLORATION_BUDGET_SOFT: usize = 15;
         const EXPLORATION_BUDGET_HARD: usize = 30;
         if self.runtime.exploration_budget_count >= EXPLORATION_BUDGET_HARD {
-            let warning = format!(
-                "[EXPLORATION BUDGET EXCEEDED]\n\
-                You have made {} consecutive read-only operations without taking action.\n\
-                STOP exploring and take action NOW.\n\
-                If you are working on a plan, call task_start and begin implementation.\n\
-                If you need more context, use grep or glob for targeted results.\n\
-                Further exploration without action is unacceptable.",
-                self.runtime.exploration_budget_count
+            tracing::warn!(
+                exploration_budget_count = self.runtime.exploration_budget_count,
+                "Exploration budget hard threshold reached"
             );
-            all_results.push(Content::Text { text: warning });
         } else if self.runtime.exploration_budget_count >= EXPLORATION_BUDGET_SOFT {
-            let warning = format!(
-                "[EXPLORATION BUDGET]\n\
-                You have made {} consecutive read-only operations without taking action.\n\
-                If you are working on a plan, call task_start and begin implementation.\n\
-                If you need more context, use grep or glob for targeted results.\n\
-                Continued exploration without action is wasteful. Act now or explain why you need more context.",
-                self.runtime.exploration_budget_count
+            tracing::info!(
+                exploration_budget_count = self.runtime.exploration_budget_count,
+                "Exploration budget soft threshold reached"
             );
-            all_results.push(Content::Text { text: warning });
         }
 
         // Add tool results to conversation

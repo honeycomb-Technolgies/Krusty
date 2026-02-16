@@ -14,12 +14,12 @@ This directory is reserved for desktop packaging (Tauri/Electron) around the sam
 
 ```bash
 cd apps/desktop/shell
-npm ci
-npm run dev
+bun install
+bun run dev
 ```
 
 Build:
 
 ```bash
-npm run build
+bun run build
 ```
