@@ -33,6 +33,7 @@ use krusty_core::SessionManager;
 
 use crate::auth::CurrentUser;
 use crate::error::AppError;
+use crate::push::{PushPayload, PushService};
 use crate::types::{AgenticEvent, ChatRequest, ToolApprovalRequest, ToolResultRequest};
 use crate::AppState;
 
@@ -244,6 +245,7 @@ async fn chat(
     let process_registry = Arc::clone(&state.process_registry);
     let db_path = Arc::clone(&state.db_path);
     let pending_approvals = Arc::clone(&state.pending_approvals);
+    let push_service = state.push_service.clone();
 
     let ChatSessionContext {
         ai_client,
@@ -272,6 +274,7 @@ async fn chat(
             ctx_user_id,
             permission_mode,
             pending_approvals,
+            push_service,
         )
         .await;
     });
@@ -357,6 +360,7 @@ async fn tool_result(
     let process_registry = Arc::clone(&state.process_registry);
     let db_path = Arc::clone(&state.db_path);
     let pending_approvals = Arc::clone(&state.pending_approvals);
+    let push_service = state.push_service.clone();
 
     let ChatSessionContext {
         ai_client,
@@ -384,6 +388,7 @@ async fn tool_result(
             user_id,
             PermissionMode::Autonomous,
             pending_approvals,
+            push_service,
         )
         .await;
     });
@@ -431,6 +436,7 @@ async fn run_agentic_loop(
     user_id: Option<String>,
     permission_mode: PermissionMode,
     pending_approvals: Arc<RwLock<HashMap<String, oneshot::Sender<bool>>>>,
+    push_service: Option<Arc<PushService>>,
 ) {
     let db = match Database::new(&db_path) {
         Ok(db) => db,
@@ -476,6 +482,18 @@ async fn run_agentic_loop(
                     let _ = session_manager.update_token_count(&session_id, last_token_count);
                 }
                 let _ = session_manager.set_agent_state(&session_id, "error");
+                if !client_connected {
+                    fire_push(
+                        &push_service,
+                        user_id.as_deref(),
+                        PushPayload {
+                            title: "Krusty".into(),
+                            body: "Session encountered an error".into(),
+                            session_id: Some(session_id),
+                            tag: None,
+                        },
+                    );
+                }
                 return;
             }
         };
@@ -534,6 +552,17 @@ async fn run_agentic_loop(
                         },
                     )
                     .await;
+                } else {
+                    fire_push(
+                        &push_service,
+                        user_id.as_deref(),
+                        PushPayload {
+                            title: "Krusty".into(),
+                            body: "Krusty needs your input".into(),
+                            session_id: Some(session_id),
+                            tag: None,
+                        },
+                    );
                 }
                 return;
             }
@@ -599,6 +628,17 @@ async fn run_agentic_loop(
                     },
                 )
                 .await;
+            } else {
+                fire_push(
+                    &push_service,
+                    user_id.as_deref(),
+                    PushPayload {
+                        title: "Krusty".into(),
+                        body: "Krusty needs your input".into(),
+                        session_id: Some(session_id),
+                        tag: None,
+                    },
+                );
             }
             return;
         }
@@ -673,6 +713,25 @@ async fn run_agentic_loop(
 
     if client_connected && !sse_tx.is_closed() {
         send_event(&sse_tx, AgenticEvent::Finish { session_id }).await;
+    } else {
+        // Client disconnected mid-run — get session title for the notification
+        let title = session_manager
+            .get_session(&session_id)
+            .ok()
+            .flatten()
+            .map(|s| s.title)
+            .unwrap_or_else(|| "Session".to_string());
+
+        fire_push(
+            &push_service,
+            user_id.as_deref(),
+            PushPayload {
+                title: "Krusty".into(),
+                body: format!("{title} is complete"),
+                session_id: Some(session_id.clone()),
+                tag: Some(format!("session-{session_id}")),
+            },
+        );
     }
 }
 
@@ -1104,6 +1163,16 @@ fn truncate_output(output: &str) -> String {
         output.len(),
         clean.len()
     )
+}
+
+/// Fire a push notification in a background task (non-blocking, failure only logged).
+fn fire_push(push_service: &Option<Arc<PushService>>, user_id: Option<&str>, payload: PushPayload) {
+    if let Some(svc) = push_service.clone() {
+        let uid = user_id.map(String::from);
+        tokio::spawn(async move {
+            svc.notify_user(uid.as_deref(), payload).await;
+        });
+    }
 }
 
 async fn send_event(sse_tx: &mpsc::Sender<Result<Event, Infallible>>, event: AgenticEvent) -> bool {

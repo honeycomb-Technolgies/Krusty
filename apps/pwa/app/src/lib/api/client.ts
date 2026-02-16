@@ -321,6 +321,21 @@ export const apiClient = {
 	deleteCredential: (providerId: string) =>
 		request<void>(`/credentials/${providerId}`, { method: 'DELETE' }),
 
+	// Push notifications
+	getVapidPublicKey: () =>
+		request<{ public_key: string }>('/push/vapid-public-key'),
+
+	pushSubscribe: (subscription: { endpoint: string; p256dh: string; auth: string }) =>
+		request<{ id: string }>('/push/subscribe', {
+			method: 'POST',
+			body: JSON.stringify(subscription)
+		}),
+
+	pushUnsubscribe: (data: { endpoint: string }) =>
+		request<{ removed: boolean }>('/push/subscribe', {
+			method: 'DELETE',
+			body: JSON.stringify(data)
+		}),
 };
 
 // Chat streaming

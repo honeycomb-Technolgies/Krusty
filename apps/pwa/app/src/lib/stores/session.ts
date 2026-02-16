@@ -626,6 +626,34 @@ export function togglePermissionMode() {
 	});
 }
 
+// Visibility-based lifecycle: stop polling when backgrounded, check state when foregrounded
+if (typeof document !== 'undefined') {
+	document.addEventListener('visibilitychange', () => {
+		const state = get(sessionStore);
+		if (!state.sessionId) return;
+
+		if (document.hidden) {
+			stopStatePolling();
+		} else {
+			// Foregrounded — immediately check session state
+			apiClient.getSessionState(state.sessionId).then((serverState) => {
+				if (serverState.agent_state === 'idle') {
+					sessionStore.update((s) => ({ ...s, isStreaming: false, isThinking: false }));
+					void loadSession(state.sessionId!, true);
+				} else if (serverState.agent_state === 'streaming' || serverState.agent_state === 'tool_executing') {
+					sessionStore.update((s) => ({ ...s, isStreaming: true }));
+					startStatePolling(state.sessionId!);
+				} else if (serverState.agent_state === 'awaiting_input') {
+					sessionStore.update((s) => ({ ...s, isStreaming: false }));
+					void loadSession(state.sessionId!, true);
+				}
+			}).catch(() => {
+				// State endpoint unavailable — no-op
+			});
+		}
+	});
+}
+
 export async function approveToolCall(toolCallId: string) {
 	const state = get(sessionStore);
 	if (!state.sessionId) return;

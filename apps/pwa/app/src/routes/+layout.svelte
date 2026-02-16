@@ -4,7 +4,9 @@
 	import { onMount } from 'svelte';
 	import { MessageSquare, Terminal, Code2, Monitor, Menu } from 'lucide-svelte';
 	import PlasmaBackground from '$components/chat/PlasmaBackground.svelte';
+	import { goto } from '$app/navigation';
 	import { validateWorkspace } from '$stores/workspace';
+	import { loadSession } from '$stores/session';
 	import { apiClient } from '$api/client';
 
 	interface NavItem {
@@ -36,10 +38,16 @@
 	);
 
 	onMount(() => {
-		// Validate workspace on app load (clear if prior session was deleted).
 		void validateWorkspace(apiClient);
 		if ('serviceWorker' in navigator) {
 			void navigator.serviceWorker.register('/service-worker.js');
+
+			navigator.serviceWorker.addEventListener('message', (event) => {
+				if (event.data?.type === 'notification-click' && event.data.session_id) {
+					void loadSession(event.data.session_id);
+					void goto('/app');
+				}
+			});
 		}
 	});
 </script>

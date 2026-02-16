@@ -46,3 +46,10 @@ pub fn ensure_plans_dir() -> std::io::Result<PathBuf> {
 pub fn mcp_keys_path() -> PathBuf {
     tokens_dir().join("mcp_keys.json")
 }
+
+/// Get the VAPID key file (~/.krusty/tokens/vapid_key.pem)
+/// Used for Web Push notification authentication.
+/// Auto-generated on first server startup if absent.
+pub fn vapid_key_path() -> PathBuf {
+    tokens_dir().join("vapid_key.pem")
+}

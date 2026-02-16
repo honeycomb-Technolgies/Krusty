@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use tracing::info;
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 12;
+const SCHEMA_VERSION: i32 = 13;
 
 /// Shared database handle for connection reuse
 ///
@@ -528,6 +528,29 @@ impl Database {
                 "#,
             )?;
             self.set_schema_version_tx(&tx, 12)?;
+        }
+
+        // Migration 13: Push notification subscriptions
+        if current_version < 13 {
+            info!("Running migration 13: Push notification subscriptions");
+            tx.execute_batch(
+                r#"
+                CREATE TABLE IF NOT EXISTS push_subscriptions (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT,
+                    endpoint TEXT NOT NULL,
+                    p256dh TEXT NOT NULL,
+                    auth TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    last_used_at TEXT,
+                    UNIQUE(endpoint)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user
+                    ON push_subscriptions(user_id);
+                "#,
+            )?;
+            self.set_schema_version_tx(&tx, 13)?;
         }
 
         tx.commit()?;

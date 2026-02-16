@@ -41,6 +41,7 @@ use krusty_core::tools::registry::ToolRegistry;
 
 pub mod auth;
 pub mod error;
+pub mod push;
 pub mod routes;
 pub mod types;
 pub mod utils;
@@ -91,6 +92,8 @@ pub struct AppState {
     pub session_locks: Arc<RwLock<HashMap<String, (Arc<Mutex<()>>, Instant)>>>,
     /// Pending tool approval channels for supervised permission mode.
     pub pending_approvals: Arc<RwLock<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
+    /// Web Push notification service (None if VAPID init failed).
+    pub push_service: Option<Arc<push::PushService>>,
 }
 
 /// Build an AI client from configured credentials and env overrides.
@@ -217,6 +220,18 @@ pub async fn build_router(config: &ServerConfig) -> anyhow::Result<(Router, AppS
         tracing::warn!("Failed to connect MCP servers: {}", e);
     }
 
+    let push_service =
+        match push::PushService::init(&paths::vapid_key_path(), Arc::new(db_path.clone())) {
+            Ok(svc) => {
+                tracing::info!("Web Push service initialized");
+                Some(Arc::new(svc))
+            }
+            Err(e) => {
+                tracing::warn!("Push notifications unavailable: {}", e);
+                None
+            }
+        };
+
     let mut hook_manager_inner = UserHookManager::new();
     if let Ok(db) = Database::new(&db_path) {
         if let Err(e) = hook_manager_inner.load(&db) {
@@ -239,6 +254,7 @@ pub async fn build_router(config: &ServerConfig) -> anyhow::Result<(Router, AppS
         ))),
         session_locks: Arc::new(RwLock::new(HashMap::new())),
         pending_approvals: Arc::new(RwLock::new(HashMap::new())),
+        push_service,
     };
 
     let cors = CorsLayer::new()

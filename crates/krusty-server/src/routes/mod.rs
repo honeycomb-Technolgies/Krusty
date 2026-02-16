@@ -12,6 +12,7 @@ mod hooks;
 mod mcp;
 mod models;
 mod processes;
+mod push;
 mod sessions;
 mod tools;
 
@@ -28,5 +29,6 @@ pub fn api_router() -> Router<AppState> {
         .nest("/mcp", mcp::router())
         .nest("/processes", processes::router())
         .nest("/hooks", hooks::router())
+        .nest("/push", push::router())
         .merge(Router::new())
 }

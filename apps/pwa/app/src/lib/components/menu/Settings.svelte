@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { ArrowLeft, Bell, Server } from 'lucide-svelte';
+	import { subscribeToPush, unsubscribeFromPush, isPushSubscribed, isPushSupported } from '$lib/push';
 
 	interface Props {
 		onBack: () => void;
@@ -7,8 +8,34 @@
 
 	let { onBack }: Props = $props();
 
-	let notifications = $state(true);
+	let notifications = $state(isPushSubscribed());
+	let subscribing = $state(false);
+	let pushError = $state('');
 	let serverUrl = $state('http://localhost:3000');
+
+	async function toggleNotifications() {
+		if (subscribing) return;
+		subscribing = true;
+		pushError = '';
+
+		try {
+			if (notifications) {
+				await unsubscribeFromPush();
+				notifications = false;
+			} else {
+				const ok = await subscribeToPush();
+				if (ok) {
+					notifications = true;
+				} else {
+					pushError = 'Permission denied';
+				}
+			}
+		} catch (e) {
+			pushError = e instanceof Error ? e.message : 'Failed';
+		} finally {
+			subscribing = false;
+		}
+	}
 </script>
 
 <div class="flex h-full flex-col">
@@ -31,14 +58,26 @@
 						<Bell class="h-5 w-5 text-muted-foreground" />
 						<div>
 							<div class="font-medium">Push Notifications</div>
-							<div class="text-sm text-muted-foreground">Get notified on responses</div>
+							<div class="text-sm text-muted-foreground">
+								{#if subscribing}
+									Subscribing...
+								{:else if pushError}
+									{pushError}
+								{:else if !isPushSupported()}
+									Not supported in this browser
+								{:else}
+									Get notified on responses
+								{/if}
+							</div>
 						</div>
 					</div>
 					<button
-						onclick={() => (notifications = !notifications)}
+						onclick={toggleNotifications}
+						disabled={subscribing || !isPushSupported()}
 						aria-label="Toggle push notifications"
 						class="relative h-6 w-11 rounded-full transition-colors
-							{notifications ? 'bg-primary' : 'bg-muted'}"
+							{notifications ? 'bg-primary' : 'bg-muted'}
+							{subscribing || !isPushSupported() ? 'opacity-50' : ''}"
 					>
 						<span
 							class="absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform

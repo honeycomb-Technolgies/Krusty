@@ -17,6 +17,7 @@ mod file_activity;
 mod messages;
 mod plans;
 mod preferences;
+pub mod push_subscriptions;
 mod sessions;
 
 pub use agent_state::AgentState;
@@ -27,6 +28,7 @@ pub use file_activity::{FileActivityTracker, RankedFile};
 pub use messages::MessageStore;
 pub use plans::{PlanStore, PlanSummary};
 pub use preferences::Preferences;
+pub use push_subscriptions::{PushSubscription, PushSubscriptionStore};
 pub use sessions::{SessionInfo, SessionManager};
 
 /// Get current Unix timestamp in seconds

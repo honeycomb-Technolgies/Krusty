@@ -30,5 +30,10 @@ rust-embed = { version = "8", features = ["mime-guess"] }
 mime_guess = "2"
 portable-pty = "0.8"
 
+# Web Push notifications (pure Rust, no OpenSSL — matches rustls stack)
+web-push-native = "0.4"
+base64ct = { version = "1", features = ["alloc"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
 [lints]
 workspace = true
