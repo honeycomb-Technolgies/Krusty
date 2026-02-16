@@ -3,14 +3,17 @@
 //! Detects Tailscale, resolves device URLs, and manages `tailscale serve`
 //! for exposing the Krusty server with automatic HTTPS on the tailnet.
 //!
-//! Uses the `/krusty/` path prefix to avoid clashing with other services
-//! that may already be using `tailscale serve` on the same machine.
+//! Uses HTTPS port 8443 to avoid clashing with other services that may
+//! already be using the default port 443 on the same machine.
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::process::Command;
 
-const SERVE_PATH: &str = "/krusty/";
+/// Dedicated HTTPS port for Krusty on Tailscale.
+/// Tailscale supports 443, 8443, and 10000. We use 8443 to avoid
+/// clashing with other services on the default 443.
+const TAILSCALE_HTTPS_PORT: u16 = 8443;
 
 #[derive(Debug, Clone)]
 pub struct TailscaleInfo {
@@ -79,26 +82,29 @@ pub fn device_info() -> Result<TailscaleInfo> {
     })
 }
 
-/// Get the HTTPS URL for Krusty on the tailnet (includes /krusty/ path).
+/// Get the HTTPS URL for Krusty on the tailnet (port 8443).
 pub fn device_url(_port: u16) -> Result<String> {
     let info = device_info()?;
     if !info.online {
         anyhow::bail!("Tailscale is installed but this device is offline");
     }
-    Ok(format!("https://{}{}", info.dns_name, SERVE_PATH))
+    Ok(format!(
+        "https://{}:{}",
+        info.dns_name, TAILSCALE_HTTPS_PORT
+    ))
 }
 
-/// Run `tailscale serve --bg --set-path /krusty/ <port>` to expose on a unique path.
+/// Run `tailscale serve --bg --https 8443 <port>` to expose on a dedicated HTTPS port.
 ///
-/// Uses /krusty/ to avoid clashing with other services on the same tailnet device.
+/// Uses port 8443 so Krusty doesn't clash with other services on port 443.
 pub fn serve(port: u16) -> Result<()> {
     let output = Command::new("tailscale")
         .args([
             "serve",
             "--bg",
-            "--set-path",
-            SERVE_PATH,
-            &format!("{}", port),
+            "--https",
+            &TAILSCALE_HTTPS_PORT.to_string(),
+            &port.to_string(),
         ])
         .output()
         .context("Failed to run `tailscale serve`")?;
@@ -109,29 +115,29 @@ pub fn serve(port: u16) -> Result<()> {
     }
 
     tracing::info!(
-        "Tailscale serve configured: HTTPS{} → localhost:{}",
-        SERVE_PATH,
+        "Tailscale serve configured: HTTPS:{} → localhost:{}",
+        TAILSCALE_HTTPS_PORT,
         port
     );
     Ok(())
 }
 
-/// Stop `tailscale serve` for the krusty path.
+/// Stop `tailscale serve` for the krusty HTTPS port.
 pub fn serve_stop(_port: u16) -> Result<()> {
     let output = Command::new("tailscale")
-        .args(["serve", "--remove", SERVE_PATH])
+        .args(["serve", "--https", &TAILSCALE_HTTPS_PORT.to_string(), "off"])
         .output()
-        .context("Failed to run `tailscale serve --remove`")?;
+        .context("Failed to run `tailscale serve off`")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        tracing::warn!("tailscale serve --remove failed: {}", stderr.trim());
+        tracing::warn!("tailscale serve off failed: {}", stderr.trim());
     }
 
     Ok(())
 }
 
-/// Full Tailscale setup: detect, expose on /krusty/, return URL.
+/// Full Tailscale setup: detect, expose on port 8443, return URL.
 /// Returns None if Tailscale is not available (non-fatal).
 pub fn setup_tailscale_serve(port: u16) -> Option<String> {
     if !is_installed() {
