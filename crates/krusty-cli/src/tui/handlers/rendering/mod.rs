@@ -6,7 +6,11 @@ mod messages;
 mod scroll_calc;
 mod views;
 
-use ratatui::{style::Style, widgets::Block, Frame};
+use ratatui::{
+    style::Style,
+    widgets::{Block, Clear},
+    Frame,
+};
 
 use crate::tui::app::{App, Popup};
 use crate::tui::components::render_toasts;
@@ -14,9 +18,14 @@ use crate::tui::components::render_toasts;
 impl App {
     /// Main UI rendering dispatcher
     pub fn ui(&mut self, f: &mut Frame) {
+        // Hard-clear the frame first to avoid stale glyph artifacts after
+        // view/popup transitions and terminal resizes.
+        let area = f.area();
+        f.render_widget(Clear, area);
+
         // Render background
         let bg = Block::default().style(Style::default().bg(self.ui.theme.bg_color));
-        f.render_widget(bg, f.area());
+        f.render_widget(bg, area);
 
         // Render main view - direct match avoids borrow conflicts
         match self.ui.view {
@@ -49,7 +58,6 @@ impl App {
         }
 
         // Render toasts on top of everything
-        let area = f.area();
         render_toasts(f.buffer_mut(), area, &self.ui.toasts, &self.ui.theme);
     }
 }

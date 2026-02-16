@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use krusty_core::server_instance;
+use tauri::Manager;
 
 const DEFAULT_PORT: u16 = 3000;
 

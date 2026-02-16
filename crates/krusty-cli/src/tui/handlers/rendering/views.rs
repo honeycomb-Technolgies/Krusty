@@ -6,7 +6,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Position, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Paragraph},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph},
     Frame,
 };
 
@@ -61,6 +61,12 @@ impl App {
 
         let inner_area = logo_block.inner(chunks[1]);
         f.render_widget(logo_block, chunks[1]);
+        // Ensure animated logo area starts from clean cells every frame.
+        f.render_widget(Clear, inner_area);
+        f.render_widget(
+            Paragraph::new("").style(Style::default().bg(self.ui.theme.bg_color)),
+            inner_area,
+        );
 
         // Render bubbles inside logo area
         let bubbles = self
@@ -74,6 +80,7 @@ impl App {
                 if let Some(cell) = f.buffer_mut().cell_mut(Position::new(abs_x, abs_y)) {
                     cell.set_char(ch);
                     cell.set_fg(color);
+                    cell.set_bg(self.ui.theme.bg_color);
                 }
             }
         }
@@ -125,6 +132,10 @@ impl App {
         let (crab_frames, crab_x, _crab_y) = self.ui.menu_animator.render_crab();
         let crab_height = crab_frames.len() as u16;
         let crab_y = inner_area.y + inner_area.height.saturating_sub(crab_height);
+        let crab_start_x = inner_area.x
+            + crab_x
+                .clamp(0.0, inner_area.width.saturating_sub(1) as f32)
+                .round() as u16;
 
         let crab_color = self.ui.theme.accent_color;
         let eye_color = self.ui.theme.mode_chat_color;
@@ -134,7 +145,7 @@ impl App {
             if y < inner_area.y + inner_area.height {
                 // Color eyes pink on the second line
                 if i == 1 && (line.contains(" o ") || line.contains("-")) {
-                    let mut x_pos = inner_area.x + crab_x.round() as u16;
+                    let mut x_pos = crab_start_x;
                     for ch in line.chars() {
                         if x_pos < inner_area.x + inner_area.width {
                             if let Some(cell) = f.buffer_mut().cell_mut(Position::new(x_pos, y)) {
@@ -145,17 +156,19 @@ impl App {
                                     cell.set_char(ch);
                                     cell.set_fg(crab_color);
                                 }
+                                cell.set_bg(self.ui.theme.bg_color);
                             }
                         }
                         x_pos += 1;
                     }
                 } else {
-                    let mut x_pos = inner_area.x + crab_x.round() as u16;
+                    let mut x_pos = crab_start_x;
                     for ch in line.chars() {
                         if x_pos < inner_area.x + inner_area.width {
                             if let Some(cell) = f.buffer_mut().cell_mut(Position::new(x_pos, y)) {
                                 cell.set_char(ch);
                                 cell.set_fg(crab_color);
+                                cell.set_bg(self.ui.theme.bg_color);
                             }
                         }
                         x_pos += 1;
@@ -289,12 +302,8 @@ impl App {
             None
         };
 
-        // Border color changes to accent when thinking mode enabled (Tab toggle)
-        let input_border_color = if self.runtime.thinking_enabled {
-            self.ui.theme.accent_color
-        } else {
-            self.ui.theme.border_color
-        };
+        // Border color reflects thinking intensity while tab-cycling.
+        let input_border_color = self.thinking_border_color();
         // Get hover range for file ref highlighting
         let hover_range = self
             .ui
@@ -370,6 +379,7 @@ impl App {
             &self.ui.theme,
             &self.runtime.current_model,
             &self.runtime.working_dir,
+            self.runtime.git_status.as_ref(),
             None,
             self.runtime.running_process_count,
             self.runtime.running_process_elapsed,
@@ -555,12 +565,8 @@ impl App {
             None
         };
 
-        // Border color changes to accent when thinking mode enabled (Tab toggle)
-        let input_border_color = if self.runtime.thinking_enabled {
-            self.ui.theme.accent_color
-        } else {
-            self.ui.theme.border_color
-        };
+        // Border color reflects thinking intensity while tab-cycling.
+        let input_border_color = self.thinking_border_color();
         // Get hover range for file ref highlighting
         let hover_range = self
             .ui
@@ -640,6 +646,7 @@ impl App {
             &self.ui.theme,
             &self.runtime.current_model,
             &self.runtime.working_dir,
+            self.runtime.git_status.as_ref(),
             context_tokens,
             self.runtime.running_process_count,
             self.runtime.running_process_elapsed,

@@ -272,17 +272,9 @@ impl App {
 
     /// Handle start menu keyboard events
     pub fn handle_start_menu_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
-        // Tab - toggle extended thinking mode (when not in autocomplete)
+        // Tab - cycle thinking level (Codex) or toggle thinking (non-Codex)
         if code == KeyCode::Tab && !self.ui.autocomplete.visible {
-            self.runtime.thinking_enabled = !self.runtime.thinking_enabled;
-            tracing::info!(
-                "Extended thinking {}",
-                if self.runtime.thinking_enabled {
-                    "enabled"
-                } else {
-                    "disabled"
-                }
-            );
+            self.cycle_thinking_level();
             return;
         }
 
@@ -352,18 +344,10 @@ impl App {
             return;
         }
 
-        // Tab - toggle extended thinking mode (when not in autocomplete)
+        // Tab - cycle thinking level (Codex) or toggle thinking (non-Codex)
         // Can toggle during streaming - takes effect after current stream completes
         if code == KeyCode::Tab && !self.ui.autocomplete.visible {
-            self.runtime.thinking_enabled = !self.runtime.thinking_enabled;
-            tracing::info!(
-                "Extended thinking {}",
-                if self.runtime.thinking_enabled {
-                    "enabled"
-                } else {
-                    "disabled"
-                }
-            );
+            self.cycle_thinking_level();
             return;
         }
 
@@ -621,6 +605,18 @@ impl App {
             PromptType::AskUserQuestion => {
                 if let Some(id) = tool_use_id {
                     self.handle_ask_user_answer(id, &answers);
+                }
+            }
+            PromptType::ToolApproval => {
+                self.handle_tool_approval_answer(&answers);
+            }
+            PromptType::PermissionSelect => {
+                if let Some(crate::tui::components::PromptAnswer::Selected(idx)) = answers.first() {
+                    self.runtime.permission_mode = if *idx == 0 {
+                        krusty_core::tools::registry::PermissionMode::Supervised
+                    } else {
+                        krusty_core::tools::registry::PermissionMode::Autonomous
+                    };
                 }
             }
         }

@@ -9,6 +9,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, RwLock};
 
+use serde::{Deserialize, Serialize};
+
 use crate::agent::hooks::{HookResult, PostToolHook, PreToolHook};
 use crate::agent::subagent::AgentProgress;
 use crate::ai::types::AiTool;
@@ -16,6 +18,36 @@ use crate::mcp::McpManager;
 use crate::process::ProcessRegistry;
 use crate::skills::SkillsManager;
 use crate::tools::git_identity::GitIdentity;
+
+/// Tool category for permission checking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolCategory {
+    /// Read-only tools that never modify state.
+    ReadOnly,
+    /// Write tools that modify files, execute commands, etc.
+    Write,
+    /// Interactive tools that require user input.
+    Interactive,
+}
+
+/// Permission mode for tool execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PermissionMode {
+    #[default]
+    Supervised,
+    Autonomous,
+}
+
+/// Categorize a tool by name.
+pub fn tool_category(name: &str) -> ToolCategory {
+    match name {
+        "read" | "glob" | "grep" | "web_search" | "web_fetch" | "explore" => ToolCategory::ReadOnly,
+        "AskUserQuestion" | "PlanConfirm" | "enter_plan_mode" | "task_start" | "task_complete"
+        | "add_subtask" | "set_dependency" => ToolCategory::Interactive,
+        _ => ToolCategory::Write,
+    }
+}
 
 /// Default tool execution timeout (2 minutes)
 const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(120);

@@ -12,6 +12,20 @@ use crate::tools::{register_build_tool, register_explore_tool};
 use crate::tui::app::App;
 
 impl App {
+    fn resolve_auth_for_active_provider(&self) -> Option<String> {
+        if self.runtime.active_provider == ProviderId::OpenAI {
+            let resolved = krusty_core::auth::resolve_openai_auth(
+                &self.services.credential_store,
+                &self.runtime.current_model,
+            );
+            return resolved.credential;
+        }
+
+        self.services
+            .credential_store
+            .get_auth(&self.runtime.active_provider)
+    }
+
     /// Try to load existing authentication for the active provider
     pub async fn try_load_auth(&mut self) -> Result<()> {
         // Refresh expired OAuth tokens before checking auth
@@ -24,11 +38,7 @@ impl App {
         }
 
         // Try credential store for all providers (API keys and OAuth tokens)
-        if let Some(key) = self
-            .services
-            .credential_store
-            .get_auth(&self.runtime.active_provider)
-        {
+        if let Some(key) = self.resolve_auth_for_active_provider() {
             let config = self.create_client_config();
             self.runtime.ai_client = Some(AiClient::with_api_key(config, key.clone()));
             self.runtime.api_key = Some(key);
@@ -84,10 +94,8 @@ impl App {
     /// Create an AI client with the current provider configuration
     pub fn create_ai_client(&self) -> Option<AiClient> {
         let config = self.create_client_config();
-        self.runtime
-            .api_key
-            .as_ref()
-            .map(|key| AiClient::with_api_key(config, key.clone()))
+        self.resolve_auth_for_active_provider()
+            .map(|key| AiClient::with_api_key(config, key))
     }
 
     /// Set API key for current provider and create client
@@ -147,7 +155,17 @@ impl App {
         }
 
         // Try to load credentials for the new provider (API key or OAuth token)
-        if let Some(key) = self.services.credential_store.get_auth(&provider_id) {
+        let auth = if provider_id == ProviderId::OpenAI {
+            krusty_core::auth::resolve_openai_auth(
+                &self.services.credential_store,
+                &self.runtime.current_model,
+            )
+            .credential
+        } else {
+            self.services.credential_store.get_auth(&provider_id)
+        };
+
+        if let Some(key) = auth {
             let config = self.create_client_config();
             self.runtime.ai_client = Some(AiClient::with_api_key(config, key.clone()));
             self.runtime.api_key = Some(key);

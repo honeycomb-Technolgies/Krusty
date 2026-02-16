@@ -19,12 +19,12 @@ This directory is the future open-source mobile/desktop web app shell for chat.
 
 ```bash
 cd apps/pwa/app
-npm ci
-npm run dev
+bun install
+bun run dev
 ```
 
 Build:
 
 ```bash
-npm run build
+bun run build
 ```

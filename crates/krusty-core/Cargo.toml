@@ -29,6 +29,7 @@ tokio-util = { version = "0.7", features = ["compat"] }
 
 # HTTP (rustls for cross-platform TLS without OpenSSL)
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["rustls-tls-webpki-roots", "connect"] }
 
 # Image processing (for tool screenshots)
 image = { version = "0.25", default-features = false, features = ["png"] }
@@ -106,4 +107,3 @@ tempfile = "3.14"
 
 [lints]
 workspace = true
-

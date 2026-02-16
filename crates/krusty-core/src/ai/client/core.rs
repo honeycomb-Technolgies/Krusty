@@ -5,6 +5,7 @@
 
 use anyhow::Result;
 use reqwest::Client;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tracing::{error, info};
 
 use super::config::AiClientConfig;
@@ -162,6 +163,50 @@ impl AiClient {
         }
 
         request
+    }
+
+    /// Build a WebSocket request with auth + configured headers.
+    pub(crate) fn build_websocket_request(
+        &self,
+        url: &str,
+        extra_headers: &[(&str, &str)],
+    ) -> Result<tokio_tungstenite::tungstenite::http::Request<()>> {
+        let mut request = url
+            .into_client_request()
+            .map_err(|e| anyhow::anyhow!("Invalid websocket request URL: {}", e))?;
+
+        let headers = request.headers_mut();
+
+        match self.config.auth_header {
+            AuthHeader::Bearer => {
+                headers.insert("authorization", format!("Bearer {}", self.api_key).parse()?);
+            }
+            AuthHeader::XApiKey => {
+                headers.insert("x-api-key", self.api_key.parse()?);
+            }
+        }
+
+        headers.insert("content-type", "application/json".parse()?);
+
+        for (key, value) in &self.config.custom_headers {
+            if let (Ok(name), Ok(val)) = (
+                key.parse::<tokio_tungstenite::tungstenite::http::header::HeaderName>(),
+                value.parse::<tokio_tungstenite::tungstenite::http::HeaderValue>(),
+            ) {
+                headers.insert(name, val);
+            }
+        }
+
+        for (key, value) in extra_headers {
+            if let (Ok(name), Ok(val)) = (
+                (*key).parse::<tokio_tungstenite::tungstenite::http::header::HeaderName>(),
+                (*value).parse::<tokio_tungstenite::tungstenite::http::HeaderValue>(),
+            ) {
+                headers.insert(name, val);
+            }
+        }
+
+        Ok(request)
     }
 
     /// Build a request with beta headers for thinking/reasoning

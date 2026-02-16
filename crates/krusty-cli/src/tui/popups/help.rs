@@ -157,6 +157,7 @@ impl HelpPopup {
             ("/ps", "View background processes"),
             ("/terminal", "Open interactive terminal"),
             ("/init", "Generate KRAB.md"),
+            ("/permissions", "Toggle supervised/autonomous mode"),
             ("/cmd", "Show this help"),
         ];
 
@@ -184,7 +185,7 @@ impl HelpPopup {
                     ("Ctrl+B", "Toggle BUILD/PLAN mode"),
                     ("Ctrl+T", "Toggle plan sidebar"),
                     ("Ctrl+P", "Open process list"),
-                    ("Tab", "Toggle extended thinking"),
+                    ("Tab", "Cycle thinking intensity"),
                     ("Esc", "Cancel AI / close popup"),
                 ],
             ),

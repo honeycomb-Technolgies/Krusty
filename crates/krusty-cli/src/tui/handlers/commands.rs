@@ -116,6 +116,9 @@ impl App {
             "/hooks" => {
                 self.open_hooks_popup();
             }
+            "/permissions" | "/perm" => {
+                self.show_permission_select();
+            }
             "/update" => {
                 self.start_update_check();
             }
@@ -662,6 +665,15 @@ impl App {
         let mcp = self.services.mcp_manager.clone();
         let servers = futures::executor::block_on(mcp.list_servers());
         self.ui.popups.mcp.update(servers);
+    }
+
+    /// Show permission mode selection popup
+    fn show_permission_select(&mut self) {
+        let is_supervised = self.runtime.permission_mode
+            == krusty_core::tools::registry::PermissionMode::Supervised;
+        self.ui
+            .decision_prompt
+            .show_permission_select(is_supervised);
     }
 
     /// Open hooks configuration popup

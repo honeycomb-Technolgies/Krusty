@@ -61,7 +61,8 @@
 		running: 'border-blue-500/50 bg-blue-500/10',
 		success: 'border-green-500/50 bg-green-500/10',
 		error: 'border-red-500/50 bg-red-500/10',
-		pending: 'border-border bg-muted/50'
+		pending: 'border-border bg-muted/50',
+		awaiting_approval: 'border-amber-500/50 bg-amber-500/10'
 	}[toolCall.status] || 'border-border bg-muted/50');
 
 	// Format tool description from arguments
@@ -102,6 +103,8 @@
 				{#if toolCall.status === 'running'}
 					<Loader2 class="h-3.5 w-3.5 animate-spin text-blue-500" />
 					<span class="text-xs text-muted-foreground tabular-nums">{elapsedSeconds}s</span>
+				{:else if toolCall.status === 'awaiting_approval'}
+					<span class="text-xs font-medium text-amber-500">Awaiting approval</span>
 				{:else if toolCall.status === 'success'}
 					<CheckIcon class="h-3.5 w-3.5 text-green-500" />
 				{:else if toolCall.status === 'error'}

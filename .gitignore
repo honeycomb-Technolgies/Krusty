@@ -27,6 +27,11 @@ Thumbs.db
 frontend/node_modules
 frontend/build
 
+# Lockfile policy: Bun only
+**/package-lock.json
+**/pnpm-lock.yaml
+**/yarn.lock
+
 # Never publish archive snapshots from this repo
 apps/**/legacy*/
 apps/**/legacy-*/

@@ -13,13 +13,13 @@ mod tool_execution;
 use tokio::sync::mpsc;
 
 use crate::agent::{AgentEvent, InterruptReason};
-use crate::ai::client::CallOptions;
+use crate::ai::client::{CallOptions, CodexReasoningEffort};
 use crate::ai::streaming::StreamPart;
 use crate::ai::types::{
     Content, ContextManagement, ModelMessage, Role, ThinkingConfig, WebFetchConfig, WebSearchConfig,
 };
 use crate::tools::{load_from_clipboard_rgba, load_from_path, load_from_url};
-use crate::tui::app::{App, View};
+use crate::tui::app::{App, ThinkingLevel, View};
 use crate::tui::input::{has_image_references, parse_input, InputSegment};
 
 /// Maximum number of files allowed per message
@@ -270,7 +270,7 @@ impl App {
         if !project_context.is_empty() {
             tracing::info!(chars = project_context.len(), "Context: project");
         }
-        let _has_thinking_conversation = self.runtime.thinking_enabled
+        let _has_thinking_conversation = self.runtime.thinking_level.is_enabled()
             && self.runtime.chat.conversation.iter().any(|msg| {
                 msg.role == Role::Assistant
                     && msg
@@ -336,8 +336,19 @@ impl App {
         let tool_names: Vec<_> = tools.iter().map(|t| t.name.as_str()).collect();
         tracing::info!("Sending {} tools to API: {:?}", tools.len(), tool_names);
 
-        let can_use_thinking = self.runtime.thinking_enabled;
+        let can_use_thinking = self.runtime.thinking_level.is_enabled();
         let thinking = can_use_thinking.then(ThinkingConfig::default);
+        let codex_reasoning_effort = if self.is_codex_thinking_mode() {
+            match self.runtime.thinking_level {
+                ThinkingLevel::Off => None,
+                ThinkingLevel::Low => Some(CodexReasoningEffort::Low),
+                ThinkingLevel::Medium => Some(CodexReasoningEffort::Medium),
+                ThinkingLevel::High => Some(CodexReasoningEffort::High),
+                ThinkingLevel::XHigh => Some(CodexReasoningEffort::XHigh),
+            }
+        } else {
+            None
+        };
 
         let context_management = match (can_use_thinking, !tools.is_empty()) {
             (true, _) => Some(ContextManagement::default_for_thinking_and_tools()),
@@ -352,6 +363,9 @@ impl App {
             context_management,
             web_search: Some(WebSearchConfig::default()),
             web_fetch: Some(WebFetchConfig::default()),
+            session_id: self.runtime.current_session_id.clone(),
+            codex_reasoning_effort,
+            codex_parallel_tool_calls: true,
             ..Default::default()
         };
 

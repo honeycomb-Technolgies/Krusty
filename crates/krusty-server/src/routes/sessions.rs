@@ -131,7 +131,25 @@ async fn update_session(
         .get_session(&id)?
         .ok_or_else(|| AppError::NotFound(format!("Session {} not found", id)))?;
 
-    session_manager.update_session_title(&id, &req.title)?;
+    if req.title.is_none() && req.working_dir.is_none() {
+        return Err(AppError::BadRequest(
+            "At least one of title or working_dir must be provided".to_string(),
+        ));
+    }
+
+    if let Some(title) = req.title.as_deref() {
+        session_manager.update_session_title(&id, title)?;
+    }
+
+    if let Some(working_dir) = req.working_dir.as_deref() {
+        let trimmed = working_dir.trim();
+        let normalized = if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        };
+        session_manager.update_session_working_dir(&id, normalized)?;
+    }
 
     let session = session_manager
         .get_session(&id)?
@@ -262,12 +280,17 @@ async fn pinch_session(
 
     // Create the child session
     let new_title = format!("{} (continued)", source_session.title);
+    let default_working_dir = state.working_dir.to_string_lossy().to_string();
+    let working_dir_for_child = source_session
+        .working_dir
+        .as_deref()
+        .unwrap_or(default_working_dir.as_str());
     let new_session_id = session_manager.create_linked_session(
         &new_title,
         &id,
         &pinch_ctx,
         None, // Use default model
-        Some(state.working_dir.to_string_lossy().as_ref()),
+        Some(working_dir_for_child),
     )?;
 
     // Inject the pinch context as first message in new session

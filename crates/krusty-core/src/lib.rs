@@ -13,6 +13,7 @@ pub mod ai;
 pub mod auth;
 pub mod constants;
 pub mod extensions;
+pub mod git;
 pub mod mcp;
 pub mod paths;
 pub mod plan;

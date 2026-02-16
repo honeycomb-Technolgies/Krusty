@@ -14,9 +14,9 @@
 - Server local run:
   `cargo run -p krusty-server` (defaults to `http://localhost:3000`)
 - PWA:
-  `cd apps/pwa/app && npm ci && npm run check && npm run build`
+  `cd apps/pwa/app && bun install && bun run check && bun run build`
 - Desktop shell:
-  `cd apps/desktop/shell && npm ci && cargo check --manifest-path src-tauri/Cargo.toml`
+  `cd apps/desktop/shell && bun install && cargo check --manifest-path src-tauri/Cargo.toml`
 - Marketing site smoke:
   verify files in `apps/marketing/site` and serve with `python3 -m http.server 8080`.
 
@@ -28,7 +28,7 @@
 ## Testing Guidelines
 - Keep Rust unit tests near implementation (`#[cfg(test)]`).
 - Use `#[tokio::test]` for async behavior.
-- For frontend changes, run `npm run check` and `npm run build` in `apps/pwa/app`.
+- For frontend changes, run `bun run check` and `bun run build` in `apps/pwa/app`.
 - Treat warnings as cleanup candidates even if builds pass.
 
 ## Commit & Pull Request Guidelines

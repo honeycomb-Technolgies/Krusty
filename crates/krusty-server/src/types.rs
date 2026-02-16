@@ -1,6 +1,7 @@
 //! Request and response types for the API
 
 use krusty_core::storage::SessionInfo;
+use krusty_core::tools::registry::PermissionMode;
 use serde::{Deserialize, Serialize};
 
 // ============================================================================
@@ -16,7 +17,8 @@ pub struct CreateSessionRequest {
 
 #[derive(Deserialize)]
 pub struct UpdateSessionRequest {
-    pub title: String,
+    pub title: Option<String>,
+    pub working_dir: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -102,6 +104,9 @@ pub struct ChatRequest {
     /// Enable extended thinking
     #[serde(default)]
     pub thinking_enabled: bool,
+    /// Permission mode for tool execution
+    #[serde(default)]
+    pub permission_mode: PermissionMode,
 }
 
 #[derive(Deserialize)]
@@ -112,6 +117,13 @@ pub struct ToolResultRequest {
     pub tool_call_id: String,
     /// Tool result content (JSON string)
     pub result: String,
+}
+
+#[derive(Deserialize)]
+pub struct ToolApprovalRequest {
+    pub session_id: String,
+    pub tool_call_id: String,
+    pub approved: bool,
 }
 
 // ============================================================================
@@ -151,6 +163,76 @@ pub struct ToolExecuteRequest {
 pub struct ToolExecuteResponse {
     pub output: String,
     pub is_error: bool,
+}
+
+// ============================================================================
+// Git Types
+// ============================================================================
+
+#[derive(Deserialize)]
+pub struct GitQuery {
+    /// Optional path to inspect. If omitted, defaults to current workspace path.
+    pub path: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct GitStatusResponse {
+    pub in_repo: bool,
+    pub repo_root: Option<String>,
+    pub branch: Option<String>,
+    pub head: Option<String>,
+    pub upstream: Option<String>,
+    pub branch_files: usize,
+    pub branch_additions: usize,
+    pub branch_deletions: usize,
+    pub pr_number: Option<u64>,
+    pub ahead: usize,
+    pub behind: usize,
+    pub staged: usize,
+    pub modified: usize,
+    pub untracked: usize,
+    pub conflicted: usize,
+    pub total_changes: usize,
+}
+
+#[derive(Serialize)]
+pub struct GitBranchResponse {
+    pub name: String,
+    pub is_current: bool,
+    pub upstream: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct GitBranchesResponse {
+    pub repo_root: String,
+    pub branches: Vec<GitBranchResponse>,
+}
+
+#[derive(Serialize)]
+pub struct GitWorktreeResponse {
+    pub path: String,
+    pub branch: Option<String>,
+    pub head: Option<String>,
+    pub is_current: bool,
+}
+
+#[derive(Serialize)]
+pub struct GitWorktreesResponse {
+    pub repo_root: String,
+    pub worktrees: Vec<GitWorktreeResponse>,
+}
+
+#[derive(Deserialize)]
+pub struct GitCheckoutRequest {
+    /// Optional path within a repository.
+    pub path: Option<String>,
+    /// Branch to switch to.
+    pub branch: String,
+    /// If true, creates a new branch (`git checkout -b`).
+    #[serde(default)]
+    pub create: bool,
+    /// Optional start point used when creating a new branch.
+    pub start_point: Option<String>,
 }
 
 // ============================================================================
@@ -305,6 +387,16 @@ pub enum AgenticEvent {
     Finish { session_id: String },
     /// Session title updated (from Haiku)
     TitleUpdate { title: String },
+    /// Tool requires user approval (supervised mode)
+    ToolApprovalRequired {
+        id: String,
+        name: String,
+        arguments: serde_json::Value,
+    },
+    /// Tool was approved by user
+    ToolApproved { id: String },
+    /// Tool was denied by user
+    ToolDenied { id: String },
     /// Error occurred
     Error { error: String },
 }

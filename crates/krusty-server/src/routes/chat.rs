@@ -1,5 +1,6 @@
 //! Chat endpoint with SSE streaming and tool loop.
 
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -12,7 +13,8 @@ use axum::{
     Json, Router,
 };
 use futures::stream::Stream;
-use tokio::sync::mpsc;
+use serde_json::json;
+use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
 use tokio_stream::wrappers::ReceiverStream;
 
 use krusty_core::ai::client::{AiClient, CallOptions};
@@ -23,12 +25,14 @@ use krusty_core::ai::types::{
 };
 use krusty_core::process::ProcessRegistry;
 use krusty_core::storage::Database;
-use krusty_core::tools::registry::{ToolContext, ToolRegistry};
+use krusty_core::tools::registry::{
+    tool_category, PermissionMode, ToolCategory, ToolContext, ToolRegistry,
+};
 use krusty_core::SessionManager;
 
 use crate::auth::CurrentUser;
 use crate::error::AppError;
-use crate::types::{AgenticEvent, ChatRequest, ToolResultRequest};
+use crate::types::{AgenticEvent, ChatRequest, ToolApprovalRequest, ToolResultRequest};
 use crate::AppState;
 
 const MAX_ITERATIONS: usize = 50;
@@ -38,12 +42,14 @@ const AI_STREAM_TIMEOUT: Duration = Duration::from_secs(120);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 const EXPLORATION_BUDGET_SOFT: usize = 15;
 const EXPLORATION_BUDGET_HARD: usize = 30;
+const APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Build the chat router.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", post(chat))
         .route("/tool-result", post(tool_result))
+        .route("/tool-approval", post(tool_approval))
 }
 
 /// Chat endpoint with SSE streaming response and tool execution loop.
@@ -60,33 +66,55 @@ async fn chat(
 
     let user_id = user.as_ref().and_then(|u| u.0.user_id.clone());
     let user_home_dir = user.as_ref().and_then(|u| u.0.home_dir.clone());
+    let default_working_dir = user_home_dir
+        .clone()
+        .unwrap_or_else(|| (*state.working_dir).clone());
 
     let db = Database::new(&state.db_path)?;
     let session_manager = SessionManager::new(db);
 
-    let (session_id, is_first_message) = match req.session_id {
+    let (session_id, is_first_message, session_working_dir) = match req.session_id {
         Some(id) => {
             if !session_manager.verify_session_ownership(&id, user_id.as_deref())? {
                 return Err(AppError::NotFound(format!("Session {} not found", id)));
             }
+            let session = session_manager
+                .get_session(&id)?
+                .ok_or_else(|| AppError::NotFound(format!("Session {} not found", id)))?;
             let messages = session_manager.load_session_messages(&id)?;
-            (id, messages.is_empty())
+            let working_dir = session
+                .working_dir
+                .as_deref()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| default_working_dir.clone());
+            (id, messages.is_empty(), working_dir)
         }
         None => {
-            let working_dir = user_home_dir
-                .as_ref()
-                .map(|p| p.to_string_lossy().to_string())
-                .or_else(|| Some(state.working_dir.to_string_lossy().to_string()));
             let title = SessionManager::generate_title_from_content(&req.message);
+            let working_dir = default_working_dir.clone();
+            let working_dir_str = working_dir.to_string_lossy().to_string();
             let id = session_manager.create_session_for_user(
                 &title,
                 req.model.as_deref(),
-                working_dir.as_deref(),
+                Some(working_dir_str.as_str()),
                 user_id.as_deref(),
             )?;
-            (id, true)
+            (id, true, working_dir)
         }
     };
+
+    let session_lock = {
+        let mut locks = state.session_locks.write().await;
+        locks
+            .entry(session_id.clone())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    };
+    let guard = Arc::clone(&session_lock)
+        .try_lock_owned()
+        .map_err(|_| AppError::Conflict(format!("Session {} is busy", session_id)))?;
+
+    let permission_mode = req.permission_mode;
 
     let first_message_for_title = if is_first_message {
         Some(req.message.clone())
@@ -123,6 +151,8 @@ async fn chat(
     let ai_tools = state.tool_registry.get_ai_tools().await;
     let mut options = CallOptions {
         tools: Some(ai_tools),
+        session_id: Some(session_id.clone()),
+        codex_parallel_tool_calls: true,
         ..Default::default()
     };
     if req.thinking_enabled {
@@ -148,14 +178,14 @@ async fn chat(
 
     let tool_registry = Arc::clone(&state.tool_registry);
     let process_registry = Arc::clone(&state.process_registry);
-    let working_dir = user_home_dir
-        .clone()
-        .unwrap_or_else(|| (*state.working_dir).clone());
+    let working_dir = session_working_dir;
     let db_path = Arc::clone(&state.db_path);
     let session_id_for_loop = session_id.clone();
     let user_id_for_loop = user_id.clone();
+    let pending_approvals = Arc::clone(&state.pending_approvals);
 
     tokio::spawn(async move {
+        let _guard = guard;
         run_agentic_loop(
             ai_client,
             tool_registry,
@@ -167,6 +197,8 @@ async fn chat(
             db_path,
             working_dir,
             user_id_for_loop,
+            permission_mode,
+            pending_approvals,
         )
         .await;
     });
@@ -212,6 +244,9 @@ async fn tool_result(
 
     let user_id = user.as_ref().and_then(|u| u.0.user_id.clone());
     let user_home_dir = user.as_ref().and_then(|u| u.0.home_dir.clone());
+    let default_working_dir = user_home_dir
+        .clone()
+        .unwrap_or_else(|| (*state.working_dir).clone());
 
     let db = Database::new(&state.db_path)?;
     let session_manager = SessionManager::new(db);
@@ -222,6 +257,26 @@ async fn tool_result(
             req.session_id
         )));
     }
+
+    let session = session_manager
+        .get_session(&req.session_id)?
+        .ok_or_else(|| AppError::NotFound(format!("Session {} not found", req.session_id)))?;
+    let session_working_dir = session
+        .working_dir
+        .as_deref()
+        .map(PathBuf::from)
+        .unwrap_or(default_working_dir);
+
+    let session_lock = {
+        let mut locks = state.session_locks.write().await;
+        locks
+            .entry(req.session_id.clone())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    };
+    let guard = Arc::clone(&session_lock)
+        .try_lock_owned()
+        .map_err(|_| AppError::Conflict(format!("Session {} is busy", req.session_id)))?;
 
     let raw_messages = session_manager.load_session_messages(&req.session_id)?;
     let mut conversation: Vec<ModelMessage> = raw_messages
@@ -260,6 +315,8 @@ async fn tool_result(
     let ai_tools = state.tool_registry.get_ai_tools().await;
     let mut options = CallOptions {
         tools: Some(ai_tools),
+        session_id: Some(req.session_id.clone()),
+        codex_parallel_tool_calls: true,
         ..Default::default()
     };
     if has_thinking {
@@ -272,14 +329,14 @@ async fn tool_result(
 
     let tool_registry = Arc::clone(&state.tool_registry);
     let process_registry = Arc::clone(&state.process_registry);
-    let working_dir = user_home_dir
-        .clone()
-        .unwrap_or_else(|| (*state.working_dir).clone());
+    let working_dir = session_working_dir;
     let db_path = Arc::clone(&state.db_path);
     let session_id = req.session_id;
     let user_id_for_loop = user_id.clone();
+    let pending_approvals = Arc::clone(&state.pending_approvals);
 
     tokio::spawn(async move {
+        let _guard = guard;
         run_agentic_loop(
             ai_client,
             tool_registry,
@@ -291,12 +348,27 @@ async fn tool_result(
             db_path,
             working_dir,
             user_id_for_loop,
+            PermissionMode::Autonomous,
+            pending_approvals,
         )
         .await;
     });
 
     let stream = ReceiverStream::new(sse_rx);
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+/// Submit a tool approval decision.
+async fn tool_approval(
+    State(state): State<AppState>,
+    Json(req): Json<ToolApprovalRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let mut approvals = state.pending_approvals.write().await;
+    let sender = approvals
+        .remove(&req.tool_call_id)
+        .ok_or_else(|| AppError::NotFound("No pending approval".into()))?;
+    let _ = sender.send(req.approved);
+    Ok(Json(json!({"status": "ok"})))
 }
 
 /// Run the loop: AI -> tools -> AI until complete.
@@ -311,6 +383,8 @@ async fn run_agentic_loop(
     db_path: Arc<PathBuf>,
     working_dir: PathBuf,
     user_id: Option<String>,
+    permission_mode: PermissionMode,
+    pending_approvals: Arc<RwLock<HashMap<String, oneshot::Sender<bool>>>>,
 ) {
     let db = match Database::new(&db_path) {
         Ok(db) => db,
@@ -500,40 +574,29 @@ async fn run_agentic_loop(
         }
 
         let _ = session_manager.set_agent_state(&session_id, "tool_executing");
-        let mut tool_results = execute_tools(
+        let tool_results = execute_tools(
             &tool_registry,
             &tool_calls,
             &working_dir,
             &process_registry,
             &sse_tx,
             user_id.as_deref(),
+            permission_mode,
+            &pending_approvals,
         )
         .await;
 
-        // Inject exploration budget warnings
+        // Keep exploration budget internal. Do not inject warnings into tool result content.
         if exploration_budget_count >= EXPLORATION_BUDGET_HARD {
-            tool_results.push(Content::Text {
-                text: format!(
-                    "[EXPLORATION BUDGET EXCEEDED]\n\
-                    You have made {} consecutive read-only operations without taking action.\n\
-                    STOP exploring and take action NOW.\n\
-                    If you are working on a plan, call task_start and begin implementation.\n\
-                    If you need more context, use grep or glob for targeted results.\n\
-                    Further exploration without action is unacceptable.",
-                    exploration_budget_count
-                ),
-            });
+            tracing::warn!(
+                exploration_budget_count,
+                "Exploration budget hard threshold reached"
+            );
         } else if exploration_budget_count >= EXPLORATION_BUDGET_SOFT {
-            tool_results.push(Content::Text {
-                text: format!(
-                    "[EXPLORATION BUDGET]\n\
-                    You have made {} consecutive read-only operations without taking action.\n\
-                    If you are working on a plan, call task_start and begin implementation.\n\
-                    If you need more context, use grep or glob for targeted results.\n\
-                    Continued exploration without action is wasteful. Act now or explain why you need more context.",
-                    exploration_budget_count
-                ),
-            });
+            tracing::info!(
+                exploration_budget_count,
+                "Exploration budget soft threshold reached"
+            );
         }
 
         let tool_msg = ModelMessage {
@@ -705,10 +768,99 @@ async fn execute_tools(
     process_registry: &Arc<ProcessRegistry>,
     sse_tx: &mpsc::Sender<Result<Event, Infallible>>,
     user_id: Option<&str>,
+    permission_mode: PermissionMode,
+    pending_approvals: &Arc<RwLock<HashMap<String, oneshot::Sender<bool>>>>,
 ) -> Vec<Content> {
     let mut results = Vec::new();
 
     for call in tool_calls {
+        let category = tool_category(&call.name);
+
+        if permission_mode == PermissionMode::Supervised && category == ToolCategory::Write {
+            send_event(
+                sse_tx,
+                AgenticEvent::ToolApprovalRequired {
+                    id: call.id.clone(),
+                    name: call.name.clone(),
+                    arguments: call.arguments.clone(),
+                },
+            )
+            .await;
+
+            let (tx, rx) = oneshot::channel();
+            {
+                let mut approvals = pending_approvals.write().await;
+                approvals.insert(call.id.clone(), tx);
+            }
+
+            let approved = match tokio::time::timeout(APPROVAL_TIMEOUT, rx).await {
+                Ok(Ok(approved)) => approved,
+                Ok(Err(_)) => false,
+                Err(_) => {
+                    let output = "Tool approval timed out after 5 minutes".to_string();
+                    send_event(
+                        sse_tx,
+                        AgenticEvent::ToolDenied {
+                            id: call.id.clone(),
+                        },
+                    )
+                    .await;
+                    send_event(
+                        sse_tx,
+                        AgenticEvent::ToolResult {
+                            id: call.id.clone(),
+                            output: output.clone(),
+                            is_error: true,
+                        },
+                    )
+                    .await;
+                    results.push(Content::ToolResult {
+                        tool_use_id: call.id.clone(),
+                        output: serde_json::Value::String(output),
+                        is_error: Some(true),
+                    });
+                    // Clean up
+                    let mut approvals = pending_approvals.write().await;
+                    approvals.remove(&call.id);
+                    continue;
+                }
+            };
+
+            if !approved {
+                let output = "Tool execution denied by user".to_string();
+                send_event(
+                    sse_tx,
+                    AgenticEvent::ToolDenied {
+                        id: call.id.clone(),
+                    },
+                )
+                .await;
+                send_event(
+                    sse_tx,
+                    AgenticEvent::ToolResult {
+                        id: call.id.clone(),
+                        output: output.clone(),
+                        is_error: true,
+                    },
+                )
+                .await;
+                results.push(Content::ToolResult {
+                    tool_use_id: call.id.clone(),
+                    output: serde_json::Value::String(output),
+                    is_error: Some(true),
+                });
+                continue;
+            }
+
+            send_event(
+                sse_tx,
+                AgenticEvent::ToolApproved {
+                    id: call.id.clone(),
+                },
+            )
+            .await;
+        }
+
         send_event(
             sse_tx,
             AgenticEvent::ToolExecuting {

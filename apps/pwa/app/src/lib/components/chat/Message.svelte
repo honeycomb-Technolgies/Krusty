@@ -3,8 +3,10 @@
 	import Bot from 'lucide-svelte/icons/bot';
 	import Copy from 'lucide-svelte/icons/copy';
 	import Check from 'lucide-svelte/icons/check';
+	import Clock from 'lucide-svelte/icons/clock';
 	import { marked } from 'marked';
 	import ToolWidget from './ToolWidget.svelte';
+	import ToolApprovalWidget from './ToolApprovalWidget.svelte';
 	import ThinkingBlock from './ThinkingBlock.svelte';
 	import AskUserQuestionWidget from './AskUserQuestionWidget.svelte';
 	import PlanConfirmWidget from './PlanConfirmWidget.svelte';
@@ -57,11 +59,23 @@
 {#if isUser}
 	<!-- User message - single block with avatar -->
 	<div class="message-container group flex gap-3 flex-row-reverse">
-		<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
-			<User class="h-4 w-4" />
+		<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full
+			{message.isQueued ? 'bg-amber-500/20 text-amber-400' : 'bg-primary text-primary-foreground'}">
+			{#if message.isQueued}
+				<Clock class="h-4 w-4" />
+			{:else}
+				<User class="h-4 w-4" />
+			{/if}
 		</div>
 		<div class="flex min-w-0 max-w-[85%] flex-col gap-2">
-			<div class="message-bubble rounded-2xl px-4 py-3 bg-primary text-primary-foreground rounded-tr-sm">
+			{#if message.isQueued}
+				<div class="flex items-center gap-1.5 justify-end">
+					<Clock class="h-3 w-3 text-amber-400" />
+					<span class="text-xs font-medium text-amber-400">Queued</span>
+				</div>
+			{/if}
+			<div class="message-bubble rounded-2xl px-4 py-3 rounded-tr-sm
+				{message.isQueued ? 'bg-amber-500/20 text-amber-200' : 'bg-primary text-primary-foreground'}">
 				<div class="prose prose-sm max-w-none prose-invert">
 					{@html renderedContent}
 				</div>
@@ -82,7 +96,11 @@
 		{#if message.toolCalls && message.toolCalls.length > 0}
 			{#each message.toolCalls.filter(tc => tc.name !== 'PlanConfirm' && tc.name !== 'AskUserQuestion') as toolCall}
 				<div class="timeline-entry">
-					<ToolWidget {toolCall} />
+					{#if toolCall.status === 'awaiting_approval'}
+						<ToolApprovalWidget {toolCall} />
+					{:else}
+						<ToolWidget {toolCall} />
+					{/if}
 				</div>
 			{/each}
 		{/if}

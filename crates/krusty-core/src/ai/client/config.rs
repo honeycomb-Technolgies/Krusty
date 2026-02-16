@@ -95,9 +95,10 @@ impl AiClientConfig {
         credentials: &crate::storage::CredentialStore,
     ) -> Self {
         use crate::ai::providers::{AuthHeader, ProviderConfig, ProviderId};
-        use crate::auth::detect_openai_auth_type;
+        use crate::auth::resolve_openai_auth;
 
-        let auth_type = detect_openai_auth_type(credentials);
+        let auth_resolution = resolve_openai_auth(credentials, model);
+        let auth_type = auth_resolution.auth_type;
         let base_url = ProviderConfig::openai_url_for_auth(auth_type);
         let api_format = ProviderConfig::openai_format_for_auth(auth_type);
 
@@ -115,7 +116,15 @@ impl AiClientConfig {
             auth_header: AuthHeader::Bearer,
             provider_id: ProviderId::OpenAI,
             api_format,
-            custom_headers: HashMap::new(),
+            custom_headers: {
+                let mut headers = HashMap::new();
+                if matches!(auth_type, crate::auth::OpenAIAuthType::ChatGptOAuth) {
+                    if let Some(account_id) = auth_resolution.account_id {
+                        headers.insert("ChatGPT-Account-Id".to_string(), account_id);
+                    }
+                }
+                headers
+            },
         }
     }
 }
@@ -124,6 +133,28 @@ use crate::ai::providers::ReasoningFormat;
 use crate::ai::types::{
     AiTool, ContextManagement, ThinkingConfig, WebFetchConfig, WebSearchConfig,
 };
+
+/// Codex reasoning effort controls for OpenAI Responses API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodexReasoningEffort {
+    Minimal,
+    Low,
+    Medium,
+    High,
+    XHigh,
+}
+
+impl CodexReasoningEffort {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::XHigh => "xhigh",
+        }
+    }
+}
 
 /// Call options for API requests
 #[derive(Debug, Clone)]
@@ -145,6 +176,12 @@ pub struct CallOptions {
     pub web_search: Option<WebSearchConfig>,
     /// Web fetch configuration (server-executed, beta)
     pub web_fetch: Option<WebFetchConfig>,
+    /// Session-scoped identifier for provider-level caching (Codex prompt cache key)
+    pub session_id: Option<String>,
+    /// Codex-specific reasoning effort
+    pub codex_reasoning_effort: Option<CodexReasoningEffort>,
+    /// Codex tool parallelism toggle (disabled by default until parser hardening)
+    pub codex_parallel_tool_calls: bool,
 }
 
 impl Default for CallOptions {
@@ -160,6 +197,9 @@ impl Default for CallOptions {
             context_management: None,
             web_search: None,
             web_fetch: None,
+            session_id: None,
+            codex_reasoning_effort: None,
+            codex_parallel_tool_calls: false,
         }
     }
 }

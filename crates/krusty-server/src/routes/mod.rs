@@ -7,6 +7,7 @@ use crate::AppState;
 mod chat;
 mod credentials;
 mod files;
+mod git;
 mod hooks;
 mod mcp;
 mod models;
@@ -21,6 +22,7 @@ pub fn api_router() -> Router<AppState> {
         .nest("/chat", chat::router())
         .nest("/models", models::router())
         .nest("/tools", tools::router())
+        .nest("/git", git::router())
         .nest("/files", files::router())
         .nest("/credentials", credentials::router())
         .nest("/mcp", mcp::router())

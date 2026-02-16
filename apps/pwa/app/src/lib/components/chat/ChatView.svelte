@@ -1,13 +1,16 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import Send from 'lucide-svelte/icons/send';
+	import Clock from 'lucide-svelte/icons/clock';
 	import Loader2 from 'lucide-svelte/icons/loader-2';
 	import StopCircle from 'lucide-svelte/icons/stop-circle';
 	import Paperclip from 'lucide-svelte/icons/paperclip';
 	import ImagePlus from 'lucide-svelte/icons/image-plus';
+	import Shield from 'lucide-svelte/icons/shield';
+	import Zap from 'lucide-svelte/icons/zap';
 	import Message from './Message.svelte';
 	import AsciiTitle from './AsciiTitle.svelte';
-	import { sessionStore, sendMessage, stopGeneration, type Attachment } from '$stores/session';
+	import { sessionStore, sendMessage, stopGeneration, togglePermissionMode, type Attachment } from '$stores/session';
 
 	let inputValue = $state('');
 	let inputElement = $state<HTMLTextAreaElement>(undefined!);
@@ -17,7 +20,7 @@
 	let attachedFiles = $state<File[]>([]);
 
 	function handleSubmit() {
-		if (!inputValue.trim() || $sessionStore.isStreaming) return;
+		if (!inputValue.trim()) return;
 
 		// Convert files to attachments
 		const attachments: Attachment[] = attachedFiles.map(file => ({
@@ -130,21 +133,35 @@
 					<!-- Attachment buttons -->
 					<button
 						onclick={() => fileInput.click()}
-						disabled={$sessionStore.isStreaming}
 						class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground
-							transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+							transition-colors hover:bg-muted hover:text-foreground"
 						title="Attach file"
 					>
 						<Paperclip class="h-4 w-4" />
 					</button>
 					<button
 						onclick={() => imageInput.click()}
-						disabled={$sessionStore.isStreaming}
 						class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground
-							transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+							transition-colors hover:bg-muted hover:text-foreground"
 						title="Attach image"
 					>
 						<ImagePlus class="h-4 w-4" />
+					</button>
+
+					<!-- Permission mode toggle -->
+					<button
+						onclick={togglePermissionMode}
+						class="flex h-8 shrink-0 items-center gap-1 rounded-lg px-2 text-xs font-medium transition-colors
+							{$sessionStore.permissionMode === 'supervised'
+								? 'bg-amber-500/15 text-amber-400 hover:bg-amber-500/25'
+								: 'bg-green-500/15 text-green-400 hover:bg-green-500/25'}"
+						title="{$sessionStore.permissionMode === 'supervised' ? 'Supervised: approves write tools' : 'Autonomous: auto-executes all tools'}"
+					>
+						{#if $sessionStore.permissionMode === 'supervised'}
+							<Shield class="h-3.5 w-3.5" />
+						{:else}
+							<Zap class="h-3.5 w-3.5" />
+						{/if}
 					</button>
 
 					<!-- Text input -->
@@ -153,15 +170,24 @@
 						bind:value={inputValue}
 						onkeydown={handleKeyDown}
 						oninput={autoResize}
-						placeholder="Message Krusty..."
+						placeholder={$sessionStore.isStreaming ? 'Queue a message...' : 'Message Krusty...'}
 						rows={1}
-						disabled={$sessionStore.isStreaming}
 						class="max-h-[200px] min-h-[36px] flex-1 resize-none bg-transparent py-2 text-sm
-							placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+							placeholder:text-muted-foreground focus:outline-none"
 					></textarea>
 
-					<!-- Send/Stop button -->
+					<!-- Send/Queue/Stop buttons -->
 					{#if $sessionStore.isStreaming}
+						<button
+							onclick={handleSubmit}
+							disabled={!inputValue.trim()}
+							class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg
+								bg-amber-500 text-white transition-colors
+								hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50"
+							title="Queue message"
+						>
+							<Clock class="h-4 w-4" />
+						</button>
 						<button
 							onclick={stopGeneration}
 							class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg
