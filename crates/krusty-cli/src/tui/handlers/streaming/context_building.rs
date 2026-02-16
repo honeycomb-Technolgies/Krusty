@@ -125,27 +125,31 @@ The user can exit plan mode with Ctrl+G when ready to implement."#,
         let ready_list = if ready_tasks.is_empty() {
             "  (none)".to_string()
         } else {
-            ready_tasks
-                .iter()
-                .map(|t| format!("  - Task {}: {}", t.id, t.description))
-                .collect::<Vec<_>>()
-                .join("\n")
+            let mut list = String::new();
+            for task in &ready_tasks {
+                if !list.is_empty() {
+                    list.push('\n');
+                }
+                list.push_str(&format!("  - Task {}: {}", task.id, task.description));
+            }
+            list
         };
 
         let blocked_list = if blocked_tasks.is_empty() {
             "  (none)".to_string()
         } else {
-            blocked_tasks
-                .iter()
-                .map(|t| {
-                    let blockers = t.blocked_by.join(", ");
-                    format!(
-                        "  - Task {}: {} (waiting on: {})",
-                        t.id, t.description, blockers
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
+            let mut list = String::new();
+            for task in &blocked_tasks {
+                if !list.is_empty() {
+                    list.push('\n');
+                }
+                let blockers = task.blocked_by.join(", ");
+                list.push_str(&format!(
+                    "  - Task {}: {} (waiting on: {})",
+                    task.id, task.description, blockers
+                ));
+            }
+            list
         };
 
         format!(
