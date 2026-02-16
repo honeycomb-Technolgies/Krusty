@@ -2530,7 +2530,7 @@ dependencies = [
 
 [[package]]
 name = "krusty"
-version = "0.3.12"
+version = "0.3.13"
 dependencies = [
  "anyhow",
  "arboard",
@@ -2603,7 +2603,7 @@ dependencies = [
 
 [[package]]
 name = "krusty-core"
-version = "0.3.12"
+version = "0.3.13"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
