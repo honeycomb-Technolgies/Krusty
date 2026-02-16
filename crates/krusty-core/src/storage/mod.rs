@@ -32,7 +32,7 @@ pub use messages::MessageStore;
 pub use plans::{PlanStore, PlanSummary};
 pub use preferences::Preferences;
 pub use push_delivery_attempts::{
-    PushDeliveryAttempt, PushDeliveryAttemptStore, PushDeliverySummary,
+    PushDeliveryAttempt, PushDeliveryAttemptInput, PushDeliveryAttemptStore, PushDeliverySummary,
 };
 pub use push_subscriptions::{PushSubscription, PushSubscriptionStore};
 pub use sessions::{SessionInfo, SessionManager, WorkMode};

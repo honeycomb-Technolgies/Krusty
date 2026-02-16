@@ -43,7 +43,7 @@ pub use cancellation::AgentCancellation;
 pub use event_bus::AgentEventBus;
 pub use events::{AgentEvent, InterruptReason};
 pub use hooks::{LoggingHook, PlanModeHook, SafetyHook};
-pub use pinch_context::PinchContext;
+pub use pinch_context::{PinchContext, PinchContextInput};
 pub use state::{AgentConfig, AgentState};
 pub use summarizer::{generate_summary, SummarizationResult};
 pub use user_hooks::{

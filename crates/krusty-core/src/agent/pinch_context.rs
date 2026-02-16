@@ -46,6 +46,19 @@ pub struct RankedFileInfo {
     pub reasons: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct PinchContextInput {
+    pub source_session_id: String,
+    pub source_session_title: String,
+    pub summary: SummarizationResult,
+    pub ranked_files: Vec<RankedFile>,
+    pub preservation_hints: Option<String>,
+    pub direction: Option<String>,
+    pub project_context: Option<String>,
+    pub key_file_contents: Vec<(String, String)>,
+    pub active_plan: Option<String>,
+}
+
 impl From<RankedFile> for RankedFileInfo {
     fn from(rf: RankedFile) -> Self {
         Self {
@@ -69,7 +82,25 @@ fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
 }
 
 impl PinchContext {
-    /// Create a new pinch context
+    pub fn from_input(input: PinchContextInput) -> Self {
+        Self {
+            source_session_id: input.source_session_id,
+            source_session_title: input.source_session_title,
+            work_summary: input.summary.work_summary,
+            key_decisions: input.summary.key_decisions,
+            pending_tasks: input.summary.pending_tasks,
+            ranked_files: input.ranked_files.into_iter().map(Into::into).collect(),
+            preservation_hints: input.preservation_hints,
+            direction: input.direction,
+            created_at: Utc::now(),
+            project_context: input.project_context,
+            key_file_contents: input.key_file_contents,
+            active_plan: input.active_plan,
+        }
+    }
+
+    /// Create a new pinch context.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         source_session_id: String,
         source_session_title: String,
@@ -81,20 +112,17 @@ impl PinchContext {
         key_file_contents: Vec<(String, String)>,
         active_plan: Option<String>,
     ) -> Self {
-        Self {
+        Self::from_input(PinchContextInput {
             source_session_id,
             source_session_title,
-            work_summary: summary.work_summary,
-            key_decisions: summary.key_decisions,
-            pending_tasks: summary.pending_tasks,
-            ranked_files: ranked_files.into_iter().map(Into::into).collect(),
+            summary,
+            ranked_files,
             preservation_hints,
             direction,
-            created_at: Utc::now(),
             project_context,
             key_file_contents,
             active_plan,
-        }
+        })
     }
 
     /// Format as system message for new session

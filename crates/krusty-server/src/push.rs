@@ -17,7 +17,8 @@ use web_push_native::p256::PublicKey;
 use web_push_native::{Auth, WebPushBuilder};
 
 use krusty_core::storage::{
-    Database, PushDeliveryAttemptStore, PushSubscription, PushSubscriptionStore,
+    Database, PushDeliveryAttemptInput, PushDeliveryAttemptStore, PushSubscription,
+    PushSubscriptionStore,
 };
 
 const MAX_PUSH_ATTEMPTS: usize = 3;
@@ -330,16 +331,16 @@ impl PushService {
             match outcome {
                 DeliveryOutcome::Success { status, latency_ms } => {
                     let _ = store.mark_success(&sub.endpoint);
-                    let _ = attempt_store.record_attempt(
-                        sub.user_id.as_deref(),
-                        payload.session_id.as_deref(),
-                        &sub.endpoint,
-                        event_type.as_str(),
-                        "success",
-                        Some(status),
-                        None,
-                        Some(latency_ms),
-                    );
+                    let _ = attempt_store.record_attempt(PushDeliveryAttemptInput {
+                        user_id: sub.user_id.as_deref(),
+                        session_id: payload.session_id.as_deref(),
+                        endpoint: &sub.endpoint,
+                        event_type: event_type.as_str(),
+                        outcome: "success",
+                        http_status: Some(status),
+                        error_message: None,
+                        latency_ms: Some(latency_ms),
+                    });
                     tracing::debug!(endpoint = %sub.endpoint, status, "Push sent");
                 }
                 DeliveryOutcome::Stale { status, latency_ms } => {
@@ -349,16 +350,16 @@ impl PushService {
                         "Push subscription expired, removing"
                     );
                     let _ = store.remove_by_endpoint(&sub.endpoint);
-                    let _ = attempt_store.record_attempt(
-                        sub.user_id.as_deref(),
-                        payload.session_id.as_deref(),
-                        &sub.endpoint,
-                        event_type.as_str(),
-                        "stale",
-                        Some(status),
-                        Some("subscription expired"),
-                        Some(latency_ms),
-                    );
+                    let _ = attempt_store.record_attempt(PushDeliveryAttemptInput {
+                        user_id: sub.user_id.as_deref(),
+                        session_id: payload.session_id.as_deref(),
+                        endpoint: &sub.endpoint,
+                        event_type: event_type.as_str(),
+                        outcome: "stale",
+                        http_status: Some(status),
+                        error_message: Some("subscription expired"),
+                        latency_ms: Some(latency_ms),
+                    });
                 }
                 DeliveryOutcome::Failure {
                     status,
@@ -366,16 +367,16 @@ impl PushService {
                     latency_ms,
                 } => {
                     let _ = store.mark_failure(&sub.endpoint, &reason);
-                    let _ = attempt_store.record_attempt(
-                        sub.user_id.as_deref(),
-                        payload.session_id.as_deref(),
-                        &sub.endpoint,
-                        event_type.as_str(),
-                        "failure",
-                        status,
-                        Some(&reason),
+                    let _ = attempt_store.record_attempt(PushDeliveryAttemptInput {
+                        user_id: sub.user_id.as_deref(),
+                        session_id: payload.session_id.as_deref(),
+                        endpoint: &sub.endpoint,
+                        event_type: event_type.as_str(),
+                        outcome: "failure",
+                        http_status: status,
+                        error_message: Some(&reason),
                         latency_ms,
-                    );
+                    });
                     tracing::warn!(endpoint = %sub.endpoint, status, "Push failed: {}", reason);
                 }
             }

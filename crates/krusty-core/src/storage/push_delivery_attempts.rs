@@ -36,6 +36,18 @@ pub struct PushDeliverySummary {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub struct PushDeliveryAttemptInput<'a> {
+    pub user_id: Option<&'a str>,
+    pub session_id: Option<&'a str>,
+    pub endpoint: &'a str,
+    pub event_type: &'a str,
+    pub outcome: &'a str,
+    pub http_status: Option<u16>,
+    pub error_message: Option<&'a str>,
+    pub latency_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy)]
 enum AttemptOutcomeFilter {
     Any,
     Success,
@@ -51,23 +63,13 @@ impl<'a> PushDeliveryAttemptStore<'a> {
         Self { db }
     }
 
-    pub fn record_attempt(
-        &self,
-        user_id: Option<&str>,
-        session_id: Option<&str>,
-        endpoint: &str,
-        event_type: &str,
-        outcome: &str,
-        http_status: Option<u16>,
-        error_message: Option<&str>,
-        latency_ms: Option<u64>,
-    ) -> Result<()> {
+    pub fn record_attempt(&self, input: PushDeliveryAttemptInput<'_>) -> Result<()> {
         let id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
-        let endpoint_hash = Self::endpoint_hash(endpoint);
-        let provider_host = Self::provider_host(endpoint);
-        let http_status = http_status.map(i64::from);
-        let latency_ms = latency_ms.map(|v| v as i64);
+        let endpoint_hash = Self::endpoint_hash(input.endpoint);
+        let provider_host = Self::provider_host(input.endpoint);
+        let http_status = input.http_status.map(i64::from);
+        let latency_ms = input.latency_ms.map(|v| v as i64);
 
         self.db.conn().execute(
             "INSERT INTO push_delivery_attempts (
@@ -76,14 +78,14 @@ impl<'a> PushDeliveryAttemptStore<'a> {
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 id,
-                user_id,
-                session_id,
+                input.user_id,
+                input.session_id,
                 endpoint_hash,
                 provider_host,
-                event_type,
-                outcome,
+                input.event_type,
+                input.outcome,
                 http_status,
-                error_message,
+                input.error_message,
                 latency_ms,
                 now
             ],
@@ -288,7 +290,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 mod tests {
     use tempfile::TempDir;
 
-    use crate::storage::{Database, PushDeliveryAttemptStore};
+    use crate::storage::{Database, PushDeliveryAttemptInput, PushDeliveryAttemptStore};
 
     fn create_test_db() -> (Database, TempDir) {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
@@ -303,29 +305,29 @@ mod tests {
         let store = PushDeliveryAttemptStore::new(&db);
 
         store
-            .record_attempt(
-                None,
-                Some("session-1"),
-                "https://web.push.apple.com/test-endpoint",
-                "completion",
-                "success",
-                Some(201),
-                None,
-                Some(30),
-            )
+            .record_attempt(PushDeliveryAttemptInput {
+                user_id: None,
+                session_id: Some("session-1"),
+                endpoint: "https://web.push.apple.com/test-endpoint",
+                event_type: "completion",
+                outcome: "success",
+                http_status: Some(201),
+                error_message: None,
+                latency_ms: Some(30),
+            })
             .expect("Failed to record success attempt");
 
         store
-            .record_attempt(
-                None,
-                Some("session-1"),
-                "https://web.push.apple.com/test-endpoint",
-                "completion",
-                "failure",
-                Some(500),
-                Some("temporary failure"),
-                Some(45),
-            )
+            .record_attempt(PushDeliveryAttemptInput {
+                user_id: None,
+                session_id: Some("session-1"),
+                endpoint: "https://web.push.apple.com/test-endpoint",
+                event_type: "completion",
+                outcome: "failure",
+                http_status: Some(500),
+                error_message: Some("temporary failure"),
+                latency_ms: Some(45),
+            })
             .expect("Failed to record failure attempt");
 
         let latest = store

@@ -8,7 +8,7 @@ use axum::{
 };
 use serde::Deserialize;
 
-use krusty_core::agent::pinch_context::PinchContext;
+use krusty_core::agent::pinch_context::{PinchContext, PinchContextInput};
 use krusty_core::agent::summarizer::{generate_summary, SummarizationResult};
 use krusty_core::ai::types::{Content, ModelMessage, Role};
 use krusty_core::{storage::Database, SessionManager};
@@ -321,17 +321,17 @@ async fn pinch_session(
     };
 
     // Create pinch context
-    let pinch_ctx = PinchContext::new(
-        id.clone(),
-        source_session.title.clone(),
-        summary_result.clone(),
-        vec![], // No ranked files for now
-        req.preservation_hints,
-        req.direction,
-        None,   // No project context for now
-        vec![], // No key file contents for now
-        None,   // No active plan for now
-    );
+    let pinch_ctx = PinchContext::from_input(PinchContextInput {
+        source_session_id: id.clone(),
+        source_session_title: source_session.title.clone(),
+        summary: summary_result.clone(),
+        ranked_files: vec![], // No ranked files for now
+        preservation_hints: req.preservation_hints,
+        direction: req.direction,
+        project_context: None,     // No project context for now
+        key_file_contents: vec![], // No key file contents for now
+        active_plan: None,         // No active plan for now
+    });
 
     // Create the child session
     let new_title = format!("{} (continued)", source_session.title);

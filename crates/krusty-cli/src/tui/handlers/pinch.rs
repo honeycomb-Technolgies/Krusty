@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use crate::agent::{generate_summary, PinchContext, SummarizationResult};
+use crate::agent::{generate_summary, PinchContext, PinchContextInput, SummarizationResult};
 use crate::ai::client::AiClient;
 use crate::storage::{FileActivityTracker, RankedFile};
 use crate::tui::app::App;
@@ -316,20 +316,21 @@ impl App {
         // Extract summary text before consuming summary_result
         let summary_text = summary_result.work_summary.clone();
 
-        let pinch_ctx = PinchContext::new(
-            self.runtime.current_session_id.clone().unwrap_or_default(),
-            self.runtime
+        let pinch_ctx = PinchContext::from_input(PinchContextInput {
+            source_session_id: self.runtime.current_session_id.clone().unwrap_or_default(),
+            source_session_title: self
+                .runtime
                 .session_title
                 .clone()
                 .unwrap_or_else(|| "Untitled".to_string()),
-            summary_result,
+            summary: summary_result,
             ranked_files,
-            None, // no preservation hints
-            None, // no direction — auto-continue
+            preservation_hints: None, // no preservation hints
+            direction: None,          // no direction — auto-continue
             project_context,
             key_file_contents,
             active_plan,
-        );
+        });
 
         let Some(sm) = &self.services.session_manager else {
             tracing::error!("Auto-pinch: no session manager");
@@ -471,20 +472,21 @@ impl App {
         // Get active plan markdown if one exists
         let active_plan = self.runtime.active_plan.as_ref().map(|p| p.to_markdown());
 
-        let pinch_ctx = PinchContext::new(
-            self.runtime.current_session_id.clone().unwrap_or_default(),
-            self.runtime
+        let pinch_ctx = PinchContext::from_input(PinchContextInput {
+            source_session_id: self.runtime.current_session_id.clone().unwrap_or_default(),
+            source_session_title: self
+                .runtime
                 .session_title
                 .clone()
                 .unwrap_or_else(|| "Untitled".to_string()),
-            summary_result,
+            summary: summary_result,
             ranked_files,
             preservation_hints,
-            direction.clone(),
+            direction: direction.clone(),
             project_context,
             key_file_contents,
             active_plan,
-        );
+        });
 
         // Create linked session
         let Some(sm) = &self.services.session_manager else {
