@@ -496,15 +496,19 @@ fn extract_tar_gz(archive: &Path, dest: &Path) -> Result<()> {
     let extract_dir = std::env::temp_dir().join("krusty-extract");
     let _ = std::fs::remove_dir_all(&extract_dir);
     std::fs::create_dir_all(&extract_dir)?;
+    let archive_str = archive
+        .to_str()
+        .ok_or_else(|| anyhow!("Archive path is not valid UTF-8: {}", archive.display()))?;
+    let extract_dir_str = extract_dir.to_str().ok_or_else(|| {
+        anyhow!(
+            "Extraction path is not valid UTF-8: {}",
+            extract_dir.display()
+        )
+    })?;
 
     // Extract archive to temp directory
     let output = Command::new("tar")
-        .args([
-            "xzf",
-            archive.to_str().unwrap(),
-            "-C",
-            extract_dir.to_str().unwrap(),
-        ])
+        .args(["xzf", archive_str, "-C", extract_dir_str])
         .output()?;
 
     if !output.status.success() {
