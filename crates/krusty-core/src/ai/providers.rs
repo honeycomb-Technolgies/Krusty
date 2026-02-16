@@ -101,7 +101,7 @@ pub enum AuthHeader {
 /// When enabled, we always use MAX effort - no in-between settings
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReasoningFormat {
-    /// Anthropic Claude: `thinking.budget_tokens` (we use max: 32000)
+    /// Anthropic Claude: `thinking.budget_tokens` (see `DEFAULT_THINKING_BUDGET`)
     Anthropic,
     /// OpenAI o1/o3/GPT-5: `reasoning_effort: "high"`
     OpenAI,

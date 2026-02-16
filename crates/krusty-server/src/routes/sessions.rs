@@ -13,6 +13,7 @@ use krusty_core::agent::summarizer::{generate_summary, SummarizationResult};
 use krusty_core::ai::types::{Content, ModelMessage, Role};
 use krusty_core::{storage::Database, SessionManager};
 
+use crate::auth::CurrentUser;
 use crate::error::AppError;
 use crate::types::{
     CreateSessionRequest, MessageResponse, PinchRequest, PinchResponse, SessionResponse,
@@ -25,6 +26,15 @@ use crate::AppState;
 pub struct ListSessionsQuery {
     /// Filter sessions by working directory
     pub working_dir: Option<String>,
+}
+
+/// Query params for retrieving a session with messages (pagination)
+#[derive(Debug, Deserialize)]
+pub struct GetSessionQuery {
+    /// Maximum number of messages to return
+    pub limit: Option<usize>,
+    /// Number of messages to skip (from the beginning)
+    pub offset: Option<usize>,
 }
 
 /// Build the sessions router
@@ -85,10 +95,11 @@ async fn create_session(
     Ok((StatusCode::CREATED, Json(session.into())))
 }
 
-/// Get a session with its messages
+/// Get a session with its messages, with optional pagination
 async fn get_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(query): Query<GetSessionQuery>,
 ) -> Result<Json<SessionWithMessagesResponse>, AppError> {
     let db = Database::new(&state.db_path)?;
     let session_manager = SessionManager::new(db);
@@ -98,8 +109,13 @@ async fn get_session(
         .ok_or_else(|| AppError::NotFound(format!("Session {} not found", id)))?;
 
     let raw_messages = session_manager.load_session_messages(&id)?;
+    let offset = query.offset.unwrap_or(0);
+    let limit = query.limit.unwrap_or(usize::MAX);
+
     let messages: Vec<MessageResponse> = raw_messages
         .into_iter()
+        .skip(offset)
+        .take(limit)
         .filter_map(
             |(role, content_json)| match serde_json::from_str(&content_json) {
                 Ok(content) => Some(MessageResponse { role, content }),
@@ -173,6 +189,9 @@ async fn delete_session(
 
     session_manager.delete_session(&id)?;
 
+    let mut locks = state.session_locks.write().await;
+    locks.remove(&id);
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -182,6 +201,7 @@ async fn delete_session(
 /// Used by frontend to determine if session has active processing.
 async fn get_session_state(
     State(state): State<AppState>,
+    user: Option<CurrentUser>,
     Path(id): Path<String>,
 ) -> Result<Json<SessionStateResponse>, AppError> {
     let db = Database::new(&state.db_path)?;
@@ -191,6 +211,12 @@ async fn get_session_state(
     session_manager
         .get_session(&id)?
         .ok_or_else(|| AppError::NotFound(format!("Session {} not found", id)))?;
+
+    // Verify ownership in multi-tenant mode
+    let user_id = user.as_ref().and_then(|u| u.0.user_id.as_deref());
+    if !session_manager.verify_session_ownership(&id, user_id)? {
+        return Err(AppError::NotFound(format!("Session {} not found", id)));
+    }
 
     // Get agent state
     let agent_state =

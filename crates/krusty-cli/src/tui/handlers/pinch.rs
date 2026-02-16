@@ -369,12 +369,10 @@ impl App {
 
                 // Carry over active plan
                 if let Some(ref plan) = self.runtime.active_plan {
-                    if let Err(e) = self
-                        .services
-                        .plan_manager
-                        .save_plan_for_session(&new_id, plan)
-                    {
-                        tracing::warn!("Auto-pinch: failed to carry over plan: {}", e);
+                    if let Some(ref pm) = self.services.plan_manager {
+                        if let Err(e) = pm.save_plan_for_session(&new_id, plan) {
+                            tracing::warn!("Auto-pinch: failed to carry over plan: {}", e);
+                        }
                     }
                 }
 
@@ -532,14 +530,12 @@ impl App {
 
                 // Carry over active plan to new session
                 if let Some(ref plan) = self.runtime.active_plan {
-                    if let Err(e) = self
-                        .services
-                        .plan_manager
-                        .save_plan_for_session(&new_id, plan)
-                    {
-                        tracing::warn!("Failed to carry over plan to new session: {}", e);
-                    } else {
-                        tracing::info!("Carried over plan '{}' to pinched session", plan.title);
+                    if let Some(ref pm) = self.services.plan_manager {
+                        if let Err(e) = pm.save_plan_for_session(&new_id, plan) {
+                            tracing::warn!("Failed to carry over plan to new session: {}", e);
+                        } else {
+                            tracing::info!("Carried over plan '{}' to pinched session", plan.title);
+                        }
                     }
                 }
 

@@ -55,7 +55,7 @@ pub fn poll_build_progress(
     channels: &mut AsyncChannels,
     build_blocks: &mut [BuildBlock],
     active_plan: &mut Option<PlanFile>,
-    plan_manager: &PlanManager,
+    plan_manager: Option<&PlanManager>,
 ) -> PollResult {
     let mut result = PollResult::new();
 
@@ -80,8 +80,13 @@ pub fn poll_build_progress(
                     if let Some(ref mut plan) = active_plan {
                         if plan.check_task(task_id) {
                             tracing::debug!(task_id = %task_id, "Kraken auto-completed plan task");
-                            if let Err(e) = plan_manager.save_plan(plan) {
-                                tracing::warn!("Failed to save plan after task completion: {}", e);
+                            if let Some(pm) = plan_manager {
+                                if let Err(e) = pm.save_plan(plan) {
+                                    tracing::warn!(
+                                        "Failed to save plan after task completion: {}",
+                                        e
+                                    );
+                                }
                             }
                         }
                     }

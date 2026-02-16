@@ -85,13 +85,14 @@ pub fn parse_input(text: &str, working_dir: &Path) -> Vec<InputSegment> {
         }
 
         let path_str = path_match.as_str();
-        let path = if path_str.starts_with('~') {
-            // Expand ~ to home directory
+        let path = if let Some(rest) = path_str.strip_prefix("~/") {
             if let Some(home) = dirs::home_dir() {
-                home.join(&path_str[2..]) // Skip "~/"
+                home.join(rest)
             } else {
                 PathBuf::from(path_str)
             }
+        } else if path_str == "~" {
+            dirs::home_dir().unwrap_or_else(|| PathBuf::from("~"))
         } else if Path::new(path_str).is_absolute() {
             PathBuf::from(path_str)
         } else {

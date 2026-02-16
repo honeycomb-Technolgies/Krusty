@@ -24,6 +24,10 @@ export const terminalStore = writable<TerminalState>(initialState);
 // Imported dynamically to avoid circular dependency
 let workspaceSubscribed = false;
 let pendingInitialCd: string | null = null;
+let workspaceUnsubscribe: (() => void) | null = null;
+let workspaceSyncTimeout: ReturnType<typeof setTimeout> | null = null;
+
+const WORKSPACE_SYNC_TIMEOUT = 30_000; // 30 seconds
 
 export function initWorkspaceSync() {
 	if (!browser || workspaceSubscribed) return;
@@ -31,7 +35,8 @@ export function initWorkspaceSync() {
 
 	import('./workspace').then(({ workspaceStore }) => {
 		let lastDir: string | null = null;
-		workspaceStore.subscribe((ws) => {
+		let hasConnected = false;
+		workspaceUnsubscribe = workspaceStore.subscribe((ws) => {
 			if (ws.initialized && ws.directory && ws.directory !== lastDir) {
 				lastDir = ws.directory;
 				// cd to new directory in active terminal
@@ -39,6 +44,7 @@ export function initWorkspaceSync() {
 				if (state.activeTabId) {
 					const tab = state.tabs.find(t => t.id === state.activeTabId);
 					if (tab?.connected) {
+						hasConnected = true;
 						sendInput(state.activeTabId, `cd "${ws.directory}"\n`);
 					} else {
 						// Terminal not connected yet, queue the cd
@@ -50,7 +56,25 @@ export function initWorkspaceSync() {
 				}
 			}
 		});
+
+		// Auto-unsubscribe after timeout if no terminal ever connected
+		workspaceSyncTimeout = setTimeout(() => {
+			if (!hasConnected) {
+				cleanupWorkspaceSync();
+			}
+			workspaceSyncTimeout = null;
+		}, WORKSPACE_SYNC_TIMEOUT);
 	});
+}
+
+export function cleanupWorkspaceSync() {
+	if (workspaceSyncTimeout) {
+		clearTimeout(workspaceSyncTimeout);
+		workspaceSyncTimeout = null;
+	}
+	workspaceUnsubscribe?.();
+	workspaceUnsubscribe = null;
+	workspaceSubscribed = false;
 }
 
 // Called when terminal connects - execute any pending cd

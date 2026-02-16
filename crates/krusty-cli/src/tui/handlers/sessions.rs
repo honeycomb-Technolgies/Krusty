@@ -198,35 +198,39 @@ impl App {
         self.runtime.current_session_id = Some(session_id.to_string());
 
         // Load plan for this session (strict 1:1 linkage, no working_dir fallback)
-        match self.services.plan_manager.get_plan(session_id) {
-            Ok(Some(plan)) => {
-                let (completed, total) = plan.progress();
-                tracing::info!(
-                    "Loaded plan '{}' for session ({}/{})",
-                    plan.title,
-                    completed,
-                    total
-                );
-                // Resume in Build mode if work has started, Plan mode otherwise
-                let resume_mode = if completed > 0 || plan.has_in_progress_tasks() {
-                    WorkMode::Build
-                } else {
-                    WorkMode::Plan
-                };
-                self.set_plan(plan);
-                self.ui.work_mode = resume_mode;
-                if !self.ui.plan_sidebar.visible {
-                    self.ui.plan_sidebar.toggle();
+        if let Some(ref pm) = self.services.plan_manager {
+            match pm.get_plan(session_id) {
+                Ok(Some(plan)) => {
+                    let (completed, total) = plan.progress();
+                    tracing::info!(
+                        "Loaded plan '{}' for session ({}/{})",
+                        plan.title,
+                        completed,
+                        total
+                    );
+                    // Resume in Build mode if work has started, Plan mode otherwise
+                    let resume_mode = if completed > 0 || plan.has_in_progress_tasks() {
+                        WorkMode::Build
+                    } else {
+                        WorkMode::Plan
+                    };
+                    self.set_plan(plan);
+                    self.ui.work_mode = resume_mode;
+                    if !self.ui.plan_sidebar.visible {
+                        self.ui.plan_sidebar.toggle();
+                    }
+                }
+                Ok(None) => {
+                    tracing::debug!("No active plan found for session {}", session_id);
+                    self.clear_plan();
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to find active plan: {}", e);
+                    self.clear_plan();
                 }
             }
-            Ok(None) => {
-                tracing::debug!("No active plan found for session {}", session_id);
-                self.clear_plan();
-            }
-            Err(e) => {
-                tracing::warn!("Failed to find active plan: {}", e);
-                self.clear_plan();
-            }
+        } else {
+            self.clear_plan();
         }
 
         // Rebuild conversation from database

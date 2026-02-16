@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::{
     body::Body,
@@ -42,6 +43,8 @@ pub mod auth;
 pub mod error;
 pub mod routes;
 pub mod types;
+pub mod utils;
+pub mod ws;
 
 /// Embedded PWA frontend assets.
 ///
@@ -85,20 +88,9 @@ pub struct AppState {
     pub hook_manager: Arc<RwLock<UserHookManager>>,
     pub skills_manager: Arc<RwLock<SkillsManager>>,
     /// Per-session locks to prevent concurrent agentic loops on the same session.
-    pub session_locks: Arc<RwLock<HashMap<String, Arc<Mutex<()>>>>>,
+    pub session_locks: Arc<RwLock<HashMap<String, (Arc<Mutex<()>>, Instant)>>>,
     /// Pending tool approval channels for supervised permission mode.
     pub pending_approvals: Arc<RwLock<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
-}
-
-/// Parse provider from environment value.
-fn parse_provider(s: &str) -> Option<ProviderId> {
-    match s.to_ascii_lowercase().as_str() {
-        "minimax" => Some(ProviderId::MiniMax),
-        "openrouter" => Some(ProviderId::OpenRouter),
-        "z_ai" | "zai" => Some(ProviderId::ZAi),
-        "openai" => Some(ProviderId::OpenAI),
-        _ => None,
-    }
 }
 
 /// Build an AI client from configured credentials and env overrides.
@@ -106,7 +98,7 @@ pub fn create_ai_client(credentials: &CredentialStore) -> Option<AiClient> {
     let provider = std::env::var("KRUSTY_PROVIDER")
         .ok()
         .as_deref()
-        .and_then(parse_provider)
+        .and_then(utils::providers::parse_provider)
         .unwrap_or(ProviderId::MiniMax);
 
     let provider_cfg = get_provider(provider)?;
@@ -262,6 +254,7 @@ pub async fn build_router(config: &ServerConfig) -> anyhow::Result<(Router, AppS
 
     let app = Router::new()
         .route("/health", get(health))
+        .route("/ws/terminal", get(ws::terminal::handler))
         .nest(
             "/api",
             routes::api_router().layer(middleware::from_fn_with_state(

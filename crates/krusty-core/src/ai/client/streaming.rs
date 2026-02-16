@@ -19,11 +19,65 @@ use crate::ai::format::openai::OpenAIFormat;
 use crate::ai::format::FormatHandler;
 use crate::ai::parsers::{AnthropicParser, GoogleParser, OpenAIParser};
 use crate::ai::providers::{ProviderCapabilities, ReasoningFormat};
-use crate::ai::reasoning::ReasoningConfig;
-use crate::ai::sse::{create_streaming_channels, spawn_buffer_processor, SseStreamProcessor};
+use crate::ai::reasoning::{ReasoningConfig, DEFAULT_THINKING_BUDGET};
+use crate::ai::sse::{
+    create_streaming_channels, spawn_buffer_processor, SseParser, SseStreamProcessor,
+};
 use crate::ai::streaming::StreamPart;
 use crate::ai::transform::build_provider_params;
 use crate::ai::types::{Content, ModelMessage, Role};
+
+/// Spawn a stream processing task for an HTTP SSE response.
+///
+/// Handles the common pattern of reading bytes from a response stream,
+/// parsing SSE events, and forwarding them through channels. Sends an
+/// explicit error signal if the stream fails, ensuring the receiver
+/// never waits on a silently-dead channel.
+fn spawn_sse_stream_task<S, P>(
+    stream: S,
+    mut processor: SseStreamProcessor,
+    parser: P,
+    tx_err: mpsc::UnboundedSender<StreamPart>,
+    label: &'static str,
+) where
+    S: futures::Stream<Item = reqwest::Result<bytes::Bytes>> + Send + 'static,
+    P: SseParser + 'static,
+{
+    tokio::spawn(async move {
+        tokio::pin!(stream);
+        let mut chunk_count: u64 = 0;
+        let mut had_error = false;
+
+        while let Some(chunk) = stream.next().await {
+            chunk_count += 1;
+            match chunk {
+                Ok(bytes) => {
+                    if let Err(e) = processor.process_chunk(bytes, &parser).await {
+                        warn!("{} chunk #{} parse error: {}", label, chunk_count, e);
+                        let _ = tx_err.send(StreamPart::Error {
+                            error: format!("{} parse error: {}", label, e),
+                        });
+                        had_error = true;
+                        break;
+                    }
+                }
+                Err(e) => {
+                    error!("{} read error at chunk #{}: {}", label, chunk_count, e);
+                    let _ = tx_err.send(StreamPart::Error {
+                        error: format!("{} read error: {}", label, e),
+                    });
+                    had_error = true;
+                    break;
+                }
+            }
+        }
+
+        if !had_error {
+            info!("{} stream ended after {} chunks", label, chunk_count);
+        }
+        processor.finish().await;
+    });
+}
 
 impl AiClient {
     /// Call the API with streaming response
@@ -201,37 +255,14 @@ impl AiClient {
             return Err(anyhow::anyhow!("API error: {} - {}", status, error_text));
         }
 
-        // Set up streaming channels
         let (tx, rx, buffer_tx, buffer_rx) = create_streaming_channels();
         spawn_buffer_processor(buffer_rx, tx.clone());
 
-        let mut processor = SseStreamProcessor::new(tx, buffer_tx);
+        let processor = SseStreamProcessor::new(tx.clone(), buffer_tx);
         let parser = AnthropicParser::new();
 
-        // Spawn task to process the stream
-        info!("Starting stream processing task");
-        let stream = response.bytes_stream();
-        tokio::spawn(async move {
-            tokio::pin!(stream);
-            let mut chunk_count = 0;
-            while let Some(chunk) = stream.next().await {
-                chunk_count += 1;
-                match chunk {
-                    Ok(bytes) => {
-                        if let Err(e) = processor.process_chunk(bytes, &parser).await {
-                            warn!("Error processing chunk #{}: {}", chunk_count, e);
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        error!("Stream read error at chunk #{}: {}", chunk_count, e);
-                        break;
-                    }
-                }
-            }
-            info!("Stream ended after {} chunks", chunk_count);
-            processor.finish().await;
-        });
+        info!("Starting Anthropic stream processing task");
+        spawn_sse_stream_task(response.bytes_stream(), processor, parser, tx, "Anthropic");
 
         Ok(rx)
     }
@@ -359,36 +390,14 @@ impl AiClient {
             return Err(anyhow::anyhow!("API error: {} - {}", status, error_text));
         }
 
-        // Set up streaming channels
         let (tx, rx, buffer_tx, buffer_rx) = create_streaming_channels();
         spawn_buffer_processor(buffer_rx, tx.clone());
 
-        let mut processor = SseStreamProcessor::new(tx, buffer_tx);
+        let processor = SseStreamProcessor::new(tx.clone(), buffer_tx);
         let parser = OpenAIParser::new();
 
         info!("Starting OpenAI stream processing task");
-        let stream = response.bytes_stream();
-        tokio::spawn(async move {
-            tokio::pin!(stream);
-            let mut chunk_count = 0;
-            while let Some(chunk) = stream.next().await {
-                chunk_count += 1;
-                match chunk {
-                    Ok(bytes) => {
-                        if let Err(e) = processor.process_chunk(bytes, &parser).await {
-                            warn!("Error processing OpenAI chunk #{}: {}", chunk_count, e);
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        error!("OpenAI stream read error at chunk #{}: {}", chunk_count, e);
-                        break;
-                    }
-                }
-            }
-            info!("OpenAI stream ended after {} chunks", chunk_count);
-            processor.finish().await;
-        });
+        spawn_sse_stream_task(response.bytes_stream(), processor, parser, tx, "OpenAI");
 
         Ok(rx)
     }
@@ -647,28 +656,11 @@ impl AiClient {
 
         let (tx, rx, buffer_tx, buffer_rx) = create_streaming_channels();
         spawn_buffer_processor(buffer_rx, tx.clone());
-        let mut processor = SseStreamProcessor::new(tx, buffer_tx);
+
+        let processor = SseStreamProcessor::new(tx.clone(), buffer_tx);
         let parser = OpenAIParser::new();
 
-        let stream = response.bytes_stream();
-        tokio::spawn(async move {
-            tokio::pin!(stream);
-            while let Some(chunk) = stream.next().await {
-                match chunk {
-                    Ok(bytes) => {
-                        if let Err(e) = processor.process_chunk(bytes, &parser).await {
-                            warn!("Codex HTTP fallback stream parse error: {}", e);
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Codex HTTP fallback stream read error: {}", e);
-                        break;
-                    }
-                }
-            }
-            processor.finish().await;
-        });
+        spawn_sse_stream_task(response.bytes_stream(), processor, parser, tx, "Codex HTTP");
 
         Ok(rx)
     }
@@ -754,36 +746,14 @@ impl AiClient {
             return Err(anyhow::anyhow!("API error: {} - {}", status, error_text));
         }
 
-        // Set up streaming channels
         let (tx, rx, buffer_tx, buffer_rx) = create_streaming_channels();
         spawn_buffer_processor(buffer_rx, tx.clone());
 
-        let mut processor = SseStreamProcessor::new(tx, buffer_tx);
+        let processor = SseStreamProcessor::new(tx.clone(), buffer_tx);
         let parser = GoogleParser::new();
 
         info!("Starting Google stream processing task");
-        let stream = response.bytes_stream();
-        tokio::spawn(async move {
-            tokio::pin!(stream);
-            let mut chunk_count = 0;
-            while let Some(chunk) = stream.next().await {
-                chunk_count += 1;
-                match chunk {
-                    Ok(bytes) => {
-                        if let Err(e) = processor.process_chunk(bytes, &parser).await {
-                            warn!("Error processing Google chunk #{}: {}", chunk_count, e);
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        error!("Google stream read error at chunk #{}: {}", chunk_count, e);
-                        break;
-                    }
-                }
-            }
-            info!("Google stream ended after {} chunks", chunk_count);
-            processor.finish().await;
-        });
+        spawn_sse_stream_task(response.bytes_stream(), processor, parser, tx, "Google");
 
         Ok(rx)
     }
@@ -864,7 +834,7 @@ impl AiClient {
                     body["thinking"] = reasoning_config;
                     debug!(
                         "Anthropic thinking enabled with budget: {}",
-                        budget_tokens.unwrap_or(32000)
+                        budget_tokens.unwrap_or(DEFAULT_THINKING_BUDGET)
                     );
                 }
                 Some(ReasoningFormat::OpenAI) => {
@@ -947,8 +917,10 @@ impl AiClient {
         }
 
         if let Some(top_p) = provider_params.top_p {
-            body["top_p"] = Value::Number(serde_json::Number::from_f64(top_p as f64).unwrap());
-            debug!("Setting top_p: {} for model {}", top_p, self.config().model);
+            if let Some(num) = serde_json::Number::from_f64(top_p as f64) {
+                body["top_p"] = Value::Number(num);
+                debug!("Setting top_p: {} for model {}", top_p, self.config().model);
+            }
         }
 
         if let Some(top_k) = provider_params.top_k {

@@ -113,6 +113,14 @@ export interface GitWorktreesResponse {
 	worktrees: GitWorktree[];
 }
 
+/** Provider credential status */
+export interface ProviderStatus {
+	id: string;
+	name: string;
+	configured: boolean;
+	has_oauth: boolean;
+}
+
 /** SSE stream event types */
 export type StreamEvent =
 	| { type: 'text_delta'; delta: string }
@@ -130,6 +138,7 @@ export type StreamEvent =
 	| { type: 'tool_approval_required'; id: string; name: string; arguments: Record<string, unknown> }
 	| { type: 'tool_approved'; id: string }
 	| { type: 'tool_denied'; id: string }
+	| { type: 'turn_complete'; turn: number; has_more: boolean }
 	| { type: 'finish'; session_id: string }
 	| { type: 'error'; error: string };
 
@@ -300,6 +309,18 @@ export const apiClient = {
 			body: JSON.stringify({ session_id: sessionId, tool_call_id: toolCallId, approved })
 		}),
 
+	// Credentials
+	getCredentials: () => request<ProviderStatus[]>('/credentials'),
+
+	setCredential: (providerId: string, apiKey: string) =>
+		request<ProviderStatus>(`/credentials/${providerId}`, {
+			method: 'POST',
+			body: JSON.stringify({ api_key: apiKey })
+		}),
+
+	deleteCredential: (providerId: string) =>
+		request<void>(`/credentials/${providerId}`, { method: 'DELETE' }),
+
 };
 
 // Chat streaming
@@ -333,7 +354,7 @@ export interface PlanItem {
 	completed?: boolean;
 }
 
-interface StreamCallbacks {
+export interface StreamCallbacks {
 	onTextDelta: (delta: string) => void;
 	onThinkingDelta: (thinking: string) => void;
 	onToolCallStart: (id: string, name: string) => void;
@@ -343,6 +364,7 @@ interface StreamCallbacks {
 	onToolApprovalRequired?: (id: string, name: string, args: Record<string, unknown>) => void;
 	onToolApproved?: (id: string) => void;
 	onToolDenied?: (id: string) => void;
+	onTurnComplete?: (turn: number, hasMore: boolean) => void;
 	onPlanUpdate: (items: PlanItem[]) => void;
 	onModeChange: (mode: string, reason?: string) => void;
 	onPlanComplete: (toolCallId: string, title: string, taskCount: number) => void;
@@ -358,21 +380,21 @@ interface ToolResultRequest {
 	result: string;
 }
 
-export async function streamToolResult(
-	request: ToolResultRequest,
+async function streamSSE(
+	url: string,
+	body: object,
 	callbacks: StreamCallbacks,
 	signal?: AbortSignal
-) {
-	// Build headers with optional X-User-Id for multi-tenant auth
+): Promise<void> {
 	const headers: Record<string, string> = { 'Content-Type': 'application/json' };
 	if (currentUserId) {
 		headers['X-User-Id'] = currentUserId;
 	}
 
-	const response = await fetch(`${API_BASE}/chat/tool-result`, {
+	const response = await fetch(`${API_BASE}${url}`, {
 		method: 'POST',
 		headers,
-		body: JSON.stringify(request),
+		body: JSON.stringify(body),
 		signal
 	});
 
@@ -392,7 +414,6 @@ export async function streamToolResult(
 	let buffer = '';
 	let lastActivity = Date.now();
 
-	// Activity timeout check
 	const timeoutInterval = setInterval(() => {
 		if (Date.now() - lastActivity > STREAM_ACTIVITY_TIMEOUT) {
 			clearInterval(timeoutInterval);
@@ -433,85 +454,24 @@ export async function streamToolResult(
 		}
 	} finally {
 		clearInterval(timeoutInterval);
+		reader.cancel().catch(() => {});
 	}
 }
 
-export async function streamChat(
-	request: ChatRequest,
+export async function streamToolResult(
+	req: ToolResultRequest,
 	callbacks: StreamCallbacks,
 	signal?: AbortSignal
 ) {
-	// Build headers with optional X-User-Id for multi-tenant auth
-	const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-	if (currentUserId) {
-		headers['X-User-Id'] = currentUserId;
-	}
+	return streamSSE('/chat/tool-result', req, callbacks, signal);
+}
 
-	const response = await fetch(`${API_BASE}/chat`, {
-		method: 'POST',
-		headers,
-		body: JSON.stringify(request),
-		signal
-	});
-
-	if (!response.ok) {
-		const error = await response.json().catch(() => ({ error: 'Unknown error' }));
-		callbacks.onError(error.error || 'Request failed');
-		return;
-	}
-
-	const reader = response.body?.getReader();
-	if (!reader) {
-		callbacks.onError('No response body');
-		return;
-	}
-
-	const decoder = new TextDecoder();
-	let buffer = '';
-	let lastActivity = Date.now();
-
-	// Activity timeout check
-	const timeoutInterval = setInterval(() => {
-		if (Date.now() - lastActivity > STREAM_ACTIVITY_TIMEOUT) {
-			clearInterval(timeoutInterval);
-			reader.cancel().catch(() => {});
-			callbacks.onError('Stream timeout: no data received for 30 seconds');
-		}
-	}, STREAM_CHECK_INTERVAL);
-
-	try {
-		while (true) {
-			const { done, value } = await reader.read();
-			if (done) break;
-
-			lastActivity = Date.now();
-			buffer += decoder.decode(value, { stream: true });
-			const lines = buffer.split('\n');
-			buffer = lines.pop() || '';
-
-			for (const line of lines) {
-				if (line.startsWith('data: ')) {
-					const data = line.slice(6);
-					if (data === '[DONE]') continue;
-
-					try {
-						const event = JSON.parse(data);
-						handleEvent(event, callbacks);
-					} catch (e) {
-						console.warn('[SSE] Parse error:', data, e);
-					}
-				}
-			}
-		}
-	} catch (err) {
-		if (err instanceof Error && err.name === 'AbortError') {
-			// User cancelled
-		} else {
-			callbacks.onError(err instanceof Error ? err.message : 'Stream error');
-		}
-	} finally {
-		clearInterval(timeoutInterval);
-	}
+export async function streamChat(
+	req: ChatRequest,
+	callbacks: StreamCallbacks,
+	signal?: AbortSignal
+) {
+	return streamSSE('/chat', req, callbacks, signal);
 }
 
 function handleEvent(event: StreamEvent, callbacks: StreamCallbacks) {
@@ -560,6 +520,9 @@ function handleEvent(event: StreamEvent, callbacks: StreamCallbacks) {
 			break;
 		case 'tool_denied':
 			callbacks.onToolDenied?.(event.id);
+			break;
+		case 'turn_complete':
+			callbacks.onTurnComplete?.(event.turn, event.has_more);
 			break;
 		case 'finish':
 			callbacks.onFinish(event.session_id);

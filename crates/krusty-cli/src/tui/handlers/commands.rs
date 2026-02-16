@@ -527,8 +527,10 @@ impl App {
                 if let Some(ref mut plan) = self.runtime.active_plan {
                     // Mark as abandoned and save
                     plan.status = PlanStatus::Abandoned;
-                    if let Err(e) = self.services.plan_manager.save_plan(plan) {
-                        tracing::warn!("Failed to save abandoned plan: {}", e);
+                    if let Some(ref pm) = self.services.plan_manager {
+                        if let Err(e) = pm.save_plan(plan) {
+                            tracing::warn!("Failed to save abandoned plan: {}", e);
+                        }
                     }
                     let title = plan.title.clone();
                     let file_path = plan
@@ -553,36 +555,34 @@ impl App {
             Some("list") | Some("history") => {
                 // Show completed plans for this working directory
                 let working_dir_str = self.runtime.working_dir.to_string_lossy().into_owned();
-                match self
-                    .services
-                    .plan_manager
-                    .list_completed_for_dir(&working_dir_str)
-                {
-                    Ok(plans) if plans.is_empty() => {
-                        self.runtime.chat.messages.push((
-                            "system".to_string(),
-                            "No completed plans for this directory.".to_string(),
-                        ));
-                    }
-                    Ok(plans) => {
-                        let mut msg = String::from("Completed plans:\n");
-                        for plan in plans.iter().take(5) {
-                            let date = plan.created_at.format("%Y-%m-%d");
-                            msg.push_str(&format!(
-                                "  • {} ({}) - {}/{} tasks\n",
-                                plan.title, date, plan.progress.0, plan.progress.1,
+                if let Some(ref pm) = self.services.plan_manager {
+                    match pm.list_completed_for_dir(&working_dir_str) {
+                        Ok(plans) if plans.is_empty() => {
+                            self.runtime.chat.messages.push((
+                                "system".to_string(),
+                                "No completed plans for this directory.".to_string(),
                             ));
                         }
-                        if plans.len() > 5 {
-                            msg.push_str(&format!("  ... and {} more", plans.len() - 5));
+                        Ok(plans) => {
+                            let mut msg = String::from("Completed plans:\n");
+                            for plan in plans.iter().take(5) {
+                                let date = plan.created_at.format("%Y-%m-%d");
+                                msg.push_str(&format!(
+                                    "  • {} ({}) - {}/{} tasks\n",
+                                    plan.title, date, plan.progress.0, plan.progress.1,
+                                ));
+                            }
+                            if plans.len() > 5 {
+                                msg.push_str(&format!("  ... and {} more", plans.len() - 5));
+                            }
+                            self.runtime.chat.messages.push(("system".to_string(), msg));
                         }
-                        self.runtime.chat.messages.push(("system".to_string(), msg));
-                    }
-                    Err(e) => {
-                        self.runtime
-                            .chat
-                            .messages
-                            .push(("system".to_string(), format!("Failed to list plans: {}", e)));
+                        Err(e) => {
+                            self.runtime.chat.messages.push((
+                                "system".to_string(),
+                                format!("Failed to list plans: {}", e),
+                            ));
+                        }
                     }
                 }
             }

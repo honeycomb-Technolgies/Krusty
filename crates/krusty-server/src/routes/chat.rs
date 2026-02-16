@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::{
     extract::State,
@@ -14,10 +14,11 @@ use axum::{
 };
 use futures::stream::Stream;
 use serde_json::json;
-use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
+use tokio::sync::{mpsc, oneshot, Mutex, OwnedMutexGuard, RwLock};
 use tokio_stream::wrappers::ReceiverStream;
 
-use krusty_core::ai::client::{AiClient, CallOptions};
+use krusty_core::ai::client::{AiClient, CallOptions, CodexReasoningEffort};
+use krusty_core::ai::providers::ProviderId;
 use krusty_core::ai::streaming::StreamPart;
 use krusty_core::ai::title::generate_title;
 use krusty_core::ai::types::{
@@ -43,8 +44,9 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 const EXPLORATION_BUDGET_SOFT: usize = 15;
 const EXPLORATION_BUDGET_HARD: usize = 30;
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
+const SESSION_LOCK_MAX_ENTRIES: usize = 1000;
+const SESSION_LOCK_MAX_AGE: Duration = Duration::from_secs(3600);
 
-/// Build the chat router.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", post(chat))
@@ -52,20 +54,33 @@ pub fn router() -> Router<AppState> {
         .route("/tool-approval", post(tool_approval))
 }
 
-/// Chat endpoint with SSE streaming response and tool execution loop.
-async fn chat(
-    State(state): State<AppState>,
-    user: Option<CurrentUser>,
-    Json(req): Json<ChatRequest>,
-) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, AppError> {
+struct ChatSessionContext {
+    ai_client: Arc<AiClient>,
+    base_ai_client: Arc<AiClient>,
+    options: CallOptions,
+    conversation: Vec<ModelMessage>,
+    session_id: String,
+    session_manager: SessionManager,
+    working_dir: PathBuf,
+    user_id: Option<String>,
+    guard: OwnedMutexGuard<()>,
+}
+
+async fn setup_chat_session(
+    state: &AppState,
+    user: Option<&CurrentUser>,
+    session_id: &str,
+    model_override: Option<&str>,
+    enable_thinking: bool,
+) -> Result<ChatSessionContext, AppError> {
     let base_ai_client = state
         .ai_client
         .as_ref()
         .cloned()
         .ok_or_else(|| AppError::BadRequest("No AI credentials configured".to_string()))?;
 
-    let user_id = user.as_ref().and_then(|u| u.0.user_id.clone());
-    let user_home_dir = user.as_ref().and_then(|u| u.0.home_dir.clone());
+    let user_id = user.and_then(|u| u.0.user_id.clone());
+    let user_home_dir = user.and_then(|u| u.0.home_dir.clone());
     let default_working_dir = user_home_dir
         .clone()
         .unwrap_or_else(|| (*state.working_dir).clone());
@@ -73,57 +88,41 @@ async fn chat(
     let db = Database::new(&state.db_path)?;
     let session_manager = SessionManager::new(db);
 
-    let (session_id, is_first_message, session_working_dir) = match req.session_id {
-        Some(id) => {
-            if !session_manager.verify_session_ownership(&id, user_id.as_deref())? {
-                return Err(AppError::NotFound(format!("Session {} not found", id)));
-            }
-            let session = session_manager
-                .get_session(&id)?
-                .ok_or_else(|| AppError::NotFound(format!("Session {} not found", id)))?;
-            let messages = session_manager.load_session_messages(&id)?;
-            let working_dir = session
-                .working_dir
-                .as_deref()
-                .map(PathBuf::from)
-                .unwrap_or_else(|| default_working_dir.clone());
-            (id, messages.is_empty(), working_dir)
-        }
-        None => {
-            let title = SessionManager::generate_title_from_content(&req.message);
-            let working_dir = default_working_dir.clone();
-            let working_dir_str = working_dir.to_string_lossy().to_string();
-            let id = session_manager.create_session_for_user(
-                &title,
-                req.model.as_deref(),
-                Some(working_dir_str.as_str()),
-                user_id.as_deref(),
-            )?;
-            (id, true, working_dir)
-        }
-    };
+    if !session_manager.verify_session_ownership(session_id, user_id.as_deref())? {
+        return Err(AppError::NotFound(format!(
+            "Session {} not found",
+            session_id
+        )));
+    }
+
+    let session = session_manager
+        .get_session(session_id)?
+        .ok_or_else(|| AppError::NotFound(format!("Session {} not found", session_id)))?;
+
+    let working_dir = session
+        .working_dir
+        .as_deref()
+        .map(PathBuf::from)
+        .unwrap_or(default_working_dir);
 
     let session_lock = {
         let mut locks = state.session_locks.write().await;
-        locks
-            .entry(session_id.clone())
-            .or_insert_with(|| Arc::new(Mutex::new(())))
-            .clone()
+        if locks.len() > SESSION_LOCK_MAX_ENTRIES {
+            locks.retain(|_, (lock, created_at)| {
+                created_at.elapsed() < SESSION_LOCK_MAX_AGE || Arc::strong_count(lock) > 1
+            });
+        }
+        let (lock, _) = locks
+            .entry(session_id.to_string())
+            .or_insert_with(|| (Arc::new(Mutex::new(())), Instant::now()));
+        lock.clone()
     };
     let guard = Arc::clone(&session_lock)
         .try_lock_owned()
         .map_err(|_| AppError::Conflict(format!("Session {} is busy", session_id)))?;
 
-    let permission_mode = req.permission_mode;
-
-    let first_message_for_title = if is_first_message {
-        Some(req.message.clone())
-    } else {
-        None
-    };
-
-    let raw_messages = session_manager.load_session_messages(&session_id)?;
-    let mut conversation: Vec<ModelMessage> = raw_messages
+    let raw_messages = session_manager.load_session_messages(session_id)?;
+    let conversation: Vec<ModelMessage> = raw_messages
         .into_iter()
         .filter_map(|(role_str, content_json)| {
             let role = match role_str.as_str() {
@@ -137,37 +136,102 @@ async fn chat(
         })
         .collect();
 
+    let ai_client = if let Some(requested_model) = model_override {
+        let mut cfg = base_ai_client.config().clone();
+        cfg.model = requested_model.to_string();
+        Arc::new(AiClient::new(cfg, base_ai_client.api_key().to_string()))
+    } else {
+        base_ai_client.clone()
+    };
+
+    let ai_tools = state.tool_registry.get_ai_tools().await;
+    let mut options = CallOptions {
+        tools: Some(ai_tools),
+        session_id: Some(session_id.to_string()),
+        codex_parallel_tool_calls: true,
+        ..Default::default()
+    };
+    if enable_thinking {
+        apply_thinking_config(&ai_client, &mut options);
+    }
+
+    Ok(ChatSessionContext {
+        ai_client,
+        base_ai_client,
+        options,
+        conversation,
+        session_id: session_id.to_string(),
+        session_manager,
+        working_dir,
+        user_id,
+        guard,
+    })
+}
+
+async fn chat(
+    State(state): State<AppState>,
+    user: Option<CurrentUser>,
+    Json(req): Json<ChatRequest>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, AppError> {
+    let user_id = user.as_ref().and_then(|u| u.0.user_id.clone());
+    let default_working_dir = user
+        .as_ref()
+        .and_then(|u| u.0.home_dir.clone())
+        .unwrap_or_else(|| (*state.working_dir).clone());
+
+    let (session_id, is_first_message) = match req.session_id {
+        Some(id) => {
+            let db = Database::new(&state.db_path)?;
+            let sm = SessionManager::new(db);
+            if !sm.verify_session_ownership(&id, user_id.as_deref())? {
+                return Err(AppError::NotFound(format!("Session {} not found", id)));
+            }
+            let messages = sm.load_session_messages(&id)?;
+            (id, messages.is_empty())
+        }
+        None => {
+            let db = Database::new(&state.db_path)?;
+            let sm = SessionManager::new(db);
+            let title = SessionManager::generate_title_from_content(&req.message);
+            let working_dir_str = default_working_dir.to_string_lossy().to_string();
+            let id = sm.create_session_for_user(
+                &title,
+                req.model.as_deref(),
+                Some(working_dir_str.as_str()),
+                user_id.as_deref(),
+            )?;
+            (id, true)
+        }
+    };
+
+    let mut ctx = setup_chat_session(
+        &state,
+        user.as_ref(),
+        &session_id,
+        req.model.as_deref(),
+        req.thinking_enabled,
+    )
+    .await?;
+
+    let permission_mode = req.permission_mode;
+
+    let first_message_for_title = if is_first_message {
+        Some(req.message.clone())
+    } else {
+        None
+    };
+
     let user_content = vec![Content::Text {
         text: req.message.clone(),
     }];
     let user_content_json = serde_json::to_string(&user_content)?;
 
-    conversation.push(ModelMessage {
+    ctx.conversation.push(ModelMessage {
         role: Role::User,
         content: user_content,
     });
-    session_manager.save_message(&session_id, "user", &user_content_json)?;
-
-    let ai_tools = state.tool_registry.get_ai_tools().await;
-    let mut options = CallOptions {
-        tools: Some(ai_tools),
-        session_id: Some(session_id.clone()),
-        codex_parallel_tool_calls: true,
-        ..Default::default()
-    };
-    if req.thinking_enabled {
-        options.thinking = Some(ThinkingConfig {
-            budget_tokens: 32000,
-        });
-    }
-
-    let ai_client = if let Some(requested_model) = req.model {
-        let mut cfg = base_ai_client.config().clone();
-        cfg.model = requested_model;
-        Arc::new(AiClient::new(cfg, base_ai_client.api_key().to_string()))
-    } else {
-        base_ai_client.clone()
-    };
+    ctx.session_manager
+        .save_message(&session_id, "user", &user_content_json)?;
 
     let (sse_tx, sse_rx) = mpsc::channel::<Result<Event, Infallible>>(SSE_CHANNEL_BUFFER);
     let title_sse_tx = if first_message_for_title.is_some() {
@@ -178,11 +242,20 @@ async fn chat(
 
     let tool_registry = Arc::clone(&state.tool_registry);
     let process_registry = Arc::clone(&state.process_registry);
-    let working_dir = session_working_dir;
     let db_path = Arc::clone(&state.db_path);
-    let session_id_for_loop = session_id.clone();
-    let user_id_for_loop = user_id.clone();
     let pending_approvals = Arc::clone(&state.pending_approvals);
+
+    let ChatSessionContext {
+        ai_client,
+        base_ai_client,
+        options,
+        conversation,
+        session_id: ctx_session_id,
+        working_dir,
+        user_id: ctx_user_id,
+        guard,
+        ..
+    } = ctx;
 
     tokio::spawn(async move {
         let _guard = guard;
@@ -193,10 +266,10 @@ async fn chat(
             sse_tx,
             conversation,
             options,
-            session_id_for_loop,
+            ctx_session_id,
             db_path,
             working_dir,
-            user_id_for_loop,
+            ctx_user_id,
             permission_mode,
             pending_approvals,
         )
@@ -215,13 +288,31 @@ async fn chat(
 
         tokio::spawn(async move {
             let title = generate_title(&title_ai_client, &first_message).await;
-            if let Ok(db) = Database::new(&title_db_path) {
-                let sm = SessionManager::new(db);
-                let _ = sm.update_session_title(&title_session_id, &title);
+            match Database::new(&title_db_path) {
+                Ok(db) => {
+                    let sm = SessionManager::new(db);
+                    if let Err(e) = sm.update_session_title(&title_session_id, &title) {
+                        tracing::error!(
+                            session_id = %title_session_id,
+                            "Failed to update session title: {}", e
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(
+                        session_id = %title_session_id,
+                        "Failed to open database for title update: {}", e
+                    );
+                }
             }
             let event = AgenticEvent::TitleUpdate { title };
-            if let Ok(json) = serde_json::to_string(&event) {
-                let _ = title_tx.send(Ok(Event::default().data(json))).await;
+            match serde_json::to_string(&event) {
+                Ok(json) => {
+                    let _ = title_tx.send(Ok(Event::default().data(json))).await;
+                }
+                Err(e) => {
+                    tracing::error!("Failed to serialize title update event: {}", e);
+                }
             }
         });
     }
@@ -230,68 +321,21 @@ async fn chat(
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
-/// Submit a tool result for interactive flows (e.g., AskUserQuestion).
 async fn tool_result(
     State(state): State<AppState>,
     user: Option<CurrentUser>,
     Json(req): Json<ToolResultRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, AppError> {
-    let ai_client = state
-        .ai_client
-        .as_ref()
-        .cloned()
-        .ok_or_else(|| AppError::BadRequest("No AI credentials configured".to_string()))?;
+    let mut ctx = setup_chat_session(&state, user.as_ref(), &req.session_id, None, false).await?;
 
-    let user_id = user.as_ref().and_then(|u| u.0.user_id.clone());
-    let user_home_dir = user.as_ref().and_then(|u| u.0.home_dir.clone());
-    let default_working_dir = user_home_dir
-        .clone()
-        .unwrap_or_else(|| (*state.working_dir).clone());
-
-    let db = Database::new(&state.db_path)?;
-    let session_manager = SessionManager::new(db);
-
-    if !session_manager.verify_session_ownership(&req.session_id, user_id.as_deref())? {
-        return Err(AppError::NotFound(format!(
-            "Session {} not found",
-            req.session_id
-        )));
+    let has_thinking = ctx.conversation.iter().any(|msg| {
+        msg.content
+            .iter()
+            .any(|c| matches!(c, Content::Thinking { .. }))
+    });
+    if has_thinking {
+        apply_thinking_config(&ctx.ai_client, &mut ctx.options);
     }
-
-    let session = session_manager
-        .get_session(&req.session_id)?
-        .ok_or_else(|| AppError::NotFound(format!("Session {} not found", req.session_id)))?;
-    let session_working_dir = session
-        .working_dir
-        .as_deref()
-        .map(PathBuf::from)
-        .unwrap_or(default_working_dir);
-
-    let session_lock = {
-        let mut locks = state.session_locks.write().await;
-        locks
-            .entry(req.session_id.clone())
-            .or_insert_with(|| Arc::new(Mutex::new(())))
-            .clone()
-    };
-    let guard = Arc::clone(&session_lock)
-        .try_lock_owned()
-        .map_err(|_| AppError::Conflict(format!("Session {} is busy", req.session_id)))?;
-
-    let raw_messages = session_manager.load_session_messages(&req.session_id)?;
-    let mut conversation: Vec<ModelMessage> = raw_messages
-        .into_iter()
-        .filter_map(|(role_str, content_json)| {
-            let role = match role_str.as_str() {
-                "user" => Role::User,
-                "assistant" => Role::Assistant,
-                _ => return None,
-            };
-            serde_json::from_str(&content_json)
-                .ok()
-                .map(|content| ModelMessage { role, content })
-        })
-        .collect();
 
     let tool_result_content = vec![Content::ToolResult {
         tool_use_id: req.tool_call_id.clone(),
@@ -300,40 +344,30 @@ async fn tool_result(
     }];
     let tool_result_json = serde_json::to_string(&tool_result_content)?;
 
-    conversation.push(ModelMessage {
+    ctx.conversation.push(ModelMessage {
         role: Role::User,
         content: tool_result_content,
     });
-    session_manager.save_message(&req.session_id, "user", &tool_result_json)?;
-
-    let has_thinking = conversation.iter().any(|msg| {
-        msg.content
-            .iter()
-            .any(|c| matches!(c, Content::Thinking { .. }))
-    });
-
-    let ai_tools = state.tool_registry.get_ai_tools().await;
-    let mut options = CallOptions {
-        tools: Some(ai_tools),
-        session_id: Some(req.session_id.clone()),
-        codex_parallel_tool_calls: true,
-        ..Default::default()
-    };
-    if has_thinking {
-        options.thinking = Some(ThinkingConfig {
-            budget_tokens: 32000,
-        });
-    }
+    ctx.session_manager
+        .save_message(&req.session_id, "user", &tool_result_json)?;
 
     let (sse_tx, sse_rx) = mpsc::channel::<Result<Event, Infallible>>(SSE_CHANNEL_BUFFER);
 
     let tool_registry = Arc::clone(&state.tool_registry);
     let process_registry = Arc::clone(&state.process_registry);
-    let working_dir = session_working_dir;
     let db_path = Arc::clone(&state.db_path);
-    let session_id = req.session_id;
-    let user_id_for_loop = user_id.clone();
     let pending_approvals = Arc::clone(&state.pending_approvals);
+
+    let ChatSessionContext {
+        ai_client,
+        options,
+        conversation,
+        session_id,
+        working_dir,
+        user_id,
+        guard,
+        ..
+    } = ctx;
 
     tokio::spawn(async move {
         let _guard = guard;
@@ -347,7 +381,7 @@ async fn tool_result(
             session_id,
             db_path,
             working_dir,
-            user_id_for_loop,
+            user_id,
             PermissionMode::Autonomous,
             pending_approvals,
         )
@@ -358,7 +392,6 @@ async fn tool_result(
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
-/// Submit a tool approval decision.
 async fn tool_approval(
     State(state): State<AppState>,
     Json(req): Json<ToolApprovalRequest>,
@@ -371,7 +404,20 @@ async fn tool_approval(
     Ok(Json(json!({"status": "ok"})))
 }
 
-/// Run the loop: AI -> tools -> AI until complete.
+fn apply_thinking_config(ai_client: &AiClient, options: &mut CallOptions) {
+    let cfg = ai_client.config();
+    let is_codex =
+        cfg.provider_id == ProviderId::OpenAI && cfg.model.to_ascii_lowercase().contains("codex");
+
+    if is_codex {
+        options.codex_reasoning_effort = Some(CodexReasoningEffort::High);
+    } else {
+        options.thinking = Some(ThinkingConfig {
+            budget_tokens: 32000,
+        });
+    }
+}
+
 async fn run_agentic_loop(
     ai_client: Arc<AiClient>,
     tool_registry: Arc<ToolRegistry>,
@@ -557,7 +603,6 @@ async fn run_agentic_loop(
             return;
         }
 
-        // Track exploration budget
         let all_readonly = tool_calls
             .iter()
             .all(|t| matches!(t.name.as_str(), "read" | "glob" | "grep"));
@@ -586,7 +631,6 @@ async fn run_agentic_loop(
         )
         .await;
 
-        // Keep exploration budget internal. Do not inject warnings into tool result content.
         if exploration_budget_count >= EXPLORATION_BUDGET_HARD {
             tracing::warn!(
                 exploration_budget_count,
@@ -637,7 +681,6 @@ struct ThinkingBlock {
     signature: String,
 }
 
-/// Process AI stream and collect pieces for the next turn.
 async fn process_stream(
     mut api_rx: mpsc::UnboundedReceiver<StreamPart>,
     sse_tx: &mpsc::Sender<Result<Event, Infallible>>,
@@ -760,7 +803,6 @@ async fn process_stream(
     )
 }
 
-/// Execute tool calls locally and build `tool_result` content blocks.
 async fn execute_tools(
     tool_registry: &ToolRegistry,
     tool_calls: &[AiToolCall],
@@ -790,6 +832,7 @@ async fn execute_tools(
             let (tx, rx) = oneshot::channel();
             {
                 let mut approvals = pending_approvals.write().await;
+                approvals.retain(|_, sender| !sender.is_closed());
                 approvals.insert(call.id.clone(), tx);
             }
 
@@ -819,7 +862,6 @@ async fn execute_tools(
                         output: serde_json::Value::String(output),
                         is_error: Some(true),
                     });
-                    // Clean up
                     let mut approvals = pending_approvals.write().await;
                     approvals.remove(&call.id);
                     continue;
@@ -900,18 +942,15 @@ async fn execute_tools(
             continue;
         }
 
-        // Create streaming output channel for bash tools
         let (output_tx, mut output_rx) =
             mpsc::unbounded_channel::<krusty_core::tools::registry::ToolOutputChunk>();
 
-        // Spawn forwarder task: reads tool output chunks and sends them as SSE events,
-        // with heartbeat events during periods of inactivity
         let forwarder_sse_tx = sse_tx.clone();
         let forwarder_tool_id = call.id.clone();
         let forwarder_tool_name = call.name.clone();
         let forwarder_handle = tokio::spawn(async move {
             let mut heartbeat_interval = tokio::time::interval(HEARTBEAT_INTERVAL);
-            heartbeat_interval.tick().await; // consume immediate first tick
+            heartbeat_interval.tick().await;
 
             loop {
                 tokio::select! {
@@ -970,7 +1009,12 @@ async fn execute_tools(
                 is_error: true,
             });
 
-        // Wait for forwarder to drain remaining chunks
+        // Drop ctx so the forwarder task sees channel closed and exits.
+        // Without this, non-streaming tools deadlock: forwarder_handle.await
+        // waits for the forwarder, but the forwarder waits for output_rx to
+        // close, which requires output_tx (in ctx) to be dropped.
+        drop(ctx);
+
         let _ = forwarder_handle.await;
 
         let output = truncate_output(&result.output);

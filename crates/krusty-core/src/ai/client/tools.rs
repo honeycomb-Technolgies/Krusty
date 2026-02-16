@@ -16,6 +16,8 @@ use crate::ai::format::response::{
     extract_text_from_content, normalize_google_response, normalize_openai_response,
 };
 
+const OPENAI_WS_API_VERSION: &str = "responses_websockets=2026-02-06";
+
 impl AiClient {
     /// Call the API with tools (non-streaming, for sub-agents)
     ///
@@ -488,15 +490,17 @@ impl AiClient {
         }
 
         if codex_tools.is_empty() {
-            body.as_object_mut().unwrap().remove("tools");
-            body.as_object_mut().unwrap().remove("tool_choice");
+            if let Some(obj) = body.as_object_mut() {
+                obj.remove("tools");
+                obj.remove("tool_choice");
+            }
         }
 
         let ws_url = Self::resolve_codex_ws_url_for_tools(&self.config().api_url())?;
         let request = self.build_websocket_request(
             ws_url.as_str(),
             &[
-                ("OpenAI-Beta", "responses_websockets=2026-02-06"),
+                ("OpenAI-Beta", OPENAI_WS_API_VERSION),
                 ("originator", "krusty"),
             ],
         )?;

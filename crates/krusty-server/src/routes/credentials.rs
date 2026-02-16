@@ -137,11 +137,6 @@ async fn delete_credential(
 }
 
 fn parse_provider(s: &str) -> Result<ProviderId, AppError> {
-    match s.to_ascii_lowercase().as_str() {
-        "minimax" => Ok(ProviderId::MiniMax),
-        "openrouter" => Ok(ProviderId::OpenRouter),
-        "z_ai" | "zai" => Ok(ProviderId::ZAi),
-        "openai" => Ok(ProviderId::OpenAI),
-        _ => Err(AppError::BadRequest(format!("Unknown provider: {}", s))),
-    }
+    crate::utils::providers::parse_provider(s)
+        .ok_or_else(|| AppError::BadRequest(format!("Unknown provider: {}", s)))
 }

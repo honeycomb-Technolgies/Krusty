@@ -2,6 +2,8 @@
 //!
 //! Handles the execution of AI tool calls and processing of results.
 
+use std::time::Duration;
+
 use tokio::sync::{mpsc, oneshot};
 
 use crate::agent::subagent::AgentProgress;
@@ -9,6 +11,10 @@ use crate::ai::types::{AiToolCall, Content};
 use crate::tools::{ToolContext, ToolOutputChunk};
 use crate::tui::app::App;
 use crate::tui::components::{PromptOption, PromptQuestion};
+
+const MAX_ITERATIONS: usize = 50;
+const MAX_TOOL_OUTPUT_CHARS: usize = 30_000;
+const APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
 
 impl App {
     /// Handle enter_plan_mode tool calls to switch modes
@@ -188,8 +194,10 @@ impl App {
                 continue;
             }
 
-            if let Err(e) = self.services.plan_manager.save_plan(plan) {
-                tracing::error!("Failed to save plan after task completion: {}", e);
+            if let Some(ref pm) = self.services.plan_manager {
+                if let Err(e) = pm.save_plan(plan) {
+                    tracing::error!("Failed to save plan after task completion: {}", e);
+                }
             }
 
             let (completed, total) = plan.progress();
@@ -256,8 +264,10 @@ impl App {
 
             match plan.start_task(task_id) {
                 Ok(()) => {
-                    if let Err(e) = self.services.plan_manager.save_plan(plan) {
-                        tracing::error!("Failed to save plan after task start: {}", e);
+                    if let Some(ref pm) = self.services.plan_manager {
+                        if let Err(e) = pm.save_plan(plan) {
+                            tracing::error!("Failed to save plan after task start: {}", e);
+                        }
                     }
                     results.push(Content::ToolResult {
                         tool_use_id: tool_call.id.clone(),
@@ -324,8 +334,10 @@ impl App {
 
             match plan.add_subtask(parent_id, description, context) {
                 Ok(subtask_id) => {
-                    if let Err(e) = self.services.plan_manager.save_plan(plan) {
-                        tracing::error!("Failed to save plan after adding subtask: {}", e);
+                    if let Some(ref pm) = self.services.plan_manager {
+                        if let Err(e) = pm.save_plan(plan) {
+                            tracing::error!("Failed to save plan after adding subtask: {}", e);
+                        }
                     }
                     results.push(Content::ToolResult {
                         tool_use_id: tool_call.id.clone(),
@@ -388,8 +400,10 @@ impl App {
 
             match plan.add_dependency(task_id, blocked_by) {
                 Ok(()) => {
-                    if let Err(e) = self.services.plan_manager.save_plan(plan) {
-                        tracing::error!("Failed to save plan after adding dependency: {}", e);
+                    if let Some(ref pm) = self.services.plan_manager {
+                        if let Err(e) = pm.save_plan(plan) {
+                            tracing::error!("Failed to save plan after adding dependency: {}", e);
+                        }
                     }
                     results.push(Content::ToolResult {
                         tool_use_id: tool_call.id.clone(),
@@ -594,8 +608,9 @@ impl App {
                 // Store the full tool_calls for later execution after approval
                 self.runtime.queued_tools.extend(tool_calls);
 
-                // Show approval prompt
+                // Show approval prompt and track when it was requested
                 self.ui.decision_prompt.show_tool_approval(names, ids);
+                self.runtime.approval_requested_at = Some(std::time::Instant::now());
                 return;
             }
         }
@@ -647,13 +662,32 @@ impl App {
         }
 
         // Create streaming output channel for bash
-        let (output_tx, output_rx) = mpsc::unbounded_channel::<ToolOutputChunk>();
-        self.runtime.channels.bash_output = Some(output_rx);
+        // Unbounded sender for krusty-core API compat, bounded receiver for backpressure
+        let (output_tx, unbounded_output_rx) = mpsc::unbounded_channel::<ToolOutputChunk>();
+        let (bounded_output_tx, bounded_output_rx) = mpsc::channel::<ToolOutputChunk>(1024);
+        self.runtime.channels.bash_output = Some(bounded_output_rx);
+        tokio::spawn(async move {
+            let mut rx = unbounded_output_rx;
+            while let Some(chunk) = rx.recv().await {
+                if bounded_output_tx.send(chunk).await.is_err() {
+                    break;
+                }
+            }
+        });
 
         // Create explore progress channel if any explore tools
         let explore_progress_tx = if has_explore {
-            let (tx, rx) = mpsc::unbounded_channel::<AgentProgress>();
-            self.runtime.channels.explore_progress = Some(rx);
+            let (tx, unbounded_rx) = mpsc::unbounded_channel::<AgentProgress>();
+            let (bounded_tx, bounded_rx) = mpsc::channel::<AgentProgress>(1024);
+            self.runtime.channels.explore_progress = Some(bounded_rx);
+            tokio::spawn(async move {
+                let mut rx = unbounded_rx;
+                while let Some(progress) = rx.recv().await {
+                    if bounded_tx.send(progress).await.is_err() {
+                        break;
+                    }
+                }
+            });
             Some(tx)
         } else {
             None
@@ -661,8 +695,17 @@ impl App {
 
         // Create build progress channel if any build tools
         let build_progress_tx = if has_build {
-            let (tx, rx) = mpsc::unbounded_channel::<AgentProgress>();
-            self.runtime.channels.build_progress = Some(rx);
+            let (tx, unbounded_rx) = mpsc::unbounded_channel::<AgentProgress>();
+            let (bounded_tx, bounded_rx) = mpsc::channel::<AgentProgress>(1024);
+            self.runtime.channels.build_progress = Some(bounded_rx);
+            tokio::spawn(async move {
+                let mut rx = unbounded_rx;
+                while let Some(progress) = rx.recv().await {
+                    if bounded_tx.send(progress).await.is_err() {
+                        break;
+                    }
+                }
+            });
             Some(tx)
         } else {
             None
@@ -740,9 +783,10 @@ impl App {
                 };
 
                 if let Some(result) = result {
+                    let output = truncate_tool_output(&result.output);
                     tool_results.push(Content::ToolResult {
                         tool_use_id: tool_call.id.clone(),
-                        output: serde_json::Value::String(result.output),
+                        output: serde_json::Value::String(output),
                         is_error: if result.is_error { Some(true) } else { None },
                     });
                 } else {
@@ -944,6 +988,7 @@ impl App {
     ) {
         use crate::tui::components::PromptAnswer;
 
+        self.runtime.approval_requested_at = None;
         let approved = matches!(answers.first(), Some(PromptAnswer::Selected(0)));
         let queued = std::mem::take(&mut self.runtime.queued_tools);
 
@@ -1025,6 +1070,8 @@ impl App {
                 "handle_tool_results: processing {} queued tools",
                 queued.len()
             );
+            // Clear executing state so UI shows idle while queued tools wait to run
+            self.runtime.chat.is_executing_tools = false;
             self.spawn_tool_execution(queued);
             // Store results for later
             self.runtime.pending_tool_results = all_results;
@@ -1067,6 +1114,22 @@ impl App {
         self.stop_tool_execution();
         self.runtime.chat.conversation.push(tool_result_msg.clone());
         self.save_model_message(&tool_result_msg);
+
+        // Enforce agentic loop iteration limit
+        if self.runtime.agent_state.current_turn >= MAX_ITERATIONS {
+            tracing::warn!(
+                "Agentic loop hit iteration limit ({}), stopping",
+                MAX_ITERATIONS
+            );
+            self.runtime.chat.messages.push((
+                "system".to_string(),
+                format!(
+                    "Reached maximum agentic loop iterations ({}). Stopping.",
+                    MAX_ITERATIONS
+                ),
+            ));
+            return;
+        }
 
         // Continue conversation with AI
         self.send_to_ai();
@@ -1160,4 +1223,62 @@ impl App {
             }
         }
     }
+
+    /// Check if a tool approval prompt has timed out and auto-reject if so
+    pub fn check_approval_timeout(&mut self) {
+        if self.ui.decision_prompt.prompt_type != crate::tui::components::PromptType::ToolApproval
+            || !self.ui.decision_prompt.visible
+        {
+            return;
+        }
+
+        let Some(requested_at) = self.runtime.approval_requested_at else {
+            return;
+        };
+
+        if requested_at.elapsed() >= APPROVAL_TIMEOUT {
+            tracing::warn!("Tool approval timed out after {:?}", APPROVAL_TIMEOUT);
+            self.runtime.approval_requested_at = None;
+            self.ui.decision_prompt.hide();
+            self.runtime.chat.messages.push((
+                "system".to_string(),
+                "Tool approval timed out (5 min). Automatically denied.".to_string(),
+            ));
+
+            // Auto-reject all queued tools
+            let queued = std::mem::take(&mut self.runtime.queued_tools);
+            let mut results: Vec<Content> = Vec::new();
+            for tool in &queued {
+                results.push(Content::ToolResult {
+                    tool_use_id: tool.id.clone(),
+                    output: serde_json::Value::String(
+                        "Tool approval timed out after 5 minutes".to_string(),
+                    ),
+                    is_error: Some(true),
+                });
+            }
+            let pending = std::mem::take(&mut self.runtime.pending_tool_results);
+            results.extend(pending);
+            if !results.is_empty() {
+                self.stop_streaming();
+                self.handle_tool_results(results);
+            }
+        }
+    }
+}
+
+fn truncate_tool_output(output: &str) -> String {
+    if output.len() <= MAX_TOOL_OUTPUT_CHARS {
+        return output.to_string();
+    }
+
+    let truncated = &output[..MAX_TOOL_OUTPUT_CHARS];
+    let break_point = truncated.rfind('\n').unwrap_or(MAX_TOOL_OUTPUT_CHARS);
+    let clean = &output[..break_point];
+    format!(
+        "{}\n\n[Output truncated: {} chars, showing first {}]",
+        clean,
+        output.len(),
+        clean.len()
+    )
 }

@@ -124,12 +124,6 @@ impl AiClient {
         &self.config
     }
 
-    /// Get the HTTP client for making requests
-    #[allow(dead_code)]
-    pub(crate) fn http_client(&self) -> &Client {
-        &self.http
-    }
-
     /// Build a request with proper authentication headers
     pub(crate) fn build_request(&self, url: &str) -> reqwest::RequestBuilder {
         let mut request = self.http.post(url);

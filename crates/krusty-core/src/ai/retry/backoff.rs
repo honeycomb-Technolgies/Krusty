@@ -122,59 +122,24 @@ where
     }
 }
 
-/// Parse Retry-After header value
-///
-/// The header can be either:
-/// - A number of seconds (e.g., "120")
-/// - An HTTP date (e.g., "Wed, 21 Oct 2015 07:28:00 GMT")
-#[allow(dead_code)]
-pub fn parse_retry_after(header_value: &str) -> Option<Duration> {
-    // Try parsing as seconds first
-    if let Ok(seconds) = header_value.parse::<u64>() {
-        return Some(Duration::from_secs(seconds));
-    }
-
-    // Try parsing as HTTP date
-    if let Ok(date) = httpdate::parse_http_date(header_value) {
-        let now = std::time::SystemTime::now();
-        if let Ok(duration) = date.duration_since(now) {
-            return Some(duration);
-        }
-    }
-
-    None
-}
-
-/// A simple retryable error wrapper for HTTP errors
-#[derive(Debug)]
-#[allow(dead_code)]
-pub struct HttpError {
-    pub status: u16,
-    pub message: String,
-    pub retry_after: Option<Duration>,
-}
-
-impl std::fmt::Display for HttpError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "HTTP {}: {}", self.status, self.message)
-    }
-}
-
-impl std::error::Error for HttpError {}
-
-impl IsRetryable for HttpError {
-    fn is_retryable(&self) -> bool {
-        is_retryable_status(self.status)
-    }
-
-    fn retry_after(&self) -> Option<Duration> {
-        self.retry_after
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn parse_retry_after(header_value: &str) -> Option<Duration> {
+        if let Ok(seconds) = header_value.parse::<u64>() {
+            return Some(Duration::from_secs(seconds));
+        }
+
+        if let Ok(date) = httpdate::parse_http_date(header_value) {
+            let now = std::time::SystemTime::now();
+            if let Ok(duration) = date.duration_since(now) {
+                return Some(duration);
+            }
+        }
+
+        None
+    }
 
     #[test]
     fn test_retryable_status_codes() {

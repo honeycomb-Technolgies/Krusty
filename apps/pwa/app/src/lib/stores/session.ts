@@ -1,5 +1,5 @@
 import { writable, get } from 'svelte/store';
-import { apiClient, streamChat, streamToolResult, type ContentBlock, type PlanItem } from '$api/client';
+import { apiClient, streamChat, streamToolResult, type ContentBlock, type PlanItem, type StreamCallbacks } from '$api/client';
 import { loadSessions } from './sessions';
 import { setPlanItems, setPlanVisible } from './plan';
 import { workspaceStore } from './workspace';
@@ -7,6 +7,8 @@ import { workspaceStore } from './workspace';
 // Background state polling interval (for reconnection)
 let statePollingInterval: ReturnType<typeof setInterval> | null = null;
 const STATE_POLL_INTERVAL = 3000; // 3 seconds
+const MAX_QUEUED_MESSAGES = 50;
+const MAX_MESSAGE_CONTENT_LENGTH = 500_000; // 500KB
 
 export interface ToolCall {
 	id: string;
@@ -88,7 +90,12 @@ async function fileToBase64(file: File): Promise<string> {
 		reader.onload = () => {
 			const result = reader.result as string;
 			// Remove data URL prefix (e.g., "data:image/png;base64,")
-			const base64 = result.split(',')[1];
+			const parts = result.split(',');
+			if (parts.length < 2) {
+				reject(new Error('Invalid data URL format'));
+				return;
+			}
+			const base64 = parts[1];
 			resolve(base64);
 		};
 		reader.onerror = reject;
@@ -139,6 +146,135 @@ async function buildContentBlocks(text: string, attachments: Attachment[]): Prom
 	return blocks;
 }
 
+// Mutable ref wrapper so callbacks can read/write the current assistant message
+// across turn boundaries (onTurnComplete resets the message for the next turn)
+interface AssistantMessageRef {
+	current: ChatMessage;
+}
+
+function createStreamCallbacks(ref: AssistantMessageRef): StreamCallbacks {
+	function updateLastAssistantMessage(updater?: (s: SessionState) => Partial<SessionState>) {
+		sessionStore.update((s) => {
+			const messages = [...s.messages];
+			const lastIdx = messages.length - 1;
+			if (messages[lastIdx]?.role === 'assistant') {
+				messages[lastIdx] = { ...ref.current };
+			} else {
+				messages.push({ ...ref.current });
+			}
+			return { ...s, messages, ...updater?.(s) };
+		});
+	}
+
+	function mapToolCalls(id: string, mapper: (tc: ToolCall) => ToolCall) {
+		ref.current.toolCalls = ref.current.toolCalls?.map((tc) =>
+			tc.id === id ? mapper(tc) : tc
+		);
+		updateLastAssistantMessage();
+	}
+
+	return {
+		onTextDelta: (delta) => {
+			ref.current.content += delta;
+			updateLastAssistantMessage(() => ({ isLoading: false, isThinking: false }));
+		},
+		onThinkingDelta: (thinking) => {
+			ref.current.thinking = (ref.current.thinking || '') + thinking;
+			updateLastAssistantMessage(() => ({ isThinking: true, thinkingContent: ref.current.thinking || '' }));
+		},
+		onToolCallStart: (id, name) => {
+			ref.current.toolCalls = [...(ref.current.toolCalls || []), { id, name, status: 'running' }];
+			updateLastAssistantMessage();
+		},
+		onToolCallComplete: (id, _name, args) => {
+			mapToolCalls(id, (tc) => ({ ...tc, arguments: args }));
+		},
+		onToolResult: (id, output, isError) => {
+			mapToolCalls(id, (tc) => ({ ...tc, output, status: isError ? 'error' : 'success' }));
+		},
+		onToolOutputDelta: (id, delta) => {
+			mapToolCalls(id, (tc) => ({ ...tc, output: (tc.output || '') + delta }));
+		},
+		onPlanUpdate: (items: PlanItem[]) => {
+			setPlanItems(items);
+		},
+		onModeChange: (mode) => {
+			sessionStore.update((s) => ({ ...s, mode: mode as SessionMode }));
+			if (mode === 'plan') {
+				setPlanVisible(true);
+			}
+		},
+		onPlanComplete: (toolCallId, title, taskCount) => {
+			const planConfirmCall: ToolCall = {
+				id: toolCallId,
+				name: 'PlanConfirm',
+				arguments: { title, task_count: taskCount },
+				status: 'pending'
+			};
+			ref.current.toolCalls = [...(ref.current.toolCalls || []), planConfirmCall];
+			updateLastAssistantMessage();
+		},
+		onTurnComplete: (_turn, hasMore) => {
+			if (hasMore) {
+				ref.current = { role: 'assistant', content: '', thinking: '', toolCalls: [] };
+				sessionStore.update((s) => ({
+					...s,
+					messages: [...s.messages, { ...ref.current }]
+				}));
+			}
+		},
+		onToolApprovalRequired: (id, _name, args) => {
+			mapToolCalls(id, (tc) => ({ ...tc, arguments: args, status: 'awaiting_approval' }));
+		},
+		onToolApproved: (id) => {
+			mapToolCalls(id, (tc) => ({ ...tc, status: 'running' }));
+		},
+		onToolDenied: (id) => {
+			mapToolCalls(id, (tc) => ({ ...tc, status: 'error', output: 'Denied by user' }));
+		},
+		onUsage: (promptTokens, _completionTokens) => {
+			sessionStore.update((s) => ({ ...s, tokenCount: promptTokens }));
+		},
+		onTitleUpdate: (title) => {
+			sessionStore.update((s) => ({ ...s, title }));
+			loadSessions();
+		},
+		onFinish: (sessionId) => {
+			const currentState = get(sessionStore);
+			const queued = currentState.queuedMessages;
+
+			const messages = currentState.messages.map(m =>
+				m.isQueued ? { ...m, isQueued: false } : m
+			);
+
+			sessionStore.update((s) => ({
+				...s,
+				sessionId,
+				messages,
+				queuedMessages: [],
+				isStreaming: false,
+				isThinking: false,
+				thinkingContent: ''
+			}));
+			loadSessions();
+
+			if (queued.length > 0) {
+				const combinedContent = queued.map(q => q.content).join('\n\n');
+				const combinedAttachments = queued.flatMap(q => q.attachments);
+				setTimeout(() => sendMessage(combinedContent, combinedAttachments), 50);
+			}
+		},
+		onError: (error) => {
+			sessionStore.update((s) => ({
+				...s,
+				isLoading: false,
+				isStreaming: false,
+				error
+			}));
+		}
+	};
+}
+
 export async function sendMessage(content: string, attachments: Attachment[] = []) {
 	const state = get(sessionStore);
 
@@ -149,11 +285,16 @@ export async function sendMessage(content: string, attachments: Attachment[] = [
 
 	// Queue message if currently streaming
 	if (state.isStreaming) {
-		sessionStore.update((s) => ({
-			...s,
-			queuedMessages: [...s.queuedMessages, { content, attachments }],
-			messages: [...s.messages, { role: 'user', content: displayContent, isQueued: true }]
-		}));
+		sessionStore.update((s) => {
+			if (s.queuedMessages.length >= MAX_QUEUED_MESSAGES) {
+				return { ...s, error: 'Message queue is full. Please wait for the current response to finish.' };
+			}
+			return {
+				...s,
+				queuedMessages: [...s.queuedMessages, { content, attachments }],
+				messages: [...s.messages, { role: 'user', content: displayContent, isQueued: true }]
+			};
+		});
 		return;
 	}
 
@@ -166,22 +307,21 @@ export async function sendMessage(content: string, attachments: Attachment[] = [
 		error: null
 	}));
 
-	// Create abort controller for cancellation
 	abortController = new AbortController();
 
-	// Start state polling as fallback for stream death recovery
 	const pollingSessionId = state.sessionId;
 	if (pollingSessionId) {
 		startStatePolling(pollingSessionId);
 	}
 
 	try {
-		// Build content blocks if we have attachments
 		const contentBlocks = attachments.length > 0
 			? await buildContentBlocks(content, attachments)
 			: undefined;
 
-		let assistantMessage: ChatMessage = { role: 'assistant', content: '', thinking: '', toolCalls: [] };
+		const ref: AssistantMessageRef = {
+			current: { role: 'assistant', content: '', thinking: '', toolCalls: [] }
+		};
 
 		await streamChat(
 			{
@@ -191,209 +331,7 @@ export async function sendMessage(content: string, attachments: Attachment[] = [
 				thinking_enabled: state.thinkingEnabled,
 				permission_mode: state.permissionMode
 			},
-			{
-				onTextDelta: (delta) => {
-					assistantMessage.content += delta;
-					sessionStore.update((s) => {
-						const messages = [...s.messages];
-						const lastIdx = messages.length - 1;
-						if (messages[lastIdx]?.role === 'assistant') {
-							messages[lastIdx] = { ...assistantMessage };
-						} else {
-							messages.push({ ...assistantMessage });
-						}
-						return { ...s, messages, isLoading: false, isThinking: false };
-					});
-				},
-				onThinkingDelta: (thinking) => {
-					assistantMessage.thinking = (assistantMessage.thinking || '') + thinking;
-					sessionStore.update((s) => {
-						const messages = [...s.messages];
-						const lastIdx = messages.length - 1;
-						if (messages[lastIdx]?.role === 'assistant') {
-							messages[lastIdx] = { ...assistantMessage };
-						} else {
-							messages.push({ ...assistantMessage });
-						}
-						return { ...s, messages, isThinking: true, thinkingContent: assistantMessage.thinking || '' };
-					});
-				},
-				onToolCallStart: (id, name) => {
-					const toolCall: ToolCall = { id, name, status: 'running' };
-					assistantMessage.toolCalls = [...(assistantMessage.toolCalls || []), toolCall];
-					sessionStore.update((s) => {
-						const messages = [...s.messages];
-						const lastIdx = messages.length - 1;
-						if (messages[lastIdx]?.role === 'assistant') {
-							messages[lastIdx] = { ...assistantMessage };
-						}
-						return { ...s, messages };
-					});
-				},
-				onToolCallComplete: (id, _name, args) => {
-					const toolCalls = assistantMessage.toolCalls?.map((tc) =>
-						tc.id === id ? { ...tc, arguments: args } : tc
-					);
-					assistantMessage.toolCalls = toolCalls;
-					// Update store so UI receives the arguments
-					sessionStore.update((s) => {
-						const messages = [...s.messages];
-						const lastIdx = messages.length - 1;
-						if (messages[lastIdx]?.role === 'assistant') {
-							messages[lastIdx] = { ...assistantMessage };
-						}
-						return { ...s, messages };
-					});
-				},
-				onToolResult: (id, output, isError) => {
-					const toolCalls = assistantMessage.toolCalls?.map((tc): ToolCall =>
-						tc.id === id
-							? { ...tc, output, status: isError ? 'error' : 'success' }
-							: tc
-					);
-					assistantMessage.toolCalls = toolCalls;
-					sessionStore.update((s) => {
-						const messages = [...s.messages];
-						const lastIdx = messages.length - 1;
-						if (messages[lastIdx]?.role === 'assistant') {
-							messages[lastIdx] = { ...assistantMessage };
-						}
-						return { ...s, messages };
-					});
-				},
-				onToolOutputDelta: (id, delta) => {
-					const toolCalls = assistantMessage.toolCalls?.map((tc): ToolCall =>
-						tc.id === id
-							? { ...tc, output: (tc.output || '') + delta }
-							: tc
-					);
-					assistantMessage.toolCalls = toolCalls;
-					sessionStore.update((s) => {
-						const messages = [...s.messages];
-						const lastIdx = messages.length - 1;
-						if (messages[lastIdx]?.role === 'assistant') {
-							messages[lastIdx] = { ...assistantMessage };
-						}
-						return { ...s, messages };
-					});
-				},
-				onPlanUpdate: (items: PlanItem[]) => {
-					setPlanItems(items);
-				},
-				onModeChange: (mode) => {
-					sessionStore.update((s) => ({
-						...s,
-						mode: mode as SessionMode
-					}));
-					if (mode === 'plan') {
-						setPlanVisible(true);
-					}
-				},
-				onPlanComplete: (toolCallId, title, taskCount) => {
-					const planConfirmCall: ToolCall = {
-						id: toolCallId,
-						name: 'PlanConfirm',
-						arguments: { title, task_count: taskCount },
-						status: 'pending'
-					};
-					assistantMessage.toolCalls = [...(assistantMessage.toolCalls || []), planConfirmCall];
-					sessionStore.update((s) => {
-						const messages = [...s.messages];
-						const lastIdx = messages.length - 1;
-						if (messages[lastIdx]?.role === 'assistant') {
-							messages[lastIdx] = { ...assistantMessage };
-						}
-						return { ...s, messages };
-					});
-				},
-				onToolApprovalRequired: (id, name, args) => {
-					const toolCalls = assistantMessage.toolCalls?.map((tc): ToolCall =>
-						tc.id === id ? { ...tc, arguments: args, status: 'awaiting_approval' } : tc
-					);
-					assistantMessage.toolCalls = toolCalls;
-					sessionStore.update((s) => {
-						const messages = [...s.messages];
-						const lastIdx = messages.length - 1;
-						if (messages[lastIdx]?.role === 'assistant') {
-							messages[lastIdx] = { ...assistantMessage };
-						}
-						return { ...s, messages };
-					});
-				},
-				onToolApproved: (id) => {
-					const toolCalls = assistantMessage.toolCalls?.map((tc): ToolCall =>
-						tc.id === id ? { ...tc, status: 'running' } : tc
-					);
-					assistantMessage.toolCalls = toolCalls;
-					sessionStore.update((s) => {
-						const messages = [...s.messages];
-						const lastIdx = messages.length - 1;
-						if (messages[lastIdx]?.role === 'assistant') {
-							messages[lastIdx] = { ...assistantMessage };
-						}
-						return { ...s, messages };
-					});
-				},
-				onToolDenied: (id) => {
-					const toolCalls = assistantMessage.toolCalls?.map((tc): ToolCall =>
-						tc.id === id ? { ...tc, status: 'error', output: 'Denied by user' } : tc
-					);
-					assistantMessage.toolCalls = toolCalls;
-					sessionStore.update((s) => {
-						const messages = [...s.messages];
-						const lastIdx = messages.length - 1;
-						if (messages[lastIdx]?.role === 'assistant') {
-							messages[lastIdx] = { ...assistantMessage };
-						}
-						return { ...s, messages };
-					});
-				},
-				onUsage: (promptTokens, _completionTokens) => {
-					sessionStore.update((s) => ({
-						...s,
-						tokenCount: promptTokens
-					}));
-				},
-				onTitleUpdate: (title) => {
-					sessionStore.update((s) => ({ ...s, title }));
-					loadSessions();
-				},
-				onFinish: (sessionId) => {
-					const currentState = get(sessionStore);
-					const queued = currentState.queuedMessages;
-
-					// Clear queued flags on displayed messages
-					const messages = currentState.messages.map(m =>
-						m.isQueued ? { ...m, isQueued: false } : m
-					);
-
-					sessionStore.update((s) => ({
-						...s,
-						sessionId,
-						messages,
-						queuedMessages: [],
-						isStreaming: false,
-						isThinking: false,
-						thinkingContent: ''
-					}));
-					loadSessions();
-
-					// Auto-dispatch queued messages
-					if (queued.length > 0) {
-						const combinedContent = queued.map(q => q.content).join('\n\n');
-						const combinedAttachments = queued.flatMap(q => q.attachments);
-						setTimeout(() => sendMessage(combinedContent, combinedAttachments), 50);
-					}
-				},
-				onError: (error) => {
-					sessionStore.update((s) => ({
-						...s,
-						isLoading: false,
-						isStreaming: false,
-						error
-					}));
-				}
-			},
+			createStreamCallbacks(ref),
 			abortController.signal
 		);
 	} catch (err) {
@@ -419,10 +357,8 @@ export function stopGeneration() {
 }
 
 function extractTextContent(content: unknown): string {
-	// Handle string content directly
 	if (typeof content === 'string') return content;
 
-	// Handle array of content blocks (Claude API format)
 	if (Array.isArray(content)) {
 		return content
 			.filter((block): block is { type: 'text'; text: string } => block?.type === 'text')
@@ -430,20 +366,19 @@ function extractTextContent(content: unknown): string {
 			.join('\n');
 	}
 
-	// Handle object with text property
 	if (content && typeof content === 'object' && 'text' in content) {
-		return (content as { text: string }).text;
+		const textValue = (content as Record<string, unknown>).text;
+		if (typeof textValue === 'string') return textValue;
 	}
 
 	return '';
 }
 
-export async function loadSession(sessionId: string) {
+export async function loadSession(sessionId: string, isRefresh = false) {
 	sessionStore.update((s) => ({ ...s, isLoading: true }));
 
 	try {
 		const data = await apiClient.getSession(sessionId);
-		// Process messages with tool result association
 		const processedMessages = processStoredMessages(data.messages);
 		sessionStore.update((s) => ({
 			...s,
@@ -453,8 +388,19 @@ export async function loadSession(sessionId: string) {
 			isLoading: false
 		}));
 
-		// Update workspace store - this syncs IDE, terminal, and other tabs
 		workspaceStore.initFromSession(data.session.id, data.session.working_dir ?? null);
+
+		if (!isRefresh) {
+			try {
+				const state = await apiClient.getSessionState(sessionId);
+				if (state.agent_state === 'streaming' || state.agent_state === 'tool_executing') {
+					sessionStore.update((s) => ({ ...s, isStreaming: true }));
+					startStatePolling(sessionId);
+				}
+			} catch {
+				// State endpoint may not exist or session deleted
+			}
+		}
 	} catch (err) {
 		sessionStore.update((s) => ({
 			...s,
@@ -464,37 +410,34 @@ export async function loadSession(sessionId: string) {
 	}
 }
 
-// Process stored messages, associating tool results with their tool calls
 function processStoredMessages(rawMessages: { role: string; content: unknown }[]): ChatMessage[] {
 	const result: ChatMessage[] = [];
 
-	// First pass: parse all messages and collect tool results
 	const toolResults = new Map<string, { output: string; isError: boolean }>();
 
 	for (const m of rawMessages) {
 		const contentArray = Array.isArray(m.content) ? m.content : [];
 		for (const block of contentArray) {
 			if (!block || typeof block !== 'object') continue;
-			// Collect tool results by their tool_use_id
 			if (block.type === 'tool_result' || 'tool_use_id' in block) {
-				const output = typeof block.output === 'string'
-					? block.output
-					: typeof block.content === 'string'
-						? block.content
-						: JSON.stringify(block.output || block.content || '');
-				toolResults.set(block.tool_use_id, {
-					output,
-					isError: block.is_error === true
-				});
+				if (block.tool_use_id) {
+					const output = typeof block.output === 'string'
+						? block.output
+						: typeof block.content === 'string'
+							? block.content
+							: JSON.stringify(block.output || block.content || '');
+					toolResults.set(block.tool_use_id, {
+						output,
+						isError: block.is_error === true
+					});
+				}
 			}
 		}
 	}
 
-	// Second pass: build messages with tool results associated
 	for (const m of rawMessages) {
 		const msg = parseStoredMessage(m, toolResults);
 
-		// Filter out empty messages (pure tool_result messages with no other content)
 		const hasContent = msg.content.trim().length > 0;
 		const hasThinking = (msg.thinking?.trim().length ?? 0) > 0;
 		const hasToolCalls = (msg.toolCalls?.length ?? 0) > 0;
@@ -507,35 +450,31 @@ function processStoredMessages(rawMessages: { role: string; content: unknown }[]
 	return result;
 }
 
-// Parse a stored message into ChatMessage format
 function parseStoredMessage(
 	m: { role: string; content: unknown },
 	toolResults?: Map<string, { output: string; isError: boolean }>
 ): ChatMessage {
+	const role: 'user' | 'assistant' = m.role === 'user' || m.role === 'assistant' ? m.role : 'assistant';
 	const msg: ChatMessage = {
-		role: m.role as 'user' | 'assistant',
+		role,
 		content: '',
 		thinking: '',
 		toolCalls: []
 	};
 
-	// Content can be array of blocks or a string
 	const contentArray = Array.isArray(m.content) ? m.content : [];
 
 	for (const block of contentArray) {
 		if (!block || typeof block !== 'object') continue;
 
-		// Text block
 		if (block.type === 'text' || ('text' in block && !block.type)) {
-			msg.content += (msg.content ? '\n' : '') + (block.text || '');
-		}
-		// Thinking block (concatenate if multiple)
-		else if (block.type === 'thinking' || 'thinking' in block) {
+			if (msg.content.length < MAX_MESSAGE_CONTENT_LENGTH) {
+				msg.content += (msg.content ? '\n' : '') + (block.text || '');
+			}
+		} else if (block.type === 'thinking' || 'thinking' in block) {
 			const thinkingContent = block.thinking || '';
 			msg.thinking = msg.thinking ? msg.thinking + '\n\n' + thinkingContent : thinkingContent;
-		}
-		// Tool use block (assistant requesting tool)
-		else if (block.type === 'tool_use' || ('id' in block && 'name' in block && 'input' in block)) {
+		} else if (block.type === 'tool_use' || ('id' in block && 'name' in block && 'input' in block)) {
 			msg.toolCalls = msg.toolCalls || [];
 			const toolResult = toolResults?.get(block.id);
 			msg.toolCalls.push({
@@ -546,10 +485,8 @@ function parseStoredMessage(
 				status: toolResult?.isError ? 'error' : 'success' as const
 			});
 		}
-		// Tool result blocks are collected separately in processStoredMessages
 	}
 
-	// Fallback: if no structured content, try extractTextContent
 	if (!msg.content && !msg.thinking && (!msg.toolCalls || msg.toolCalls.length === 0)) {
 		msg.content = extractTextContent(m.content);
 	}
@@ -562,7 +499,6 @@ export function clearSession() {
 	workspaceStore.clear();
 }
 
-// Initialize a new session (after creating via API)
 export function initSession(sessionId: string, title: string) {
 	sessionStore.set({
 		...initialState,
@@ -590,7 +526,7 @@ export async function updateSessionTitle(sessionId: string, title: string) {
 	try {
 		await apiClient.updateSession(sessionId, { title });
 		sessionStore.update((s) => ({ ...s, title }));
-		loadSessions(); // Refresh sidebar
+		loadSessions();
 	} catch (err) {
 		console.error('Failed to update session title:', err);
 	}
@@ -602,7 +538,6 @@ export async function submitToolResult(toolCallId: string, result: string) {
 		throw new Error('No active session');
 	}
 
-	// Update tool call status to success
 	sessionStore.update((s) => ({
 		...s,
 		messages: s.messages.map((m) => ({
@@ -615,19 +550,16 @@ export async function submitToolResult(toolCallId: string, result: string) {
 		isLoading: true
 	}));
 
-	// Create abort controller for cancellation
 	abortController = new AbortController();
-
-	// Start state polling as fallback for stream death recovery
 	startStatePolling(state.sessionId);
 
-	// Create a NEW assistant message for this response - don't merge with previous
-	let assistantMessage: ChatMessage = { role: 'assistant', content: '', thinking: '', toolCalls: [] };
+	const ref: AssistantMessageRef = {
+		current: { role: 'assistant', content: '', thinking: '', toolCalls: [] }
+	};
 
-	// Add it to messages immediately so streaming updates go to the right place
 	sessionStore.update((s) => ({
 		...s,
-		messages: [...s.messages, assistantMessage]
+		messages: [...s.messages, ref.current]
 	}));
 
 	try {
@@ -637,165 +569,7 @@ export async function submitToolResult(toolCallId: string, result: string) {
 				tool_call_id: toolCallId,
 				result
 			},
-			{
-				onTextDelta: (delta) => {
-					assistantMessage.content += delta;
-					sessionStore.update((s) => {
-						const messages = [...s.messages];
-						const lastIdx = messages.length - 1;
-						if (messages[lastIdx]?.role === 'assistant') {
-							messages[lastIdx] = { ...assistantMessage };
-						} else {
-							messages.push({ ...assistantMessage });
-						}
-						return { ...s, messages, isLoading: false, isThinking: false };
-					});
-				},
-				onThinkingDelta: (thinking) => {
-					assistantMessage.thinking = (assistantMessage.thinking || '') + thinking;
-					sessionStore.update((s) => {
-						const messages = [...s.messages];
-						const lastIdx = messages.length - 1;
-						if (messages[lastIdx]?.role === 'assistant') {
-							messages[lastIdx] = { ...assistantMessage };
-						} else {
-							messages.push({ ...assistantMessage });
-						}
-						return { ...s, messages, isThinking: true, thinkingContent: assistantMessage.thinking || '' };
-					});
-				},
-				onToolCallStart: (id, name) => {
-					const toolCall: ToolCall = { id, name, status: 'running' };
-					assistantMessage.toolCalls = [...(assistantMessage.toolCalls || []), toolCall];
-					sessionStore.update((s) => {
-						const messages = [...s.messages];
-						const lastIdx = messages.length - 1;
-						if (messages[lastIdx]?.role === 'assistant') {
-							messages[lastIdx] = { ...assistantMessage };
-						}
-						return { ...s, messages };
-					});
-				},
-				onToolCallComplete: (id, _name, args) => {
-					const toolCalls = assistantMessage.toolCalls?.map((tc) =>
-						tc.id === id ? { ...tc, arguments: args } : tc
-					);
-					assistantMessage.toolCalls = toolCalls;
-					// Update store so UI receives the arguments
-					sessionStore.update((s) => {
-						const messages = [...s.messages];
-						const lastIdx = messages.length - 1;
-						if (messages[lastIdx]?.role === 'assistant') {
-							messages[lastIdx] = { ...assistantMessage };
-						}
-						return { ...s, messages };
-					});
-				},
-				onToolResult: (id, output, isError) => {
-					const toolCalls = assistantMessage.toolCalls?.map((tc): ToolCall =>
-						tc.id === id
-							? { ...tc, output, status: isError ? 'error' : 'success' }
-							: tc
-					);
-					assistantMessage.toolCalls = toolCalls;
-					sessionStore.update((s) => {
-						const messages = [...s.messages];
-						const lastIdx = messages.length - 1;
-						if (messages[lastIdx]?.role === 'assistant') {
-							messages[lastIdx] = { ...assistantMessage };
-						}
-						return { ...s, messages };
-					});
-				},
-				onToolOutputDelta: (id, delta) => {
-					const toolCalls = assistantMessage.toolCalls?.map((tc): ToolCall =>
-						tc.id === id
-							? { ...tc, output: (tc.output || '') + delta }
-							: tc
-					);
-					assistantMessage.toolCalls = toolCalls;
-					sessionStore.update((s) => {
-						const messages = [...s.messages];
-						const lastIdx = messages.length - 1;
-						if (messages[lastIdx]?.role === 'assistant') {
-							messages[lastIdx] = { ...assistantMessage };
-						}
-						return { ...s, messages };
-					});
-				},
-				onPlanUpdate: (items: PlanItem[]) => {
-					setPlanItems(items);
-				},
-				onModeChange: (mode) => {
-					sessionStore.update((s) => ({
-						...s,
-						mode: mode as SessionMode
-					}));
-					if (mode === 'plan') {
-						setPlanVisible(true);
-					}
-				},
-				onPlanComplete: (toolCallId, title, taskCount) => {
-					const planConfirmCall: ToolCall = {
-						id: toolCallId,
-						name: 'PlanConfirm',
-						arguments: { title, task_count: taskCount },
-						status: 'pending'
-					};
-					assistantMessage.toolCalls = [...(assistantMessage.toolCalls || []), planConfirmCall];
-					sessionStore.update((s) => {
-						const messages = [...s.messages];
-						const lastIdx = messages.length - 1;
-						if (messages[lastIdx]?.role === 'assistant') {
-							messages[lastIdx] = { ...assistantMessage };
-						}
-						return { ...s, messages };
-					});
-				},
-				onUsage: (promptTokens, _completionTokens) => {
-					sessionStore.update((s) => ({
-						...s,
-						tokenCount: promptTokens
-					}));
-				},
-				onTitleUpdate: (title) => {
-					sessionStore.update((s) => ({ ...s, title }));
-					loadSessions();
-				},
-				onFinish: (sessionId) => {
-					const currentState = get(sessionStore);
-					const queued = currentState.queuedMessages;
-
-					const messages = currentState.messages.map(m =>
-						m.isQueued ? { ...m, isQueued: false } : m
-					);
-
-					sessionStore.update((s) => ({
-						...s,
-						sessionId,
-						messages,
-						queuedMessages: [],
-						isStreaming: false,
-						isThinking: false,
-						thinkingContent: ''
-					}));
-					loadSessions();
-
-					if (queued.length > 0) {
-						const combinedContent = queued.map(q => q.content).join('\n\n');
-						const combinedAttachments = queued.flatMap(q => q.attachments);
-						setTimeout(() => sendMessage(combinedContent, combinedAttachments), 50);
-					}
-				},
-				onError: (error) => {
-					sessionStore.update((s) => ({
-						...s,
-						isLoading: false,
-						isStreaming: false,
-						error
-					}));
-				}
-			},
+			createStreamCallbacks(ref),
 			abortController.signal
 		);
 	} catch (err) {
@@ -810,33 +584,25 @@ export async function submitToolResult(toolCallId: string, result: string) {
 	}
 }
 
-/**
- * Start polling for agent state changes (used when reconnecting to active session)
- * When agent becomes idle, reload messages to get final output
- */
 export function startStatePolling(sessionId: string) {
-	stopStatePolling(); // Clear any existing polling
+	stopStatePolling();
 
 	statePollingInterval = setInterval(async () => {
 		try {
 			const state = await apiClient.getSessionState(sessionId);
 
 			if (state.agent_state === 'idle') {
-				// Agent finished - stop polling and reload messages
 				stopStatePolling();
-				await loadSession(sessionId);
+				sessionStore.update((s) => ({ ...s, isStreaming: false, isThinking: false }));
+				await loadSession(sessionId, true);
 			}
 		} catch (err) {
-			// Session may have been deleted, stop polling
 			console.warn('State polling error:', err);
 			stopStatePolling();
 		}
 	}, STATE_POLL_INTERVAL);
 }
 
-/**
- * Stop polling for agent state changes
- */
 export function stopStatePolling() {
 	if (statePollingInterval) {
 		clearInterval(statePollingInterval);

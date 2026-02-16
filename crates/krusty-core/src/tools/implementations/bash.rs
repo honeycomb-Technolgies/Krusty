@@ -78,12 +78,18 @@ impl Tool for BashTool {
 
         // Validate working_dir is within sandbox (multi-tenant isolation)
         if let Some(ref sandbox) = ctx.sandbox_root {
-            if let Ok(canonical) = ctx.working_dir.canonicalize() {
-                if !canonical.starts_with(sandbox) {
+            let canonical = match ctx.working_dir.canonicalize() {
+                Ok(c) => c,
+                Err(_) => {
                     return ToolResult::error(
-                        "Access denied: working directory is outside workspace".to_string(),
+                        "Access denied: cannot verify working directory".to_string(),
                     );
                 }
+            };
+            if !canonical.starts_with(sandbox) {
+                return ToolResult::error(
+                    "Access denied: working directory is outside workspace".to_string(),
+                );
             }
         }
 
@@ -201,8 +207,14 @@ async fn execute_streaming(
     timeout_duration: Duration,
     ctx: &ToolContext,
 ) -> ToolResult {
-    let output_tx = ctx.output_tx.as_ref().unwrap();
-    let tool_use_id = ctx.tool_use_id.as_ref().unwrap().clone();
+    let output_tx = match ctx.output_tx.as_ref() {
+        Some(tx) => tx,
+        None => return ToolResult::error("Streaming output channel not available".to_string()),
+    };
+    let tool_use_id = match ctx.tool_use_id.as_ref() {
+        Some(id) => id.clone(),
+        None => return ToolResult::error("Tool use ID not available for streaming".to_string()),
+    };
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,

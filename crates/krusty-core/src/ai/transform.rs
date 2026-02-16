@@ -275,14 +275,16 @@ fn transform_glm_message(message: &serde_json::Value) -> serde_json::Value {
                             .or_insert_with(|| Value::Object(serde_json::Map::new()));
 
                         if let Some(opts) = provider_options.as_object_mut() {
-                            opts.entry("openaiCompatible")
+                            if let Some(compat) = opts
+                                .entry("openaiCompatible")
                                 .or_insert_with(|| Value::Object(serde_json::Map::new()))
                                 .as_object_mut()
-                                .unwrap()
-                                .insert(
+                            {
+                                compat.insert(
                                     "reasoning_content".to_string(),
                                     Value::String(reasoning_text),
                                 );
+                            }
                         }
                     }
                 }

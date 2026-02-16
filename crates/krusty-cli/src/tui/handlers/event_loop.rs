@@ -30,7 +30,7 @@ impl App {
             &mut self.runtime.channels,
             &mut self.runtime.blocks.build,
             &mut self.runtime.active_plan,
-            &self.services.plan_manager,
+            self.services.plan_manager.as_ref(),
         )
     }
 

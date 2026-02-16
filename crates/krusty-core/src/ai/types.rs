@@ -5,6 +5,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::ai::reasoning::DEFAULT_THINKING_BUDGET;
+
 /// AI SDK Tool definition (for provider communication only)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiTool {
@@ -217,7 +219,7 @@ pub struct ThinkingConfig {
 impl Default for ThinkingConfig {
     fn default() -> Self {
         Self {
-            budget_tokens: 32000, // Recommended for complex tasks
+            budget_tokens: DEFAULT_THINKING_BUDGET,
         }
     }
 }

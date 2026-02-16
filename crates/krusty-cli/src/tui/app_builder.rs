@@ -185,9 +185,14 @@ fn init_session_manager(db_path: &Path) -> Option<SessionManager> {
 }
 
 /// Initialize plan manager with migration
-fn init_plan_manager(db_path: &Path) -> PlanManager {
-    let plan_manager =
-        PlanManager::new(db_path.to_path_buf()).expect("Failed to create plan manager");
+fn init_plan_manager(db_path: &Path) -> Option<PlanManager> {
+    let plan_manager = match PlanManager::new(db_path.to_path_buf()) {
+        Ok(pm) => pm,
+        Err(e) => {
+            tracing::error!("Failed to create plan manager: {}", e);
+            return None;
+        }
+    };
 
     // Migrate legacy file-based plans
     match plan_manager.migrate_legacy_plans() {
@@ -204,7 +209,7 @@ fn init_plan_manager(db_path: &Path) -> PlanManager {
         }
     }
 
-    plan_manager
+    Some(plan_manager)
 }
 
 /// Initialize model registry with static and cached models

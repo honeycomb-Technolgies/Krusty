@@ -858,6 +858,11 @@ impl PlanFile {
 
     /// Parse from markdown string
     pub fn from_markdown(content: &str) -> Result<Self, String> {
+        const MAX_PLAN_SIZE: usize = 1_024 * 1_024; // 1MB
+        if content.len() > MAX_PLAN_SIZE {
+            return Err("Plan file exceeds maximum size of 1MB".to_string());
+        }
+
         tracing::debug!("Parsing plan from markdown");
         let mut plan = PlanFile {
             title: String::new(),

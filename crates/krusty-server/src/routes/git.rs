@@ -164,40 +164,7 @@ fn resolve_git_path(
 }
 
 fn validate_path_within(base: &Path, path: &Path) -> Result<(), AppError> {
-    let canonical_base = base
-        .canonicalize()
-        .map_err(|e| AppError::BadRequest(format!("Invalid workspace root: {}", e)))?;
-
-    let check_path = find_existing_ancestor(path).ok_or_else(|| {
-        AppError::BadRequest(format!(
-            "Path does not exist and has no existing ancestor: {}",
-            path.display()
-        ))
-    })?;
-
-    let canonical_check = check_path
-        .canonicalize()
-        .map_err(|e| AppError::BadRequest(format!("Invalid path: {}", e)))?;
-
-    if !canonical_check.starts_with(&canonical_base) {
-        return Err(AppError::BadRequest(
-            "Path must be within allowed workspace".to_string(),
-        ));
-    }
-
-    Ok(())
-}
-
-fn find_existing_ancestor(path: &Path) -> Option<PathBuf> {
-    let mut current = path.to_path_buf();
-    loop {
-        if current.exists() {
-            return Some(current);
-        }
-        if !current.pop() {
-            return None;
-        }
-    }
+    crate::utils::paths::validate_path_within(base, path)
 }
 
 fn to_status_response(status: krusty_core::git::GitStatusSummary) -> GitStatusResponse {

@@ -68,18 +68,18 @@ pub struct DeviceCodeInfo {
 pub struct AsyncChannels {
     /// MCP status updates from background connection tasks
     pub mcp_status: Option<mpsc::UnboundedReceiver<McpStatusUpdate>>,
-    /// Streaming bash output receiver
-    pub bash_output: Option<mpsc::UnboundedReceiver<ToolOutputChunk>>,
+    /// Streaming bash output receiver (bounded for backpressure)
+    pub bash_output: Option<mpsc::Receiver<ToolOutputChunk>>,
     /// Pending tool execution results receiver
     pub tool_results: Option<oneshot::Receiver<Vec<Content>>>,
     /// AI-generated title update receiver
     pub title_update: Option<oneshot::Receiver<TitleUpdate>>,
     /// AI-generated summarization result for pinch
     pub summarization: Option<oneshot::Receiver<SummarizationUpdate>>,
-    /// Explore tool sub-agent progress updates
-    pub explore_progress: Option<mpsc::UnboundedReceiver<AgentProgress>>,
-    /// Build tool builder agent progress updates
-    pub build_progress: Option<mpsc::UnboundedReceiver<AgentProgress>>,
+    /// Explore tool sub-agent progress updates (bounded for backpressure)
+    pub explore_progress: Option<mpsc::Receiver<AgentProgress>>,
+    /// Build tool builder agent progress updates (bounded for backpressure)
+    pub build_progress: Option<mpsc::Receiver<AgentProgress>>,
     /// OpenRouter model fetch result receiver
     pub openrouter_models: Option<oneshot::Receiver<Result<Vec<ModelMetadata>, String>>>,
     /// /init codebase exploration result receiver

@@ -2668,6 +2668,7 @@ dependencies = [
  "futures",
  "krusty-core",
  "mime_guess",
+ "portable-pty",
  "regex",
  "rust-embed",
  "serde",

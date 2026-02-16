@@ -1,6 +1,6 @@
 //! File operations endpoints
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use axum::{
     extract::{Query, State},
@@ -9,6 +9,7 @@ use axum::{
 };
 use tokio::fs;
 
+use crate::auth::CurrentUser;
 use crate::error::AppError;
 use crate::types::{
     BrowseEntry, BrowseQuery, BrowseResponse, FileQuery, FileResponse, FileWriteRequest,
@@ -27,14 +28,15 @@ pub fn router() -> Router<AppState> {
 /// Read a file's contents
 async fn read_file(
     State(state): State<AppState>,
+    user: Option<CurrentUser>,
     Query(query): Query<FileQuery>,
 ) -> Result<Json<FileResponse>, AppError> {
-    let path = resolve_path(&state.working_dir, &query.path);
+    let workspace = workspace_base(&state, user.as_ref());
+    let path = resolve_path(&workspace, &query.path);
 
-    // Security: ensure path is within home directory
-    let home = dirs::home_dir()
-        .ok_or_else(|| AppError::Internal("Could not determine home directory".to_string()))?;
-    validate_path_within(&home, &path)?;
+    // Security: ensure path is within allowed root
+    let allowed_root = allowed_root(user.as_ref());
+    validate_path_within(&allowed_root, &path)?;
 
     let metadata = fs::metadata(&path).await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -65,15 +67,16 @@ async fn read_file(
 /// Write content to a file
 async fn write_file(
     State(state): State<AppState>,
+    user: Option<CurrentUser>,
     Query(query): Query<FileQuery>,
     Json(req): Json<FileWriteRequest>,
 ) -> Result<Json<FileWriteResponse>, AppError> {
-    let path = resolve_path(&state.working_dir, &query.path);
+    let workspace = workspace_base(&state, user.as_ref());
+    let path = resolve_path(&workspace, &query.path);
 
-    // Security: ensure path is within home directory
-    let home = dirs::home_dir()
-        .ok_or_else(|| AppError::Internal("Could not determine home directory".to_string()))?;
-    validate_path_within(&home, &path)?;
+    // Security: ensure path is within allowed root
+    let allowed_root = allowed_root(user.as_ref());
+    validate_path_within(&allowed_root, &path)?;
 
     // Create parent directories if needed
     if let Some(parent) = path.parent() {
@@ -96,17 +99,18 @@ async fn write_file(
 /// Get directory tree
 async fn get_tree(
     State(state): State<AppState>,
+    user: Option<CurrentUser>,
     Query(query): Query<TreeQuery>,
 ) -> Result<Json<TreeResponse>, AppError> {
+    let workspace = workspace_base(&state, user.as_ref());
     let root_path = match &query.root {
-        Some(root) => resolve_path(&state.working_dir, root),
-        None => state.working_dir.to_path_buf(),
+        Some(root) => resolve_path(&workspace, root),
+        None => workspace.clone(),
     };
 
-    // Security: ensure path is within home directory (not just working_dir)
-    let home = dirs::home_dir()
-        .ok_or_else(|| AppError::Internal("Could not determine home directory".to_string()))?;
-    validate_path_within(&home, &root_path)?;
+    // Security: ensure path is within allowed root
+    let allowed_root = allowed_root(user.as_ref());
+    validate_path_within(&allowed_root, &root_path)?;
 
     if !root_path.is_dir() {
         return Err(AppError::BadRequest(format!(
@@ -123,8 +127,24 @@ async fn get_tree(
     }))
 }
 
+/// Derive the workspace base directory from user context (multi-tenant) or app state (single-tenant).
+fn workspace_base(state: &AppState, user: Option<&CurrentUser>) -> PathBuf {
+    user.and_then(|u| u.0.home_dir.clone())
+        .unwrap_or_else(|| (*state.working_dir).clone())
+}
+
+/// Derive the allowed root for path validation.
+///
+/// In multi-tenant mode the user's workspace directory is the boundary;
+/// in single-tenant mode we fall back to the system home directory.
+fn allowed_root(user: Option<&CurrentUser>) -> PathBuf {
+    user.and_then(|u| u.0.home_dir.clone())
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| PathBuf::from("/"))
+}
+
 /// Resolve a path relative to working directory
-fn resolve_path(working_dir: &Path, path: &str) -> std::path::PathBuf {
+fn resolve_path(working_dir: &Path, path: &str) -> PathBuf {
     let path = Path::new(path);
 
     if path.is_absolute() {
@@ -134,40 +154,8 @@ fn resolve_path(working_dir: &Path, path: &str) -> std::path::PathBuf {
     }
 }
 
-/// Validate that path is within a base directory (prevent directory traversal)
 fn validate_path_within(base: &Path, path: &Path) -> Result<(), AppError> {
-    let canonical_base = base
-        .canonicalize()
-        .map_err(|e| AppError::Internal(format!("Failed to canonicalize base dir: {}", e)))?;
-
-    // Find the first existing ancestor to canonicalize
-    let check_path = find_existing_ancestor(path)
-        .ok_or_else(|| AppError::BadRequest("Invalid path: no existing ancestor".to_string()))?;
-
-    let canonical_check = check_path
-        .canonicalize()
-        .map_err(|e| AppError::Internal(format!("Failed to canonicalize path: {}", e)))?;
-
-    if !canonical_check.starts_with(&canonical_base) {
-        return Err(AppError::BadRequest(
-            "Path must be within allowed directory".to_string(),
-        ));
-    }
-
-    Ok(())
-}
-
-/// Walk up the path to find the first existing ancestor
-fn find_existing_ancestor(path: &Path) -> Option<std::path::PathBuf> {
-    let mut current = path.to_path_buf();
-    loop {
-        if current.exists() {
-            return Some(current);
-        }
-        if !current.pop() {
-            return None;
-        }
-    }
+    crate::utils::paths::validate_path_within(base, path)
 }
 
 /// Recursively build directory tree
@@ -221,18 +209,22 @@ async fn build_tree(path: &Path, depth: usize) -> Result<Vec<TreeEntry>, AppErro
 
 /// Browse directories for project selection (not restricted to working dir)
 async fn browse_directories(
+    user: Option<CurrentUser>,
     Query(query): Query<BrowseQuery>,
 ) -> Result<Json<BrowseResponse>, AppError> {
-    // Default to home directory
-    let home = dirs::home_dir()
+    // In multi-tenant mode, scope to user's workspace; otherwise use home dir
+    let home = user
+        .as_ref()
+        .and_then(|u| u.0.home_dir.clone())
+        .or_else(dirs::home_dir)
         .ok_or_else(|| AppError::Internal("Could not determine home directory".to_string()))?;
 
     let current_path = match &query.path {
-        Some(p) => std::path::PathBuf::from(p),
+        Some(p) => PathBuf::from(p),
         None => home.clone(),
     };
 
-    // Security: must be within home directory
+    // Security: must be within allowed root
     let canonical_home = home
         .canonicalize()
         .map_err(|e| AppError::Internal(format!("Failed to canonicalize home: {}", e)))?;

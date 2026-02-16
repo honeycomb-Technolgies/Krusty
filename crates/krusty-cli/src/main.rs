@@ -51,6 +51,8 @@ enum Commands {
 
 /// Restore terminal state - called on panic or unexpected exit
 fn restore_terminal() {
+    use std::io::Write;
+
     use crossterm::{
         event::DisableMouseCapture,
         execute,
@@ -58,6 +60,7 @@ fn restore_terminal() {
     };
     let _ = disable_raw_mode();
     let _ = execute!(std::io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+    let _ = std::io::stdout().flush();
 }
 
 #[tokio::main]

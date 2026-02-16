@@ -9,6 +9,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use agent_client_protocol::{
     Client as AcpClient, ContentBlock as AcpContent, ContentChunk, EmbeddedResourceResource,
@@ -16,6 +17,8 @@ use agent_client_protocol::{
 };
 use anyhow::Result;
 use tracing::{debug, error, info, warn};
+
+const ACP_DEFAULT_MAX_TOKENS: usize = 8192;
 
 use crate::ai::client::{AiClient, AiClientConfig, CallOptions};
 use crate::ai::format_detection::detect_api_format;
@@ -96,7 +99,7 @@ impl PromptProcessor {
 
         let config = AiClientConfig {
             model: model.clone(),
-            max_tokens: 8192,
+            max_tokens: ACP_DEFAULT_MAX_TOKENS,
             base_url,
             auth_header,
             provider_id: provider,
@@ -180,7 +183,25 @@ impl PromptProcessor {
             let mut pending_tool_calls: Vec<AiToolCall> = Vec::new();
             let mut stop_reason = StopReason::EndTurn;
 
-            while let Some(part) = rx.recv().await {
+            // Stream receive timeout: 3 minutes handles slow providers and large responses.
+            // Resets on every received event, so only triggers on true stalls.
+            const STREAM_TIMEOUT: Duration = Duration::from_secs(180);
+
+            loop {
+                let part = match tokio::time::timeout(STREAM_TIMEOUT, rx.recv()).await {
+                    Ok(Some(part)) => part,
+                    Ok(None) => break, // Channel closed, stream ended
+                    Err(_) => {
+                        warn!(
+                            "Stream receive timed out after {}s",
+                            STREAM_TIMEOUT.as_secs()
+                        );
+                        return Err(AcpError::AiClientError(
+                            "Stream timed out waiting for response".into(),
+                        ));
+                    }
+                };
+
                 if session.is_cancelled() {
                     info!("Session cancelled, stopping stream processing");
                     return Ok(StopReason::Cancelled);
@@ -193,7 +214,6 @@ impl PromptProcessor {
 
                     StreamPart::TextDelta { delta } => {
                         accumulated_text.push_str(&delta);
-                        // Stream text chunk to client
                         let chunk = ContentChunk::new(AcpContent::Text(TextContent::new(&delta)));
                         let notification = SessionNotification::new(
                             session.id.clone(),
@@ -205,7 +225,6 @@ impl PromptProcessor {
                     }
 
                     StreamPart::ThinkingDelta { thinking, .. } => {
-                        // Stream thinking as thought chunk
                         let chunk =
                             ContentChunk::new(AcpContent::Text(TextContent::new(&thinking)));
                         let notification = SessionNotification::new(
@@ -219,7 +238,6 @@ impl PromptProcessor {
 
                     StreamPart::ToolCallStart { id, name } => {
                         debug!("Tool call starting: {} ({})", name, id);
-                        // Send initial tool call notification with proper kind
                         let kind = tool_name_to_kind(&name);
                         let title = format!("Running {}", name);
                         let tool_call =
@@ -248,9 +266,7 @@ impl PromptProcessor {
                         return Err(AcpError::AiClientError(error));
                     }
 
-                    _ => {
-                        // Handle other stream parts as needed
-                    }
+                    _ => {}
                 }
             }
 

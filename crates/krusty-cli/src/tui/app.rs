@@ -134,7 +134,7 @@ impl ThinkingLevel {
 /// Application services and external systems
 pub struct AppServices {
     // Plan/session storage
-    pub plan_manager: PlanManager,
+    pub plan_manager: Option<PlanManager>,
     pub session_manager: Option<SessionManager>,
     pub preferences: Option<Preferences>,
 
@@ -300,6 +300,8 @@ pub struct AppRuntime {
     pub attached_files: std::collections::HashMap<String, PathBuf>,
     /// Permission mode (supervised/autonomous)
     pub permission_mode: PermissionMode,
+    /// When a tool approval prompt was shown (for timeout)
+    pub approval_requested_at: Option<Instant>,
     /// Exploration budget tracking
     pub exploration_budget_count: usize,
     /// Just updated flag
@@ -352,6 +354,7 @@ impl AppRuntime {
             tool_results: ToolResultCache::new(),
             attached_files: std::collections::HashMap::new(),
             permission_mode: PermissionMode::Supervised,
+            approval_requested_at: None,
             exploration_budget_count: 0,
             just_updated: false,
             update_status: None,
@@ -812,6 +815,9 @@ impl App {
 
             // Execute tools when ready
             self.check_and_execute_tools();
+
+            // Check for timed-out tool approvals
+            self.check_approval_timeout();
 
             // Check for completed tool execution
             if let Some(ref mut rx) = self.runtime.channels.tool_results {

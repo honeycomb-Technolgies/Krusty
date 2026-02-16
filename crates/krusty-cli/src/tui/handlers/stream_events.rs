@@ -172,6 +172,11 @@ impl App {
         // Cache is cleared at the start of each new streaming session (start_streaming),
         // so a None cache means this is the first text delta of a new turn — create a
         // fresh message block instead of appending to a previous turn's message.
+        //
+        // Note: this indexes into `messages` (display messages), NOT `conversation` (API
+        // history). These two collections are independent — messages includes system/tool
+        // display entries while conversation holds ModelMessage structs. The index is only
+        // ever read from and written to `messages`, so there is no divergence issue.
         let append_idx = if let Some(idx) = self.runtime.chat.streaming_assistant_idx {
             if idx < self.runtime.chat.messages.len()
                 && self
@@ -295,6 +300,10 @@ impl App {
     fn handle_tool_start(&mut self, name: String) {
         // Mark all streaming blocks complete when tool starts
         self.complete_streaming_blocks();
+
+        // Invalidate streaming assistant index cache since tool blocks will insert
+        // new messages, making the cached index stale
+        self.runtime.chat.streaming_assistant_idx = None;
 
         // Create pending blocks for edit/write tools
         if name == "edit" {
@@ -547,15 +556,17 @@ impl App {
             );
 
             // Save the updated plan
-            if let Err(e) = self.services.plan_manager.save_plan(active_plan) {
-                tracing::warn!("Failed to save merged plan: {}", e);
-            } else {
-                tracing::info!(
-                    "Plan saved: {} ({}/{})",
-                    active_plan.title,
-                    active_plan.completed_tasks(),
-                    active_plan.total_tasks()
-                );
+            if let Some(ref pm) = self.services.plan_manager {
+                if let Err(e) = pm.save_plan(active_plan) {
+                    tracing::warn!("Failed to save merged plan: {}", e);
+                } else {
+                    tracing::info!(
+                        "Plan saved: {} ({}/{})",
+                        active_plan.title,
+                        active_plan.completed_tasks(),
+                        active_plan.total_tasks()
+                    );
+                }
             }
         } else {
             // Create new plan - requires a session
@@ -564,38 +575,36 @@ impl App {
                 return;
             };
 
-            match self.services.plan_manager.create_plan(
-                &parsed_plan.title,
-                &session_id,
-                Some(&working_dir),
-            ) {
-                Ok(mut new_plan) => {
-                    // Copy phases from parsed plan
-                    new_plan.phases = parsed_plan.phases;
-                    new_plan.notes = parsed_plan.notes;
+            if let Some(ref pm) = self.services.plan_manager {
+                match pm.create_plan(&parsed_plan.title, &session_id, Some(&working_dir)) {
+                    Ok(mut new_plan) => {
+                        // Copy phases from parsed plan
+                        new_plan.phases = parsed_plan.phases;
+                        new_plan.notes = parsed_plan.notes;
 
-                    // Save with the full content
-                    if let Err(e) = self.services.plan_manager.save_plan(&new_plan) {
-                        tracing::warn!("Failed to save new plan: {}", e);
-                    } else {
-                        tracing::info!("Created new plan: '{}'", new_plan.title);
-                        let plan_title = new_plan.title.clone();
-                        let task_count = new_plan.total_tasks();
+                        // Save with the full content
+                        if let Err(e) = pm.save_plan(&new_plan) {
+                            tracing::warn!("Failed to save new plan: {}", e);
+                        } else {
+                            tracing::info!("Created new plan: '{}'", new_plan.title);
+                            let plan_title = new_plan.title.clone();
+                            let task_count = new_plan.total_tasks();
 
-                        self.set_plan(new_plan);
-                        self.ui.work_mode = WorkMode::Plan;
-                        if !self.ui.plan_sidebar.visible {
-                            self.ui.plan_sidebar.toggle();
+                            self.set_plan(new_plan);
+                            self.ui.work_mode = WorkMode::Plan;
+                            if !self.ui.plan_sidebar.visible {
+                                self.ui.plan_sidebar.toggle();
+                            }
+
+                            // Show decision prompt for plan confirmation
+                            self.ui
+                                .decision_prompt
+                                .show_plan_confirm(&plan_title, task_count);
                         }
-
-                        // Show decision prompt for plan confirmation
-                        self.ui
-                            .decision_prompt
-                            .show_plan_confirm(&plan_title, task_count);
                     }
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to create plan: {}", e);
+                    Err(e) => {
+                        tracing::warn!("Failed to create plan: {}", e);
+                    }
                 }
             }
         }
@@ -648,38 +657,40 @@ impl App {
             }
 
             // Save the updated plan
-            if let Err(e) = self.services.plan_manager.save_plan(active_plan) {
-                tracing::warn!("Failed to save plan after task updates: {}", e);
-            } else {
-                tracing::info!(
-                    "Plan progress updated: {}/{} tasks complete",
-                    completed,
-                    total
-                );
-
-                // Show visible feedback to user
-                let task_list = updated_tasks.join(", ");
-                self.runtime.chat.messages.push((
-                    "system".to_string(),
-                    format!("✓ Task {} complete ({}/{})", task_list, completed, total),
-                ));
-
-                // If plan is complete, disengage elegantly with animated collapse
-                if plan_complete {
+            if let Some(ref pm) = self.services.plan_manager {
+                if let Err(e) = pm.save_plan(active_plan) {
+                    tracing::warn!("Failed to save plan after task updates: {}", e);
+                } else {
                     tracing::info!(
-                        "Plan '{}' completed - starting graceful disengage",
-                        plan_title
+                        "Plan progress updated: {}/{} tasks complete",
+                        completed,
+                        total
                     );
+
+                    // Show visible feedback to user
+                    let task_list = updated_tasks.join(", ");
                     self.runtime.chat.messages.push((
                         "system".to_string(),
-                        format!(
-                            "🎉 Plan '{}' complete! All {} tasks finished.",
-                            plan_title, total
-                        ),
+                        format!("✓ Task {} complete ({}/{})", task_list, completed, total),
                     ));
 
-                    // Start graceful collapse - plan clears when animation completes
-                    self.ui.plan_sidebar.start_collapse();
+                    // If plan is complete, disengage elegantly with animated collapse
+                    if plan_complete {
+                        tracing::info!(
+                            "Plan '{}' completed - starting graceful disengage",
+                            plan_title
+                        );
+                        self.runtime.chat.messages.push((
+                            "system".to_string(),
+                            format!(
+                                "🎉 Plan '{}' complete! All {} tasks finished.",
+                                plan_title, total
+                            ),
+                        ));
+
+                        // Start graceful collapse - plan clears when animation completes
+                        self.ui.plan_sidebar.start_collapse();
+                    }
                 }
             }
         }
@@ -724,8 +735,10 @@ impl App {
             }
 
             // Save immediately for real-time persistence
-            if let Err(e) = self.services.plan_manager.save_plan(active_plan) {
-                tracing::warn!("Failed to save plan after real-time task update: {}", e);
+            if let Some(ref pm) = self.services.plan_manager {
+                if let Err(e) = pm.save_plan(active_plan) {
+                    tracing::warn!("Failed to save plan after real-time task update: {}", e);
+                }
             }
 
             // Show inline feedback
@@ -767,8 +780,10 @@ impl App {
                     .map(|p| p.display().to_string())
                     .unwrap_or_default();
 
-                if let Err(e) = self.services.plan_manager.save_plan(plan) {
-                    tracing::warn!("Failed to save abandoned plan: {}", e);
+                if let Some(ref pm) = self.services.plan_manager {
+                    if let Err(e) = pm.save_plan(plan) {
+                        tracing::warn!("Failed to save abandoned plan: {}", e);
+                    }
                 }
 
                 tracing::info!("Plan '{}' abandoned via natural language", title);
