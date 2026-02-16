@@ -18,6 +18,7 @@ pub mod mcp;
 pub mod paths;
 pub mod plan;
 pub mod plugins;
+pub mod ports;
 pub mod process;
 pub mod server_instance;
 pub mod skills;

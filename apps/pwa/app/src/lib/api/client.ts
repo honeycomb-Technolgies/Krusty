@@ -142,6 +142,47 @@ export interface PushTestResponse {
 	failed: number;
 }
 
+/** Preview/port-forwarding settings */
+export interface PreviewSettings {
+	enabled: boolean;
+	auto_refresh_secs: number;
+	show_only_http_like: boolean;
+	pinned_ports: number[];
+	hidden_ports: number[];
+	blocked_ports: number[];
+}
+
+/** Preview settings patch */
+export interface PreviewSettingsPatch {
+	enabled?: boolean;
+	auto_refresh_secs?: number;
+	show_only_http_like?: boolean;
+	pinned_ports?: number[];
+	hidden_ports?: number[];
+	blocked_ports?: number[];
+}
+
+/** Discovered or pinned port entry */
+export interface PortEntry {
+	port: number;
+	name: string;
+	description: string | null;
+	command: string | null;
+	pid: number | null;
+	source: 'discovered' | 'pinned' | 'discovered+pinned' | string;
+	active: boolean;
+	pinned: boolean;
+	is_http_like: boolean;
+	preview_path: string;
+}
+
+/** Port list response */
+export interface PortListResponse {
+	ports: PortEntry[];
+	settings: PreviewSettings;
+	discovery_error?: string | null;
+}
+
 /** SSE stream event types */
 export type StreamEvent =
 	| { type: 'text_delta'; delta: string }
@@ -178,6 +219,11 @@ export function getCurrentUserId(): string | null {
 	return currentUserId;
 }
 
+export function getApiUrl(path: string): string {
+	const normalized = path.startsWith('/') ? path : `/${path}`;
+	return `${API_BASE}${normalized}`;
+}
+
 class ApiError extends Error {
 	constructor(
 		public status: number,
@@ -199,7 +245,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 		headers['X-User-Id'] = currentUserId;
 	}
 
-	const response = await fetch(`${API_BASE}${path}`, {
+	const response = await fetch(getApiUrl(path), {
 		...options,
 		headers
 	});
@@ -366,6 +412,39 @@ export const apiClient = {
 			method: 'POST',
 			body: JSON.stringify(payload)
 		}),
+
+	// Preview / Port Forwarding
+	getPorts: () => request<PortListResponse>('/ports'),
+
+	getPreviewSettings: () => request<PreviewSettings>('/settings/preview'),
+
+	updatePreviewSettings: (patch: PreviewSettingsPatch) =>
+		request<PreviewSettings>('/settings/preview', {
+			method: 'PATCH',
+			body: JSON.stringify(patch)
+		}),
+
+	addPinnedPort: (port: number) =>
+		request<PreviewSettings>('/settings/preview/pins', {
+			method: 'POST',
+			body: JSON.stringify({ port })
+		}),
+
+	removePinnedPort: (port: number) =>
+		request<PreviewSettings>(`/settings/preview/pins/${port}`, {
+			method: 'DELETE'
+		}),
+
+	addHiddenPort: (port: number) =>
+		request<PreviewSettings>('/settings/preview/hidden', {
+			method: 'POST',
+			body: JSON.stringify({ port })
+		}),
+
+	removeHiddenPort: (port: number) =>
+		request<PreviewSettings>(`/settings/preview/hidden/${port}`, {
+			method: 'DELETE'
+		}),
 };
 
 // Chat streaming
@@ -437,7 +516,7 @@ async function streamSSE(
 		headers['X-User-Id'] = currentUserId;
 	}
 
-	const response = await fetch(`${API_BASE}${url}`, {
+	const response = await fetch(getApiUrl(url), {
 		method: 'POST',
 		headers,
 		body: JSON.stringify(body),

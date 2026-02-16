@@ -78,6 +78,7 @@ impl Default for ServerConfig {
 /// Shared application state.
 #[derive(Clone)]
 pub struct AppState {
+    pub server_port: u16,
     pub db_path: Arc<PathBuf>,
     pub working_dir: Arc<PathBuf>,
     pub ai_client: Option<Arc<AiClient>>,
@@ -244,6 +245,7 @@ pub async fn build_router(config: &ServerConfig) -> anyhow::Result<(Router, AppS
     }
 
     let state = AppState {
+        server_port: config.port,
         db_path: Arc::new(db_path),
         working_dir: Arc::new(config.working_dir.clone()),
         ai_client,

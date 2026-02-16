@@ -21,6 +21,7 @@ static GH_AVAILABLE: Lazy<bool> = Lazy::new(|| {
         .unwrap_or(false)
 });
 const PR_CACHE_TTL: Duration = Duration::from_secs(60);
+const PR_CACHE_MAX_ENTRIES: usize = 1024;
 
 /// Condensed repository status for UI surfaces.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -469,22 +470,42 @@ fn resolve_pr_number(repo_root: &Path, branch: Option<&str>) -> Option<u64> {
     let cache_key = format!("{}::{}", repo_root.display(), branch);
     let now = Instant::now();
 
-    if let Ok(cache) = PR_CACHE.lock() {
+    if let Ok(mut cache) = PR_CACHE.lock() {
         if let Some((timestamp, value)) = cache.get(&cache_key) {
             if now.duration_since(*timestamp) < PR_CACHE_TTL {
                 return *value;
             }
         }
+        // Drop stale entry so cache doesn't grow indefinitely from inactive branches/repos.
+        cache.remove(&cache_key);
     }
 
     let resolved =
         extract_pr_from_branch_name(branch).or_else(|| query_pr_number_from_gh(repo_root));
 
     if let Ok(mut cache) = PR_CACHE.lock() {
+        if cache.len() >= PR_CACHE_MAX_ENTRIES {
+            prune_pr_cache(&mut cache, now);
+        }
         cache.insert(cache_key, (now, resolved));
     }
 
     resolved
+}
+
+fn prune_pr_cache(cache: &mut HashMap<String, (Instant, Option<u64>)>, now: Instant) {
+    cache.retain(|_, (timestamp, _)| now.duration_since(*timestamp) < PR_CACHE_TTL);
+
+    while cache.len() >= PR_CACHE_MAX_ENTRIES {
+        let Some(oldest_key) = cache
+            .iter()
+            .min_by_key(|(_, (timestamp, _))| *timestamp)
+            .map(|(key, _)| key.clone())
+        else {
+            break;
+        };
+        cache.remove(&oldest_key);
+    }
 }
 
 fn extract_pr_from_branch_name(branch: &str) -> Option<u64> {
