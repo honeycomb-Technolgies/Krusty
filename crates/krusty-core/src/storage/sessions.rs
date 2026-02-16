@@ -10,6 +10,41 @@ use std::str::FromStr;
 use super::database::Database;
 use crate::agent::PinchContext;
 
+const LIST_SESSIONS_SQL_ALL: &str =
+    "SELECT id, title, updated_at, token_count, parent_session_id, working_dir, user_id, work_mode
+             FROM sessions
+             ORDER BY updated_at DESC";
+const LIST_SESSIONS_SQL_BY_DIR: &str =
+    "SELECT id, title, updated_at, token_count, parent_session_id, working_dir, user_id, work_mode
+             FROM sessions
+             WHERE working_dir = ?1
+             ORDER BY updated_at DESC";
+const LIST_SESSIONS_SQL_BY_USER: &str =
+    "SELECT id, title, updated_at, token_count, parent_session_id, working_dir, user_id, work_mode
+             FROM sessions
+             WHERE user_id = ?1
+             ORDER BY updated_at DESC";
+const LIST_SESSIONS_SQL_BY_DIR_AND_USER: &str =
+    "SELECT id, title, updated_at, token_count, parent_session_id, working_dir, user_id, work_mode
+             FROM sessions
+             WHERE working_dir = ?1 AND user_id = ?2
+             ORDER BY updated_at DESC";
+const LIST_SESSION_DIRS_SQL_ALL: &str = "SELECT DISTINCT working_dir FROM sessions
+                 WHERE working_dir IS NOT NULL
+                 ORDER BY working_dir";
+const LIST_SESSION_DIRS_SQL_BY_USER: &str = "SELECT DISTINCT working_dir FROM sessions
+                 WHERE working_dir IS NOT NULL AND user_id = ?1
+                 ORDER BY working_dir";
+const LIST_SESSIONS_BY_DIRECTORY_SQL: &str =
+    "SELECT id, title, updated_at, token_count, parent_session_id, working_dir, user_id, work_mode
+             FROM sessions
+             WHERE working_dir IS NOT NULL
+             ORDER BY working_dir, updated_at DESC";
+const GET_SESSION_SQL: &str =
+    "SELECT id, title, updated_at, token_count, parent_session_id, working_dir, user_id, work_mode
+             FROM sessions
+             WHERE id = ?1";
+
 /// Session metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionInfo {
@@ -120,32 +155,36 @@ impl SessionManager {
         working_dir: Option<&str>,
         user_id: Option<&str>,
     ) -> Result<Vec<SessionInfo>> {
-        // Build WHERE clause and params based on provided filters
-        let (where_clause, params): (String, Vec<String>) = match (working_dir, user_id) {
-            (Some(dir), Some(uid)) => (
-                "WHERE working_dir = ?1 AND user_id = ?2".to_string(),
-                vec![dir.to_string(), uid.to_string()],
-            ),
-            (Some(dir), None) => ("WHERE working_dir = ?1".to_string(), vec![dir.to_string()]),
-            (None, Some(uid)) => ("WHERE user_id = ?1".to_string(), vec![uid.to_string()]),
-            (None, None) => (String::new(), vec![]),
-        };
+        match (working_dir, user_id) {
+            (Some(dir), Some(uid)) => {
+                self.collect_sessions(LIST_SESSIONS_SQL_BY_DIR_AND_USER, [dir, uid])
+            }
+            (Some(dir), None) => self.collect_sessions(LIST_SESSIONS_SQL_BY_DIR, [dir]),
+            (None, Some(uid)) => self.collect_sessions(LIST_SESSIONS_SQL_BY_USER, [uid]),
+            (None, None) => self.collect_sessions(LIST_SESSIONS_SQL_ALL, []),
+        }
+    }
 
-        let sql = format!(
-            "SELECT id, title, updated_at, token_count, parent_session_id, working_dir, user_id, work_mode
-             FROM sessions {}
-             ORDER BY updated_at DESC",
-            where_clause
-        );
-
-        let params_refs: Vec<&dyn rusqlite::ToSql> =
-            params.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
-        let mut stmt = self.db.conn().prepare(&sql)?;
+    fn collect_sessions<P>(&self, sql: &str, params: P) -> Result<Vec<SessionInfo>>
+    where
+        P: rusqlite::Params,
+    {
+        let mut stmt = self.db.conn().prepare(sql)?;
         let sessions = stmt
-            .query_map(params_refs.as_slice(), Self::map_session_row)?
-            .collect::<Result<Vec<_>, _>>()?;
-
+            .query_map(params, Self::map_session_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(sessions)
+    }
+
+    fn collect_string_column<P>(&self, sql: &str, params: P) -> Result<Vec<String>>
+    where
+        P: rusqlite::Params,
+    {
+        let mut stmt = self.db.conn().prepare(sql)?;
+        let values = stmt.query_map(params, |row| row.get(0))?;
+        values
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     /// Helper to map a row to SessionInfo
@@ -168,6 +207,20 @@ impl SessionManager {
         })
     }
 
+    fn map_session_row_with_directory(
+        row: &rusqlite::Row,
+    ) -> rusqlite::Result<(String, SessionInfo)> {
+        let session = Self::map_session_row(row)?;
+        let directory = session.working_dir.clone().ok_or_else(|| {
+            rusqlite::Error::InvalidColumnType(
+                5,
+                "working_dir".to_string(),
+                rusqlite::types::Type::Null,
+            )
+        })?;
+        Ok((directory, session))
+    }
+
     /// List all directories that have sessions
     ///
     /// Returns sorted list of unique working directories.
@@ -178,21 +231,9 @@ impl SessionManager {
     /// List directories for a specific user (multi-tenant)
     pub fn list_session_directories_for_user(&self, user_id: Option<&str>) -> Result<Vec<String>> {
         if let Some(uid) = user_id {
-            let mut stmt = self.db.conn().prepare(
-                "SELECT DISTINCT working_dir FROM sessions
-                 WHERE working_dir IS NOT NULL AND user_id = ?1
-                 ORDER BY working_dir",
-            )?;
-            let dirs = stmt.query_map([uid], |row| row.get(0))?;
-            dirs.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+            self.collect_string_column(LIST_SESSION_DIRS_SQL_BY_USER, [uid])
         } else {
-            let mut stmt = self.db.conn().prepare(
-                "SELECT DISTINCT working_dir FROM sessions
-                 WHERE working_dir IS NOT NULL
-                 ORDER BY working_dir",
-            )?;
-            let dirs = stmt.query_map([], |row| row.get(0))?;
-            dirs.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+            self.collect_string_column(LIST_SESSION_DIRS_SQL_ALL, [])
         }
     }
 
@@ -231,37 +272,11 @@ impl SessionManager {
     ) -> Result<std::collections::HashMap<String, Vec<SessionInfo>>> {
         use std::collections::HashMap;
 
-        let mut stmt = self.db.conn().prepare(
-            "SELECT id, title, updated_at, token_count, parent_session_id, working_dir, user_id, work_mode
-             FROM sessions
-             WHERE working_dir IS NOT NULL
-             ORDER BY working_dir, updated_at DESC",
-        )?;
+        let mut stmt = self.db.conn().prepare(LIST_SESSIONS_BY_DIRECTORY_SQL)?;
 
         let mut result: HashMap<String, Vec<SessionInfo>> = HashMap::new();
 
-        let rows = stmt.query_map([], |row| {
-            let updated_at: String = row.get(2)?;
-            let token_count: Option<i64> = row.get(3)?;
-            let working_dir: String = row.get(5)?;
-            let work_mode_raw: String = row.get(7)?;
-
-            Ok((
-                working_dir.clone(),
-                SessionInfo {
-                    id: row.get(0)?,
-                    title: row.get(1)?,
-                    updated_at: DateTime::parse_from_rfc3339(&updated_at)
-                        .map(|dt| dt.with_timezone(&Utc))
-                        .unwrap_or_else(|_| Utc::now()),
-                    token_count: token_count.map(|t| t as usize),
-                    parent_session_id: row.get(4)?,
-                    working_dir: Some(working_dir),
-                    user_id: row.get(6)?,
-                    work_mode: work_mode_raw.parse().unwrap_or_default(),
-                },
-            ))
-        })?;
+        let rows = stmt.query_map([], Self::map_session_row_with_directory)?;
 
         for row in rows {
             let (dir, session) = row?;
@@ -273,28 +288,9 @@ impl SessionManager {
 
     /// Get a specific session
     pub fn get_session(&self, session_id: &str) -> Result<Option<SessionInfo>> {
-        let mut stmt = self.db.conn().prepare(
-            "SELECT id, title, updated_at, token_count, parent_session_id, working_dir, user_id, work_mode FROM sessions WHERE id = ?1",
-        )?;
+        let mut stmt = self.db.conn().prepare(GET_SESSION_SQL)?;
 
-        let session = stmt.query_row([session_id], |row| {
-            let updated_at: String = row.get(2)?;
-            let token_count: Option<i64> = row.get(3)?;
-            let work_mode_raw: String = row.get(7)?;
-
-            Ok(SessionInfo {
-                id: row.get(0)?,
-                title: row.get(1)?,
-                updated_at: DateTime::parse_from_rfc3339(&updated_at)
-                    .map(|dt| dt.with_timezone(&Utc))
-                    .unwrap_or_else(|_| Utc::now()),
-                token_count: token_count.map(|t| t as usize),
-                parent_session_id: row.get(4)?,
-                working_dir: row.get(5)?,
-                user_id: row.get(6)?,
-                work_mode: work_mode_raw.parse().unwrap_or_default(),
-            })
-        });
+        let session = stmt.query_row([session_id], Self::map_session_row);
 
         match session {
             Ok(s) => Ok(Some(s)),

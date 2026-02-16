@@ -35,6 +35,13 @@ pub struct PushDeliverySummary {
     pub recent_failures_24h: usize,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum AttemptOutcomeFilter {
+    Any,
+    Success,
+    Failure,
+}
+
 pub struct PushDeliveryAttemptStore<'a> {
     db: &'a Database,
 }
@@ -130,9 +137,9 @@ impl<'a> PushDeliveryAttemptStore<'a> {
     }
 
     pub fn summary_for_user(&self, user_id: Option<&str>) -> Result<PushDeliverySummary> {
-        let last_attempt_at = self.latest_timestamp(user_id, None);
-        let last_success_at = self.latest_timestamp(user_id, Some("outcome = 'success'"));
-        let last_failure_at = self.latest_timestamp(user_id, Some("outcome = 'failure'"));
+        let last_attempt_at = self.latest_timestamp(user_id, AttemptOutcomeFilter::Any);
+        let last_success_at = self.latest_timestamp(user_id, AttemptOutcomeFilter::Success);
+        let last_failure_at = self.latest_timestamp(user_id, AttemptOutcomeFilter::Failure);
         let last_failure_reason = self.latest_failure_reason(user_id);
 
         let threshold = (Utc::now() - Duration::hours(24)).to_rfc3339();
@@ -165,30 +172,62 @@ impl<'a> PushDeliveryAttemptStore<'a> {
     fn latest_timestamp(
         &self,
         user_id: Option<&str>,
-        extra_filter: Option<&str>,
+        outcome_filter: AttemptOutcomeFilter,
     ) -> Option<String> {
-        let mut sql = String::from("SELECT created_at FROM push_delivery_attempts");
-        let mut has_where = false;
-
-        if user_id.is_some() {
-            sql.push_str(" WHERE user_id = ?1");
-            has_where = true;
-        }
-
-        if let Some(filter) = extra_filter {
-            if has_where {
-                sql.push_str(" AND ");
-            } else {
-                sql.push_str(" WHERE ");
-            }
-            sql.push_str(filter);
-        }
-
-        sql.push_str(" ORDER BY created_at DESC LIMIT 1");
-
-        let result = match user_id {
-            Some(uid) => self.db.conn().query_row(&sql, [uid], |row| row.get(0)),
-            None => self.db.conn().query_row(&sql, [], |row| row.get(0)),
+        let result = match (user_id, outcome_filter) {
+            (Some(uid), AttemptOutcomeFilter::Any) => self.db.conn().query_row(
+                "SELECT created_at
+                 FROM push_delivery_attempts
+                 WHERE user_id = ?1
+                 ORDER BY created_at DESC
+                 LIMIT 1",
+                [uid],
+                |row| row.get(0),
+            ),
+            (Some(uid), AttemptOutcomeFilter::Success) => self.db.conn().query_row(
+                "SELECT created_at
+                 FROM push_delivery_attempts
+                 WHERE user_id = ?1 AND outcome = 'success'
+                 ORDER BY created_at DESC
+                 LIMIT 1",
+                [uid],
+                |row| row.get(0),
+            ),
+            (Some(uid), AttemptOutcomeFilter::Failure) => self.db.conn().query_row(
+                "SELECT created_at
+                 FROM push_delivery_attempts
+                 WHERE user_id = ?1 AND outcome = 'failure'
+                 ORDER BY created_at DESC
+                 LIMIT 1",
+                [uid],
+                |row| row.get(0),
+            ),
+            (None, AttemptOutcomeFilter::Any) => self.db.conn().query_row(
+                "SELECT created_at
+                 FROM push_delivery_attempts
+                 ORDER BY created_at DESC
+                 LIMIT 1",
+                [],
+                |row| row.get(0),
+            ),
+            (None, AttemptOutcomeFilter::Success) => self.db.conn().query_row(
+                "SELECT created_at
+                 FROM push_delivery_attempts
+                 WHERE outcome = 'success'
+                 ORDER BY created_at DESC
+                 LIMIT 1",
+                [],
+                |row| row.get(0),
+            ),
+            (None, AttemptOutcomeFilter::Failure) => self.db.conn().query_row(
+                "SELECT created_at
+                 FROM push_delivery_attempts
+                 WHERE outcome = 'failure'
+                 ORDER BY created_at DESC
+                 LIMIT 1",
+                [],
+                |row| row.get(0),
+            ),
         };
 
         result.ok()
@@ -236,9 +275,11 @@ impl<'a> PushDeliveryAttemptStore<'a> {
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
+    const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
     for b in bytes {
-        out.push_str(&format!("{:02x}", b));
+        out.push(HEX_DIGITS[(b >> 4) as usize] as char);
+        out.push(HEX_DIGITS[(b & 0x0f) as usize] as char);
     }
     out
 }

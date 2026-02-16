@@ -4,15 +4,19 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context, Result};
+use futures::StreamExt;
+use semver::Version;
 use serde::{de::DeserializeOwned, Serialize};
 use sha2::{Digest as _, Sha256};
 use tokio::fs;
+use tokio::io::AsyncWriteExt;
 use tracing::warn;
 use url::Url;
 
 use super::{
-    signing::verify_artifact_signature, InstalledPlugin, PluginLockEntry, PluginLockfile,
-    PluginManifestV1, PluginSource, PluginSourcesFile, PluginTrustPolicy,
+    signing::{validate_public_key_base64, verify_artifact_signature},
+    InstalledPlugin, PluginCompat, PluginLockEntry, PluginLockfile, PluginManifestV1, PluginSource,
+    PluginSourcesFile, PluginTrustPolicy,
 };
 
 #[derive(Debug, Clone)]
@@ -26,6 +30,9 @@ enum ArtifactLocation {
     Remote(Url),
     Local(PathBuf),
 }
+
+const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
+const MAX_ARTIFACT_BYTES: usize = 64 * 1024 * 1024;
 
 /// Central manager for installable TUI plugins.
 #[derive(Clone)]
@@ -131,6 +138,8 @@ impl PluginManager {
     }
 
     pub async fn add_trusted_key(&self, key_id: &str, public_key_b64: &str) -> Result<()> {
+        validate_public_key_base64(public_key_b64)?;
+
         let mut trust = self.load_trust_policy().await?;
         trust
             .keys
@@ -326,16 +335,8 @@ impl PluginManager {
         if let Ok(url) = Url::parse(manifest_ref) {
             if matches!(url.scheme(), "http" | "https") {
                 let bytes = self
-                    .http_client
-                    .get(url.clone())
-                    .send()
-                    .await
-                    .with_context(|| format!("failed to fetch manifest from {}", url))?
-                    .error_for_status()
-                    .with_context(|| format!("manifest request failed for {}", url))?
-                    .bytes()
-                    .await
-                    .context("failed to read manifest response bytes")?;
+                    .read_remote_bytes_with_limit(&url, MAX_MANIFEST_BYTES, "manifest")
+                    .await?;
 
                 let manifest = parse_toml_or_json::<PluginManifestV1>(&bytes)?;
                 return Ok((manifest, ManifestLocation::Remote(url)));
@@ -345,18 +346,18 @@ impl PluginManager {
                 let path = url
                     .to_file_path()
                     .map_err(|_| anyhow!("invalid file URL: {}", url))?;
-                let bytes = fs::read(&path)
-                    .await
-                    .with_context(|| format!("failed to read manifest file {}", path.display()))?;
+                let bytes = self
+                    .read_local_bytes_with_limit(&path, MAX_MANIFEST_BYTES, "manifest")
+                    .await?;
                 let manifest = parse_toml_or_json::<PluginManifestV1>(&bytes)?;
                 return Ok((manifest, ManifestLocation::Local(path)));
             }
         }
 
         let path = PathBuf::from(manifest_ref);
-        let bytes = fs::read(&path)
-            .await
-            .with_context(|| format!("failed to read manifest file {}", path.display()))?;
+        let bytes = self
+            .read_local_bytes_with_limit(&path, MAX_MANIFEST_BYTES, "manifest")
+            .await?;
         let manifest = parse_toml_or_json::<PluginManifestV1>(&bytes)?;
         Ok((manifest, ManifestLocation::Local(path)))
     }
@@ -364,26 +365,24 @@ impl PluginManager {
     async fn read_artifact(&self, location: &ArtifactLocation) -> Result<Vec<u8>> {
         match location {
             ArtifactLocation::Remote(url) => {
-                let bytes = self
-                    .http_client
-                    .get(url.clone())
-                    .send()
+                self.read_remote_bytes_with_limit(url, MAX_ARTIFACT_BYTES, "artifact")
                     .await
-                    .with_context(|| format!("failed to fetch artifact from {}", url))?
-                    .error_for_status()
-                    .with_context(|| format!("artifact request failed for {}", url))?
-                    .bytes()
-                    .await
-                    .context("failed to read artifact response bytes")?;
-                Ok(bytes.to_vec())
             }
-            ArtifactLocation::Local(path) => fs::read(path)
-                .await
-                .with_context(|| format!("failed to read artifact {}", path.display())),
+            ArtifactLocation::Local(path) => {
+                self.read_local_bytes_with_limit(path, MAX_ARTIFACT_BYTES, "artifact")
+                    .await
+            }
         }
     }
 
     fn validate_manifest(&self, manifest: &PluginManifestV1) -> Result<()> {
+        if manifest.manifest_version != 1 {
+            bail!(
+                "unsupported manifest version '{}'; expected version 1",
+                manifest.manifest_version
+            );
+        }
+
         if manifest.id.trim().is_empty() {
             bail!("manifest id cannot be empty");
         }
@@ -409,6 +408,9 @@ impl PluginManager {
             bail!("manifest release.signing_key_id cannot be empty");
         }
 
+        validate_plugin_id(&manifest.id)?;
+        validate_plugin_version(&manifest.version)?;
+        validate_compatibility(&manifest.compat)?;
         validate_relative_path(&manifest.entry_component)?;
         Ok(())
     }
@@ -471,9 +473,105 @@ impl PluginManager {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).await?;
         }
-        fs::write(path, content)
+
+        let file_name = path
+            .file_name()
+            .and_then(OsStr::to_str)
+            .ok_or_else(|| anyhow!("invalid target path for write: {}", path.display()))?;
+        let temp_path = path.with_file_name(format!(".{}.{}.tmp", file_name, uuid::Uuid::new_v4()));
+
+        let mut file = fs::File::create(&temp_path)
             .await
-            .with_context(|| format!("failed to write {}", path.display()))
+            .with_context(|| format!("failed to create temp file {}", temp_path.display()))?;
+        file.write_all(content.as_bytes())
+            .await
+            .with_context(|| format!("failed to write temp file {}", temp_path.display()))?;
+        file.sync_all()
+            .await
+            .with_context(|| format!("failed to sync temp file {}", temp_path.display()))?;
+        drop(file);
+
+        if let Err(err) = fs::rename(&temp_path, path).await {
+            let _ = fs::remove_file(&temp_path).await;
+            return Err(err).with_context(|| {
+                format!(
+                    "failed to atomically replace {} with {}",
+                    path.display(),
+                    temp_path.display()
+                )
+            });
+        }
+
+        Ok(())
+    }
+
+    async fn read_remote_bytes_with_limit(
+        &self,
+        url: &Url,
+        max_bytes: usize,
+        purpose: &str,
+    ) -> Result<Vec<u8>> {
+        let response = self
+            .http_client
+            .get(url.clone())
+            .send()
+            .await
+            .with_context(|| format!("failed to fetch {} from {}", purpose, url))?
+            .error_for_status()
+            .with_context(|| format!("{} request failed for {}", purpose, url))?;
+
+        if let Some(content_length) = response.content_length() {
+            if content_length > max_bytes as u64 {
+                bail!(
+                    "{} at {} exceeds maximum allowed size ({} bytes > {} bytes)",
+                    purpose,
+                    url,
+                    content_length,
+                    max_bytes
+                );
+            }
+        }
+
+        let mut bytes = Vec::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.context("failed to read HTTP response chunk")?;
+            if bytes.len() + chunk.len() > max_bytes {
+                bail!(
+                    "{} at {} exceeds maximum allowed size (>{} bytes)",
+                    purpose,
+                    url,
+                    max_bytes
+                );
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+
+        Ok(bytes)
+    }
+
+    async fn read_local_bytes_with_limit(
+        &self,
+        path: &Path,
+        max_bytes: usize,
+        purpose: &str,
+    ) -> Result<Vec<u8>> {
+        let metadata = fs::metadata(path)
+            .await
+            .with_context(|| format!("failed to stat {} {}", purpose, path.display()))?;
+        if metadata.len() > max_bytes as u64 {
+            bail!(
+                "{} {} exceeds maximum allowed size ({} bytes > {} bytes)",
+                purpose,
+                path.display(),
+                metadata.len(),
+                max_bytes
+            );
+        }
+
+        fs::read(path)
+            .await
+            .with_context(|| format!("failed to read {} {}", purpose, path.display()))
     }
 }
 
@@ -506,6 +604,94 @@ fn validate_relative_path(path: &str) -> Result<PathBuf> {
     }
 
     Ok(candidate)
+}
+
+fn validate_plugin_id(id: &str) -> Result<()> {
+    validate_path_segment("manifest id", id, |ch| {
+        ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-')
+    })
+}
+
+fn validate_plugin_version(version: &str) -> Result<()> {
+    validate_path_segment("manifest version", version, |ch| {
+        ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-' | '+')
+    })
+}
+
+fn validate_path_segment<F>(label: &str, value: &str, is_allowed_char: F) -> Result<()>
+where
+    F: Fn(char) -> bool,
+{
+    if value.is_empty() {
+        bail!("{} cannot be empty", label);
+    }
+    if matches!(value, "." | "..") {
+        bail!("{} cannot be '.' or '..'", label);
+    }
+    if value.contains('/') || value.contains('\\') {
+        bail!("{} cannot contain path separators", label);
+    }
+    if !value.chars().all(is_allowed_char) {
+        bail!("{} contains unsupported characters", label);
+    }
+    Ok(())
+}
+
+fn validate_compatibility(compat: &PluginCompat) -> Result<()> {
+    let current = Version::parse(env!("CARGO_PKG_VERSION")).with_context(|| {
+        format!(
+            "failed to parse current krusty version '{}'",
+            env!("CARGO_PKG_VERSION")
+        )
+    })?;
+
+    let min = compat
+        .krusty_min
+        .as_deref()
+        .map(|value| {
+            Version::parse(value)
+                .with_context(|| format!("invalid compat.krusty_min version '{}'", value))
+        })
+        .transpose()?;
+    let max = compat
+        .krusty_max
+        .as_deref()
+        .map(|value| {
+            Version::parse(value)
+                .with_context(|| format!("invalid compat.krusty_max version '{}'", value))
+        })
+        .transpose()?;
+
+    if let (Some(min), Some(max)) = (&min, &max) {
+        if min > max {
+            bail!(
+                "invalid compat range: compat.krusty_min ({}) is greater than compat.krusty_max ({})",
+                min,
+                max
+            );
+        }
+    }
+
+    if let Some(min) = min {
+        if current < min {
+            bail!(
+                "plugin requires krusty >= {}, current version is {}",
+                min,
+                current
+            );
+        }
+    }
+    if let Some(max) = max {
+        if current > max {
+            bail!(
+                "plugin requires krusty <= {}, current version is {}",
+                max,
+                current
+            );
+        }
+    }
+
+    Ok(())
 }
 
 fn infer_source_name(manifest_url: &str) -> String {
@@ -542,7 +728,13 @@ fn resolve_artifact_location(
             let parent = manifest_path
                 .parent()
                 .ok_or_else(|| anyhow!("manifest path has no parent directory"))?;
-            Ok(ArtifactLocation::Local(parent.join(release_ref)))
+            let release_path = validate_relative_path(release_ref).with_context(|| {
+                format!(
+                    "invalid local release path '{}' (must be relative and traversal-safe)",
+                    release_ref
+                )
+            })?;
+            Ok(ArtifactLocation::Local(parent.join(release_path)))
         }
         ManifestLocation::Remote(manifest_url) => bail!(
             "relative release path '{}' is not allowed for remote manifest {}",
@@ -688,6 +880,290 @@ signing_key_id = "blocked-key"
             .expect_err("install should fail");
         assert!(
             err.to_string().contains("is not allowlisted"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_path_traversal_in_manifest_id() {
+        let temp = tempdir().expect("tempdir");
+        let workspace = temp.path();
+        let manifest_dir = workspace.join("manifest");
+        fs::create_dir_all(&manifest_dir)
+            .await
+            .expect("create manifest dir");
+
+        let artifact_bytes = b"fake-wasm-component".to_vec();
+        let artifact_path = manifest_dir.join("demo.wasm");
+        fs::write(&artifact_path, &artifact_bytes)
+            .await
+            .expect("write artifact");
+
+        let signing_key = SigningKey::from_bytes(&[9u8; 32]);
+        let signature = signing_key.sign(&artifact_bytes);
+        let public_key_b64 = BASE64.encode(signing_key.verifying_key().to_bytes());
+        let signature_b64 = BASE64.encode(signature.to_bytes());
+        let sha = format!("{:x}", Sha256::digest(&artifact_bytes));
+
+        let manifest_path = manifest_dir.join("plugin.toml");
+        fs::write(
+            &manifest_path,
+            format!(
+                r#"
+manifest_version = 1
+id = "../escape"
+name = "Escape Plugin"
+version = "1.0.0"
+publisher = "demo.publisher"
+entry_component = "demo.wasm"
+
+[release]
+url = "demo.wasm"
+sha256 = "{sha}"
+signature = "{signature_b64}"
+signing_key_id = "demo-key"
+"#
+            ),
+        )
+        .await
+        .expect("write manifest");
+
+        let manager = PluginManager::new(reqwest::Client::new(), workspace.join("plugins"));
+        manager.ensure_layout().await.expect("ensure layout");
+        manager
+            .add_allowed_publisher("demo.publisher")
+            .await
+            .expect("allow publisher");
+        manager
+            .add_trusted_key("demo-key", &public_key_b64)
+            .await
+            .expect("add key");
+
+        let err = manager
+            .install_from_manifest_ref(manifest_path.to_str().expect("manifest path utf8"))
+            .await
+            .expect_err("install should fail");
+        assert!(
+            err.to_string().contains("cannot contain path separators"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_unsupported_manifest_version() {
+        let temp = tempdir().expect("tempdir");
+        let workspace = temp.path();
+        let manifest_dir = workspace.join("manifest");
+        fs::create_dir_all(&manifest_dir)
+            .await
+            .expect("create manifest dir");
+
+        let artifact_bytes = b"fake-wasm-component".to_vec();
+        let artifact_path = manifest_dir.join("demo.wasm");
+        fs::write(&artifact_path, &artifact_bytes)
+            .await
+            .expect("write artifact");
+
+        let signing_key = SigningKey::from_bytes(&[12u8; 32]);
+        let signature = signing_key.sign(&artifact_bytes);
+        let public_key_b64 = BASE64.encode(signing_key.verifying_key().to_bytes());
+        let signature_b64 = BASE64.encode(signature.to_bytes());
+        let sha = format!("{:x}", Sha256::digest(&artifact_bytes));
+
+        let manifest_path = manifest_dir.join("plugin.toml");
+        fs::write(
+            &manifest_path,
+            format!(
+                r#"
+manifest_version = 2
+id = "demo.plugin"
+name = "Demo Plugin"
+version = "1.0.0"
+publisher = "demo.publisher"
+entry_component = "demo.wasm"
+
+[release]
+url = "demo.wasm"
+sha256 = "{sha}"
+signature = "{signature_b64}"
+signing_key_id = "demo-key"
+"#
+            ),
+        )
+        .await
+        .expect("write manifest");
+
+        let manager = PluginManager::new(reqwest::Client::new(), workspace.join("plugins"));
+        manager.ensure_layout().await.expect("ensure layout");
+        manager
+            .add_allowed_publisher("demo.publisher")
+            .await
+            .expect("allow publisher");
+        manager
+            .add_trusted_key("demo-key", &public_key_b64)
+            .await
+            .expect("add key");
+
+        let err = manager
+            .install_from_manifest_ref(manifest_path.to_str().expect("manifest path utf8"))
+            .await
+            .expect_err("install should fail");
+        assert!(
+            err.to_string().contains("unsupported manifest version"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_incompatible_krusty_version_bounds() {
+        let temp = tempdir().expect("tempdir");
+        let workspace = temp.path();
+        let manifest_dir = workspace.join("manifest");
+        fs::create_dir_all(&manifest_dir)
+            .await
+            .expect("create manifest dir");
+
+        let artifact_bytes = b"fake-wasm-component".to_vec();
+        let artifact_path = manifest_dir.join("demo.wasm");
+        fs::write(&artifact_path, &artifact_bytes)
+            .await
+            .expect("write artifact");
+
+        let signing_key = SigningKey::from_bytes(&[13u8; 32]);
+        let signature = signing_key.sign(&artifact_bytes);
+        let public_key_b64 = BASE64.encode(signing_key.verifying_key().to_bytes());
+        let signature_b64 = BASE64.encode(signature.to_bytes());
+        let sha = format!("{:x}", Sha256::digest(&artifact_bytes));
+
+        let manifest_path = manifest_dir.join("plugin.toml");
+        fs::write(
+            &manifest_path,
+            format!(
+                r#"
+manifest_version = 1
+id = "demo.plugin"
+name = "Demo Plugin"
+version = "1.0.0"
+publisher = "demo.publisher"
+entry_component = "demo.wasm"
+
+[release]
+url = "demo.wasm"
+sha256 = "{sha}"
+signature = "{signature_b64}"
+signing_key_id = "demo-key"
+
+[compat]
+krusty_min = "99.0.0"
+"#
+            ),
+        )
+        .await
+        .expect("write manifest");
+
+        let manager = PluginManager::new(reqwest::Client::new(), workspace.join("plugins"));
+        manager.ensure_layout().await.expect("ensure layout");
+        manager
+            .add_allowed_publisher("demo.publisher")
+            .await
+            .expect("allow publisher");
+        manager
+            .add_trusted_key("demo-key", &public_key_b64)
+            .await
+            .expect("add key");
+
+        let err = manager
+            .install_from_manifest_ref(manifest_path.to_str().expect("manifest path utf8"))
+            .await
+            .expect_err("install should fail");
+        assert!(
+            err.to_string().contains("requires krusty >="),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_local_release_path_traversal() {
+        let temp = tempdir().expect("tempdir");
+        let workspace = temp.path();
+        let manifest_dir = workspace.join("manifest");
+        fs::create_dir_all(&manifest_dir)
+            .await
+            .expect("create manifest dir");
+
+        let artifact_bytes = b"fake-wasm-component".to_vec();
+        let artifact_path = manifest_dir.join("demo.wasm");
+        fs::write(&artifact_path, &artifact_bytes)
+            .await
+            .expect("write artifact");
+
+        let signing_key = SigningKey::from_bytes(&[14u8; 32]);
+        let signature = signing_key.sign(&artifact_bytes);
+        let public_key_b64 = BASE64.encode(signing_key.verifying_key().to_bytes());
+        let signature_b64 = BASE64.encode(signature.to_bytes());
+        let sha = format!("{:x}", Sha256::digest(&artifact_bytes));
+
+        let manifest_path = manifest_dir.join("plugin.toml");
+        fs::write(
+            &manifest_path,
+            format!(
+                r#"
+manifest_version = 1
+id = "demo.plugin"
+name = "Demo Plugin"
+version = "1.0.0"
+publisher = "demo.publisher"
+entry_component = "demo.wasm"
+
+[release]
+url = "../demo.wasm"
+sha256 = "{sha}"
+signature = "{signature_b64}"
+signing_key_id = "demo-key"
+"#
+            ),
+        )
+        .await
+        .expect("write manifest");
+
+        let manager = PluginManager::new(reqwest::Client::new(), workspace.join("plugins"));
+        manager.ensure_layout().await.expect("ensure layout");
+        manager
+            .add_allowed_publisher("demo.publisher")
+            .await
+            .expect("allow publisher");
+        manager
+            .add_trusted_key("demo-key", &public_key_b64)
+            .await
+            .expect("add key");
+
+        let err = manager
+            .install_from_manifest_ref(manifest_path.to_str().expect("manifest path utf8"))
+            .await
+            .expect_err("install should fail");
+        assert!(
+            err.to_string().contains("invalid local release path"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_trusted_key_material() {
+        let temp = tempdir().expect("tempdir");
+        let manager = PluginManager::new(reqwest::Client::new(), temp.path().join("plugins"));
+        manager.ensure_layout().await.expect("ensure layout");
+
+        let err = manager
+            .add_trusted_key("bad-key", "not-base64")
+            .await
+            .expect_err("invalid key should be rejected");
+        assert!(
+            err.to_string().contains("invalid trusted key encoding"),
             "unexpected error: {}",
             err
         );

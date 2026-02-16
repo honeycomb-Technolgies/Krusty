@@ -470,26 +470,22 @@ async fn run_agentic_loop(
     pending_approvals: Arc<RwLock<HashMap<String, oneshot::Sender<bool>>>>,
     push_service: Option<Arc<PushService>>,
 ) {
-    let db = match Database::new(&db_path) {
-        Ok(db) => db,
-        Err(e) => {
-            send_event(
-                &sse_tx,
-                AgenticEvent::Error {
-                    error: format!("Database error: {}", e),
-                },
-            )
-            .await;
-            return;
-        }
-    };
-    let session_manager = SessionManager::new(db);
+    if let Err(e) = Database::new(&db_path) {
+        send_event(
+            &sse_tx,
+            AgenticEvent::Error {
+                error: format!("Database error: {}", e),
+            },
+        )
+        .await;
+        return;
+    }
 
     let mut client_connected = true;
     let mut last_token_count = 0usize;
     let mut exploration_budget_count = 0usize;
     let mut tool_failure_signatures: HashMap<String, usize> = HashMap::new();
-    let _ = session_manager.set_agent_state(&session_id, "streaming");
+    set_agent_state(db_path.as_ref(), &session_id, "streaming");
 
     for iteration in 1..=MAX_ITERATIONS {
         if client_connected && sse_tx.is_closed() {
@@ -512,9 +508,9 @@ async fn run_agentic_loop(
                     .await;
                 }
                 if last_token_count > 0 {
-                    let _ = session_manager.update_token_count(&session_id, last_token_count);
+                    update_token_count(db_path.as_ref(), &session_id, last_token_count);
                 }
-                let _ = session_manager.set_agent_state(&session_id, "error");
+                set_agent_state(db_path.as_ref(), &session_id, "error");
                 fire_push(
                     &push_service,
                     user_id.as_deref(),
@@ -540,7 +536,7 @@ async fn run_agentic_loop(
         let assistant_msg = build_assistant_message(&text, &thinking_blocks, &tool_calls);
         if !assistant_msg.content.is_empty() {
             conversation.push(assistant_msg.clone());
-            save_message(&session_manager, &session_id, &assistant_msg);
+            save_message(db_path.as_ref(), &session_id, &assistant_msg);
         }
 
         if tool_calls.is_empty() {
@@ -596,9 +592,9 @@ async fn run_agentic_loop(
                         .await;
                     }
                     if last_token_count > 0 {
-                        let _ = session_manager.update_token_count(&session_id, last_token_count);
+                        update_token_count(db_path.as_ref(), &session_id, last_token_count);
                     }
-                    let _ = session_manager.set_agent_state(&session_id, "awaiting_input");
+                    set_agent_state(db_path.as_ref(), &session_id, "awaiting_input");
                     if client_connected {
                         send_event(
                             &sse_tx,
@@ -655,9 +651,9 @@ async fn run_agentic_loop(
                 }
             }
             if last_token_count > 0 {
-                let _ = session_manager.update_token_count(&session_id, last_token_count);
+                update_token_count(db_path.as_ref(), &session_id, last_token_count);
             }
-            let _ = session_manager.set_agent_state(&session_id, "awaiting_input");
+            set_agent_state(db_path.as_ref(), &session_id, "awaiting_input");
             if client_connected {
                 send_event(
                     &sse_tx,
@@ -705,7 +701,7 @@ async fn run_agentic_loop(
             exploration_budget_count += tool_calls.len();
         }
 
-        let _ = session_manager.set_agent_state(&session_id, "tool_executing");
+        set_agent_state(db_path.as_ref(), &session_id, "tool_executing");
         let (tool_results, next_work_mode) = execute_tools(
             &tool_registry,
             &tool_calls,
@@ -742,7 +738,7 @@ async fn run_agentic_loop(
             content: tool_results,
         };
         conversation.push(tool_msg.clone());
-        save_message(&session_manager, &session_id, &tool_msg);
+        save_message(db_path.as_ref(), &session_id, &tool_msg);
 
         if let Some(diagnostic) = fail_fast_diagnostic {
             tracing::warn!(
@@ -752,7 +748,7 @@ async fn run_agentic_loop(
                 diagnostic = %diagnostic,
                 "Fail-fast: stopping repeated tool failure loop"
             );
-            let _ = session_manager.set_agent_state(&session_id, "idle");
+            set_agent_state(db_path.as_ref(), &session_id, "idle");
 
             if client_connected && !sse_tx.is_closed() {
                 send_event(
@@ -774,7 +770,7 @@ async fn run_agentic_loop(
             break;
         }
 
-        let _ = session_manager.set_agent_state(&session_id, "streaming");
+        set_agent_state(db_path.as_ref(), &session_id, "streaming");
 
         if client_connected && !sse_tx.is_closed() {
             send_event(
@@ -791,9 +787,9 @@ async fn run_agentic_loop(
     }
 
     if last_token_count > 0 {
-        let _ = session_manager.update_token_count(&session_id, last_token_count);
+        update_token_count(db_path.as_ref(), &session_id, last_token_count);
     }
-    let _ = session_manager.set_agent_state(&session_id, "idle");
+    set_agent_state(db_path.as_ref(), &session_id, "idle");
 
     if client_connected && !sse_tx.is_closed() {
         send_event(
@@ -805,12 +801,7 @@ async fn run_agentic_loop(
         .await;
     }
 
-    let title = session_manager
-        .get_session(&session_id)
-        .ok()
-        .flatten()
-        .map(|s| s.title)
-        .unwrap_or_else(|| "Session".to_string());
+    let title = session_title(db_path.as_ref(), &session_id);
 
     fire_push(
         &push_service,
@@ -1617,7 +1608,8 @@ fn build_assistant_message(
     thinking_blocks: &[ThinkingBlock],
     tool_calls: &[AiToolCall],
 ) -> ModelMessage {
-    let mut content = Vec::new();
+    let mut content =
+        Vec::with_capacity(thinking_blocks.len() + tool_calls.len() + usize::from(!text.is_empty()));
 
     for block in thinking_blocks {
         content.push(Content::Thinking {
@@ -1646,7 +1638,7 @@ fn build_assistant_message(
     }
 }
 
-fn save_message(session_manager: &SessionManager, session_id: &str, message: &ModelMessage) {
+fn save_message(db_path: &Path, session_id: &str, message: &ModelMessage) {
     let role = match message.role {
         Role::User => "user",
         Role::Assistant => "assistant",
@@ -1654,12 +1646,69 @@ fn save_message(session_manager: &SessionManager, session_id: &str, message: &Mo
     };
 
     match serde_json::to_string(&message.content) {
-        Ok(json) => {
-            if let Err(e) = session_manager.save_message(session_id, role, &json) {
-                tracing::error!("Failed to save message: {}", e);
+        Ok(json) => match Database::new(db_path) {
+            Ok(db) => {
+                let session_manager = SessionManager::new(db);
+                if let Err(e) = session_manager.save_message(session_id, role, &json) {
+                    tracing::error!("Failed to save message: {}", e);
+                }
+            }
+            Err(e) => tracing::error!("Failed to open database while saving message: {}", e),
+        },
+        Err(e) => tracing::error!("Failed to serialize message: {}", e),
+    }
+}
+
+fn set_agent_state(db_path: &Path, session_id: &str, state: &str) {
+    match Database::new(db_path) {
+        Ok(db) => {
+            let session_manager = SessionManager::new(db);
+            if let Err(e) = session_manager.set_agent_state(session_id, state) {
+                tracing::warn!(
+                    session_id = %session_id,
+                    "Failed to set agent state '{state}': {}", e
+                );
             }
         }
-        Err(e) => tracing::error!("Failed to serialize message: {}", e),
+        Err(e) => tracing::error!("Failed to open database while setting agent state: {}", e),
+    }
+}
+
+fn update_token_count(db_path: &Path, session_id: &str, token_count: usize) {
+    match Database::new(db_path) {
+        Ok(db) => {
+            let session_manager = SessionManager::new(db);
+            if let Err(e) = session_manager.update_token_count(session_id, token_count) {
+                tracing::warn!(
+                    session_id = %session_id,
+                    "Failed to update token count: {}", e
+                );
+            }
+        }
+        Err(e) => tracing::error!("Failed to open database while updating token count: {}", e),
+    }
+}
+
+fn session_title(db_path: &Path, session_id: &str) -> String {
+    match Database::new(db_path) {
+        Ok(db) => {
+            let session_manager = SessionManager::new(db);
+            match session_manager.get_session(session_id) {
+                Ok(Some(session)) => session.title,
+                Ok(None) => "Session".to_string(),
+                Err(e) => {
+                    tracing::warn!(
+                        session_id = %session_id,
+                        "Failed to load session title: {}", e
+                    );
+                    "Session".to_string()
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!("Failed to open database while loading session title: {}", e);
+            "Session".to_string()
+        }
     }
 }
 
@@ -1668,8 +1717,9 @@ fn truncate_output(output: &str) -> String {
         return output.to_string();
     }
 
-    let truncated = &output[..MAX_TOOL_OUTPUT_CHARS];
-    let break_point = truncated.rfind('\n').unwrap_or(MAX_TOOL_OUTPUT_CHARS);
+    let truncated_len = floor_char_boundary(output, MAX_TOOL_OUTPUT_CHARS);
+    let truncated = &output[..truncated_len];
+    let break_point = truncated.rfind('\n').unwrap_or(truncated_len);
     let clean = &output[..break_point];
     format!(
         "{}\n\n[... OUTPUT TRUNCATED: {} chars -> {} chars ...]",
@@ -1677,6 +1727,14 @@ fn truncate_output(output: &str) -> String {
         output.len(),
         clean.len()
     )
+}
+
+fn floor_char_boundary(text: &str, index: usize) -> usize {
+    let mut boundary = index.min(text.len());
+    while boundary > 0 && !text.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    boundary
 }
 
 /// Fire a push notification in a background task (non-blocking, failure only logged).
@@ -1853,13 +1911,13 @@ fn extract_error_signature(output_str: &str) -> (String, String) {
                     .and_then(|v| v.as_str())
                     .map(|c| c.to_ascii_lowercase())
                     .filter(|c| !c.is_empty())
-                    .unwrap_or_else(|| classify_error_code(message));
+                    .unwrap_or_else(|| classify_error_code(message).to_string());
                 return (code, normalize_error_fingerprint(message));
             }
 
             if let Some(message) = error.as_str() {
                 return (
-                    classify_error_code(message),
+                    classify_error_code(message).to_string(),
                     normalize_error_fingerprint(message),
                 );
             }
@@ -1867,45 +1925,53 @@ fn extract_error_signature(output_str: &str) -> (String, String) {
     }
 
     (
-        classify_error_code(output_str),
+        classify_error_code(output_str).to_string(),
         normalize_error_fingerprint(output_str),
     )
 }
 
-fn classify_error_code(message: &str) -> String {
+fn classify_error_code(message: &str) -> &'static str {
     let lower = message.to_ascii_lowercase();
     if lower.contains("invalid parameters")
         || lower.contains("missing field")
         || lower.contains("unknown field")
     {
-        "invalid_parameters".to_string()
+        "invalid_parameters"
     } else if lower.contains("unknown tool") {
-        "unknown_tool".to_string()
+        "unknown_tool"
     } else if lower.contains("access denied") || lower.contains("outside workspace") {
-        "access_denied".to_string()
+        "access_denied"
     } else if lower.contains("timed out") || lower.contains("timeout") {
-        "timeout".to_string()
+        "timeout"
     } else if lower.contains("denied") {
-        "permission_denied".to_string()
+        "permission_denied"
     } else {
-        "tool_error".to_string()
+        "tool_error"
     }
 }
 
 fn normalize_error_fingerprint(message: &str) -> String {
-    let compact = message.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut compact = String::new();
+    for part in message.split_whitespace() {
+        if !compact.is_empty() {
+            compact.push(' ');
+        }
+        compact.push_str(part);
+    }
+
     if compact.is_empty() {
         return "unknown".to_string();
     }
 
-    compact.to_ascii_lowercase().chars().take(160).collect()
+    compact.make_ascii_lowercase();
+    compact.chars().take(160).collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         classify_error_code, detect_repeated_tool_failures, extract_error_signature,
-        normalize_error_fingerprint, AiToolCall, Content,
+        normalize_error_fingerprint, truncate_output, AiToolCall, Content, MAX_TOOL_OUTPUT_CHARS,
     };
     use std::collections::HashMap;
 
@@ -1934,6 +2000,15 @@ mod tests {
             classify_error_code("Invalid parameters: missing field `pattern`"),
             "invalid_parameters"
         );
+    }
+
+    #[test]
+    fn truncate_output_handles_utf8_boundaries() {
+        let prefix = "a".repeat(MAX_TOOL_OUTPUT_CHARS - 1);
+        let output = format!("{prefix}🙂tail");
+        let truncated = truncate_output(&output);
+        assert!(truncated.starts_with(&prefix));
+        assert!(truncated.contains("OUTPUT TRUNCATED"));
     }
 
     #[test]
