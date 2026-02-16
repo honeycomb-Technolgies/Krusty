@@ -5,7 +5,7 @@
 use anyhow::Result;
 use futures::{SinkExt, StreamExt};
 use serde_json::Value;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, error, info, warn};
@@ -451,16 +451,54 @@ impl AiClient {
         }
 
         info!("Connecting ChatGPT Codex websocket: {}", ws_url);
-        let (ws_stream, _) = connect_async(request).await.map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to connect ChatGPT Codex websocket (websocket-only mode): {}",
-                e
-            )
-        })?;
+        let (mut ws_stream, _) = match connect_async(request).await {
+            Ok(pair) => pair,
+            Err(e) => {
+                warn!(
+                    "ChatGPT Codex websocket connect failed ({}), falling back to HTTP streaming",
+                    e
+                );
+                return self
+                    .call_streaming_chatgpt_codex_http(body, call_start)
+                    .await;
+            }
+        };
         info!(
             "ChatGPT Codex websocket connected in {:?}",
             call_start.elapsed()
         );
+
+        let create_payload = Self::codex_ws_create_payload(body.clone());
+        if let Err(e) = ws_stream
+            .send(Message::Text(create_payload.to_string()))
+            .await
+        {
+            warn!(
+                "ChatGPT Codex websocket send failed ({}), falling back to HTTP streaming",
+                e
+            );
+            return self
+                .call_streaming_chatgpt_codex_http(body, call_start)
+                .await;
+        }
+
+        let first_ws_message =
+            match tokio::time::timeout(Duration::from_secs(2), ws_stream.next()).await {
+                Ok(msg) => msg,
+                Err(_) => None,
+            };
+
+        if matches!(
+            first_ws_message,
+            Some(Ok(Message::Close(_))) | Some(Err(_)) | None
+        ) {
+            warn!(
+                "ChatGPT Codex websocket closed before first event, falling back to HTTP streaming"
+            );
+            return self
+                .call_streaming_chatgpt_codex_http(body, call_start)
+                .await;
+        }
 
         let (tx, rx, buffer_tx, buffer_rx) = create_streaming_channels();
         spawn_buffer_processor(buffer_rx, tx.clone());
@@ -470,20 +508,21 @@ impl AiClient {
         let parser = OpenAIParser::new();
 
         tokio::spawn(async move {
-            let (mut write, mut read) = ws_stream.split();
-            let create_payload = Self::codex_ws_create_payload(body);
-
-            if let Err(e) = write.send(Message::Text(create_payload.to_string())).await {
-                let _ = tx_err.send(StreamPart::Error {
-                    error: format!("Failed to send Codex websocket request: {}", e),
-                });
-                processor.finish().await;
-                return;
-            }
+            let (_write, mut read) = ws_stream.split();
 
             let mut saw_completion = false;
+            let mut pending_first = first_ws_message;
 
-            while let Some(msg) = read.next().await {
+            loop {
+                let msg = if let Some(msg) = pending_first.take() {
+                    msg
+                } else {
+                    match read.next().await {
+                        Some(msg) => msg,
+                        None => break,
+                    }
+                };
+
                 match msg {
                     Ok(Message::Text(text)) => {
                         let payload = text.to_string();
@@ -571,6 +610,65 @@ impl AiClient {
                 }
             }
 
+            processor.finish().await;
+        });
+
+        Ok(rx)
+    }
+
+    async fn call_streaming_chatgpt_codex_http(
+        &self,
+        body: Value,
+        call_start: Instant,
+    ) -> Result<mpsc::UnboundedReceiver<StreamPart>> {
+        let request = self
+            .build_request(&self.config().api_url())
+            .header("OpenAI-Beta", "responses=experimental");
+
+        info!("Falling back to ChatGPT Codex HTTP streaming");
+        let response = request.json(&body).send().await?;
+        let request_duration = call_start.elapsed();
+
+        let status = response.status();
+        info!(
+            "ChatGPT Codex HTTP response: {} in {:?}",
+            status, request_duration
+        );
+
+        if !status.is_success() {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(anyhow::anyhow!(
+                "ChatGPT Codex HTTP fallback error: {} - {}",
+                status,
+                error_text
+            ));
+        }
+
+        let (tx, rx, buffer_tx, buffer_rx) = create_streaming_channels();
+        spawn_buffer_processor(buffer_rx, tx.clone());
+        let mut processor = SseStreamProcessor::new(tx, buffer_tx);
+        let parser = OpenAIParser::new();
+
+        let stream = response.bytes_stream();
+        tokio::spawn(async move {
+            tokio::pin!(stream);
+            while let Some(chunk) = stream.next().await {
+                match chunk {
+                    Ok(bytes) => {
+                        if let Err(e) = processor.process_chunk(bytes, &parser).await {
+                            warn!("Codex HTTP fallback stream parse error: {}", e);
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Codex HTTP fallback stream read error: {}", e);
+                        break;
+                    }
+                }
+            }
             processor.finish().await;
         });
 
