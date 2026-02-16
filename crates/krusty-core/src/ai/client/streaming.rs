@@ -482,11 +482,9 @@ impl AiClient {
                 .await;
         }
 
-        let first_ws_message =
-            match tokio::time::timeout(Duration::from_secs(2), ws_stream.next()).await {
-                Ok(msg) => msg,
-                Err(_) => None,
-            };
+        let first_ws_message = (tokio::time::timeout(Duration::from_secs(2), ws_stream.next())
+            .await)
+            .unwrap_or_default();
 
         if matches!(
             first_ws_message,
