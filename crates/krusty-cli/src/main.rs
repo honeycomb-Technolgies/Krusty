@@ -10,7 +10,9 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 // Re-export core modules for TUI usage
-use krusty_core::{acp, agent, ai, constants, extensions, paths, plan, process, storage, tools};
+use krusty_core::{
+    acp, agent, ai, constants, extensions, paths, plan, plugins, process, storage, tools,
+};
 
 mod serve;
 mod tui;

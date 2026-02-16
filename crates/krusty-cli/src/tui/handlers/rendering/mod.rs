@@ -50,6 +50,7 @@ impl App {
             Popup::SessionList => self.ui.popups.session.render(f, &self.ui.theme),
             Popup::Auth => self.ui.popups.auth.render(f, &self.ui.theme),
             Popup::ProcessList => self.ui.popups.process.render(f, &self.ui.theme),
+            Popup::PluginsBrowser => self.ui.popups.plugins.render(f, &self.ui.theme),
             Popup::Pinch => self.ui.popups.pinch.render(f, &self.ui.theme),
             Popup::FilePreview => self.ui.popups.file_preview.render(f, &self.ui.theme),
             Popup::SkillsBrowser => self.ui.popups.skills.render(f, &self.ui.theme),

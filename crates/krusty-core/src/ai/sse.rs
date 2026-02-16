@@ -36,6 +36,40 @@ pub struct SseStreamProcessor {
 }
 
 impl SseStreamProcessor {
+    fn set_partial_line(&mut self, line: &str) {
+        self.partial_line.clear();
+
+        if line.len() <= MAX_PARTIAL_LINE_SIZE {
+            self.partial_line.push_str(line);
+            return;
+        }
+
+        warn!(
+            "Partial line exceeds {} bytes, truncating to prevent OOM",
+            MAX_PARTIAL_LINE_SIZE
+        );
+
+        // Keep truncation UTF-8-safe to avoid slicing panics on multi-byte boundaries.
+        let mut boundary = MAX_PARTIAL_LINE_SIZE;
+        while boundary > 0 && !line.is_char_boundary(boundary) {
+            boundary -= 1;
+        }
+        self.partial_line.push_str(&line[..boundary]);
+    }
+
+    fn emit_usage(&self, usage: Usage, source: &str) {
+        info!(
+            "SSE Usage ({}): prompt={}, completion={}, total={}, cache_read={}, cache_created={}",
+            source,
+            usage.prompt_tokens,
+            usage.completion_tokens,
+            usage.total_tokens,
+            usage.cache_read_input_tokens,
+            usage.cache_creation_input_tokens
+        );
+        let _ = self.tx.send(StreamPart::Usage { usage });
+    }
+
     /// Create a new SSE stream processor
     pub fn new(
         tx: mpsc::UnboundedSender<StreamPart>,
@@ -85,15 +119,7 @@ impl SseStreamProcessor {
             // If this is the last line and there's no trailing newline, it's partial
             if lines_iter.peek().is_none() && !has_trailing_newline {
                 // Enforce size limit to prevent unbounded buffer growth
-                if line.len() < MAX_PARTIAL_LINE_SIZE {
-                    self.partial_line = line.to_string();
-                } else {
-                    warn!(
-                        "Partial line exceeds {} bytes, truncating to prevent OOM",
-                        MAX_PARTIAL_LINE_SIZE
-                    );
-                    self.partial_line = line[..MAX_PARTIAL_LINE_SIZE].to_string();
-                }
+                self.set_partial_line(line);
                 break;
             }
 
@@ -294,11 +320,7 @@ impl SseStreamProcessor {
                     self.stream_buffer.flush().await;
                     // Send usage before finish if present
                     if let Some(usage) = usage {
-                        info!(
-                            "SSE Usage (from finish): prompt={}, completion={}, total={}",
-                            usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
-                        );
-                        let _ = self.tx.send(StreamPart::Usage { usage });
+                        self.emit_usage(usage, "from finish");
                     }
                     let _ = self.tx.send(StreamPart::Finish { reason });
                 }
@@ -321,11 +343,7 @@ impl SseStreamProcessor {
                     }
                     // Send usage before finish if present
                     if let Some(usage) = usage {
-                        info!(
-                            "SSE Usage (from finish): prompt={}, completion={}, total={}",
-                            usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
-                        );
-                        let _ = self.tx.send(StreamPart::Usage { usage });
+                        self.emit_usage(usage, "from finish");
                     }
                     // Then send the finish signal
                     let _ = self.tx.send(StreamPart::Finish {
@@ -333,10 +351,7 @@ impl SseStreamProcessor {
                     });
                 }
                 SseEvent::Usage(usage) => {
-                    info!("SSE Usage: prompt={}, completion={}, total={}, cache_read={}, cache_created={}",
-                        usage.prompt_tokens, usage.completion_tokens, usage.total_tokens,
-                        usage.cache_read_input_tokens, usage.cache_creation_input_tokens);
-                    let _ = self.tx.send(StreamPart::Usage { usage });
+                    self.emit_usage(usage, "event");
                 }
                 SseEvent::ContextEdited(metrics) => {
                     info!(

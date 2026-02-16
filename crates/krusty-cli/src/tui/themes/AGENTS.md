@@ -1,32 +1,12 @@
 # AGENTS Guide: /crates/krusty-cli/src/tui/themes
 
-## Scope
-- Applies to `/crates/krusty-cli/src/tui/themes` and its direct contents.
-- If a deeper directory has its own `AGENTS.md`, that file takes precedence for its subtree.
-
 ## Purpose
-Theme model, registry, and theme wiring logic.
+Theme registry and style primitives for terminal rendering.
 
-## Local Standards
-- Deliver best-in-class quality: elegant, modular, organized, and performant code.
-- Keep code self-explanatory; add comments only for non-obvious constraints or tradeoffs.
-- Avoid over-engineering; add abstractions only when they buy clear maintainability.
-- Keep boundaries explicit between CLI, core runtime, server, desktop shell, and PWA surfaces.
-- Prefer safe implementations; justify `unsafe` usage explicitly if ever required.
-- For Rust changes, use idiomatic patterns (`Result`/`Option`, iterators, trait-based composition) and keep `anyhow::Context` on fallible IO/network boundaries.
-- Preserve TUI responsiveness: avoid render-loop allocations, cache expensive calculations, and keep scrolling/streaming smooth.
+## Guardrails
+- Keep contrast/readability strong in both dense and sparse views.
+- Theme additions must update registry wiring and defaults intentionally.
+- Avoid hardcoding colors outside theme primitives.
 
-## Quality Gates
-- Rust workspace: `cargo check --workspace`, `cargo test --workspace`, `cargo clippy --workspace -- -D warnings`, `cargo fmt --all -- --check`
-- Server local run: `cargo run -p krusty-server`
-- PWA: `cd apps/pwa/app && bun run check && bun run build`
-- Desktop shell: `cd apps/desktop/shell && cargo check --manifest-path src-tauri/Cargo.toml`
-
-## Structure Map
-### Subdirectories
-- `definitions/`: Concrete TUI color theme definitions. See `crates/krusty-cli/src/tui/themes/definitions/AGENTS.md` for local detail.
-
-### Files
-- `base.rs`: Rust source module implementing base behavior.
-- `mod.rs`: Module root that wires child modules and shared exports.
-- `registry.rs`: Rust source module implementing registry behavior.
+## Validation
+- `cargo check -p krusty`

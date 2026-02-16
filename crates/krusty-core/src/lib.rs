@@ -17,6 +17,7 @@ pub mod git;
 pub mod mcp;
 pub mod paths;
 pub mod plan;
+pub mod plugins;
 pub mod process;
 pub mod server_instance;
 pub mod skills;

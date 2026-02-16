@@ -65,6 +65,21 @@ impl App {
         }
     }
 
+    /// Poll plugin catalog on an interval for install/update/enable state changes.
+    pub(crate) fn poll_plugin_catalog(&mut self) {
+        const PLUGIN_POLL_INTERVAL: Duration = Duration::from_secs(2);
+
+        let now = Instant::now();
+        if now.duration_since(self.runtime.last_plugin_catalog_poll) < PLUGIN_POLL_INTERVAL {
+            return;
+        }
+        self.runtime.last_plugin_catalog_poll = now;
+
+        if self.refresh_plugin_catalog(true) {
+            self.ui.needs_redraw = true;
+        }
+    }
+
     /// Process actions returned from polling operations
     pub(crate) fn process_poll_actions(&mut self, result: PollResult) {
         // Add messages

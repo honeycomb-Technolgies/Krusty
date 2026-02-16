@@ -12,6 +12,7 @@ use crate::ai::providers::{builtin_providers, ProviderId};
 use crate::extensions::WasmHost;
 use crate::paths;
 use crate::plan::PlanManager;
+use crate::plugins::PluginManager;
 use crate::process::ProcessRegistry;
 use crate::storage::{CredentialStore, Database, Preferences, SessionManager};
 use crate::tools::{register_all_tools, ToolRegistry};
@@ -39,6 +40,27 @@ pub async fn init_services(
     let http_client = reqwest::Client::new();
     let wasm_host = Some(WasmHost::new(http_client, extensions_dir.clone()));
     tracing::info!("WASM extension host initialized at {:?}", extensions_dir);
+
+    // Installable plugin manager
+    let plugins_dir = paths::plugins_dir();
+    let plugin_manager = Some(Arc::new(PluginManager::new(
+        reqwest::Client::new(),
+        plugins_dir.clone(),
+    )));
+    if let Some(manager) = &plugin_manager {
+        if let Err(err) = manager.ensure_layout().await {
+            tracing::warn!(
+                "Failed to initialize installable plugin layout at {:?}: {}",
+                plugins_dir,
+                err
+            );
+        } else {
+            tracing::info!(
+                "Installable plugin manager initialized at {:?}",
+                plugins_dir
+            );
+        }
+    }
 
     // Database path
     let db_path = paths::config_dir().join("krusty.db");
@@ -107,6 +129,7 @@ pub async fn init_services(
         cached_ai_tools,
         user_hook_manager,
         wasm_host,
+        plugin_manager,
         skills_manager,
         mcp_manager,
         mcp_status_tx,

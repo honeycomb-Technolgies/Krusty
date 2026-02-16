@@ -295,6 +295,11 @@ pub fn get_all_commands() -> Vec<CommandSuggestion> {
             description: "Browse and manage skills",
         },
         CommandSuggestion {
+            primary: "/plugins",
+            aliases: vec![],
+            description: "Browse and manage installable plugins",
+        },
+        CommandSuggestion {
             primary: "/plan",
             aliases: vec![],
             description: "View or manage active plan",

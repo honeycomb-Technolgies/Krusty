@@ -16,6 +16,7 @@ use crossterm::{
 use futures::StreamExt;
 use ratatui::{backend::CrosstermBackend, style::Color, Terminal};
 use std::{
+    collections::HashMap,
     io,
     path::PathBuf,
     sync::Arc,
@@ -30,6 +31,7 @@ use crate::ai::providers::ProviderId;
 use crate::ai::types::{AiTool, AiToolCall, Content};
 use crate::extensions::WasmHost;
 use crate::plan::{PlanFile, PlanManager};
+use crate::plugins::PluginManager;
 use crate::process::ProcessRegistry;
 use crate::storage::{CredentialStore, Preferences, SessionManager};
 use crate::tools::registry::PermissionMode;
@@ -65,6 +67,7 @@ pub enum Popup {
     SessionList,
     McpBrowser,
     ProcessList,
+    PluginsBrowser,
     Pinch,
     FilePreview,
     SkillsBrowser,
@@ -150,6 +153,7 @@ pub struct AppServices {
     // Extensions (not yet wired into tool dispatch)
     #[allow(dead_code)]
     pub wasm_host: Option<Arc<WasmHost>>,
+    pub plugin_manager: Option<Arc<PluginManager>>,
 
     // Skills/MCP
     pub skills_manager: Arc<RwLock<SkillsManager>>,
@@ -260,6 +264,8 @@ pub struct AppRuntime {
     pub git_status: Option<krusty_core::git::GitStatusSummary>,
     /// Last git status poll timestamp
     pub last_git_status_poll: Instant,
+    /// Last installed-plugin catalog poll timestamp
+    pub last_plugin_catalog_poll: Instant,
     /// Working directory
     pub working_dir: PathBuf,
     /// Current session ID
@@ -312,6 +318,8 @@ pub struct AppRuntime {
     pub update_status: Option<krusty_core::updater::UpdateStatus>,
     /// Should quit flag
     pub should_quit: bool,
+    /// Snapshot of installed plugin versions for update detection
+    pub plugin_versions: HashMap<String, String>,
 }
 
 impl AppRuntime {
@@ -336,6 +344,7 @@ impl AppRuntime {
             running_process_elapsed: None,
             git_status: None,
             last_git_status_poll: Instant::now() - Duration::from_secs(60),
+            last_plugin_catalog_poll: Instant::now() - Duration::from_secs(60),
             working_dir,
             current_session_id: None,
             session_title: None,
@@ -362,6 +371,7 @@ impl AppRuntime {
             just_updated: false,
             update_status: None,
             should_quit: false,
+            plugin_versions: HashMap::new(),
         }
     }
 }
@@ -406,11 +416,15 @@ impl App {
             ..runtime
         };
 
-        Self {
+        let mut app = Self {
             ui,
             runtime,
             services,
-        }
+        };
+
+        // Prime installable plugin catalog before first render.
+        app.refresh_plugin_catalog(false);
+        app
     }
 
     /// Get max context window size for current model
@@ -801,6 +815,7 @@ impl App {
 
             // Refresh git status for status bar (throttled inside handler).
             self.poll_git_status();
+            self.poll_plugin_catalog();
 
             // Keep process popup updated while open (non-blocking)
             if self.ui.popup == Popup::ProcessList {

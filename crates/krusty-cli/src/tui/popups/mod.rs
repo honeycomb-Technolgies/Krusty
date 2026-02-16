@@ -15,6 +15,7 @@ pub mod hooks;
 pub mod mcp_browser;
 pub mod model_select;
 pub mod pinch;
+pub mod plugins;
 pub mod process_list;
 pub mod scroll;
 pub mod session_list;

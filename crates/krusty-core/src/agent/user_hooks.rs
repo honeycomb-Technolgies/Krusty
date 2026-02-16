@@ -340,25 +340,16 @@ impl UserHookManager {
 
     /// Get enabled hooks that match a tool name
     pub fn matching_hooks(&mut self, hook_type: UserHookType, tool_name: &str) -> Vec<&UserHook> {
-        use std::collections::HashSet;
+        let mut matching_indices = Vec::new();
+        for (idx, hook) in self.hooks.iter_mut().enumerate() {
+            if hook.hook_type == hook_type && hook.matches(tool_name) {
+                matching_indices.push(idx);
+            }
+        }
 
-        // First pass: compile patterns and check matches, collect IDs into HashSet
-        let matching_ids: HashSet<String> = self
-            .hooks
-            .iter_mut()
-            .filter_map(|h| {
-                if h.hook_type == hook_type && h.matches(tool_name) {
-                    Some(h.id.clone())
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        // Second pass: return references (O(1) lookup instead of O(n))
-        self.hooks
-            .iter()
-            .filter(|h| matching_ids.contains(&h.id))
+        matching_indices
+            .into_iter()
+            .filter_map(|idx| self.hooks.get(idx))
             .collect()
     }
 }
@@ -448,7 +439,8 @@ impl UserHookExecutor {
         };
 
         let exit_code = output.status.code().unwrap_or(-1);
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr_trimmed = stderr.trim();
 
         tracing::debug!(
             hook_id = %hook.id,
@@ -461,19 +453,19 @@ impl UserHookExecutor {
             0 => UserHookResult::Continue,
             2 => {
                 // Block with stderr as reason
-                let reason = if stderr.is_empty() {
+                let reason = if stderr_trimmed.is_empty() {
                     "Hook blocked execution".to_string()
                 } else {
-                    stderr.trim().to_string()
+                    stderr_trimmed.to_string()
                 };
                 UserHookResult::Block { reason }
             }
             _ => {
                 // Warn but continue
-                let message = if stderr.is_empty() {
+                let message = if stderr_trimmed.is_empty() {
                     format!("Hook exited with code {}", exit_code)
                 } else {
-                    stderr.trim().to_string()
+                    stderr_trimmed.to_string()
                 };
                 UserHookResult::Warn { message }
             }

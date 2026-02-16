@@ -18,6 +18,11 @@ pub fn extensions_dir() -> PathBuf {
     config_dir().join(ui::EXTENSIONS_DIR_NAME)
 }
 
+/// Get the installable plugins directory (~/.krusty/plugins)
+pub fn plugins_dir() -> PathBuf {
+    config_dir().join(ui::PLUGINS_DIR_NAME)
+}
+
 /// Get the logs directory (~/.krusty/logs)
 pub fn logs_dir() -> PathBuf {
     config_dir().join("logs")

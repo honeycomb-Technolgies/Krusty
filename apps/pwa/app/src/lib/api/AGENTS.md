@@ -1,31 +1,12 @@
 # AGENTS Guide: /apps/pwa/app/src/lib/api
 
-## Scope
-- Applies to `/apps/pwa/app/src/lib/api` and its direct contents.
-- If a deeper directory has its own `AGENTS.md`, that file takes precedence for its subtree.
-
 ## Purpose
-Browser API client wrappers for backend communication.
+Typed browser client for server HTTP/SSE endpoints.
 
-## Local Standards
-- Deliver best-in-class quality: elegant, modular, organized, and performant code.
-- Keep code self-explanatory; add comments only for non-obvious constraints or tradeoffs.
-- Avoid over-engineering; add abstractions only when they buy clear maintainability.
-- Keep boundaries explicit between CLI, core runtime, server, desktop shell, and PWA surfaces.
-- Prefer safe implementations; justify `unsafe` usage explicitly if ever required.
-- Keep Svelte components focused and colocate cross-view state in `src/lib/stores`.
-- Do not introduce billing/account coupling into the PWA runtime surface.
-- Treat push endpoint response shapes as API contracts; coordinate changes with server `/push/*` routes and Settings diagnostics UI.
+## Guardrails
+- Treat interface types here as API contracts.
+- Keep endpoint names and response shapes aligned with `crates/krusty-server/src/routes`.
+- Preserve backwards compatibility for active clients when possible.
 
-## Quality Gates
-- Rust workspace: `cargo check --workspace`, `cargo test --workspace`, `cargo clippy --workspace -- -D warnings`, `cargo fmt --all -- --check`
-- Server local run: `cargo run -p krusty-server`
-- PWA: `cd apps/pwa/app && bun run check && bun run build`
-- Desktop shell: `cd apps/desktop/shell && cargo check --manifest-path src-tauri/Cargo.toml`
-
-## Structure Map
-### Subdirectories
-- _(none)_
-
-### Files
-- `client.ts`: TypeScript API client including chat streaming, credentials, and push subscription/status/test methods.
+## Validation
+- `cd apps/pwa/app && bun run check`

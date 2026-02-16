@@ -35,4 +35,7 @@ pub mod ui {
 
     /// Extensions subdirectory name
     pub const EXTENSIONS_DIR_NAME: &str = "extensions";
+
+    /// Installable plugins subdirectory name
+    pub const PLUGINS_DIR_NAME: &str = "plugins";
 }

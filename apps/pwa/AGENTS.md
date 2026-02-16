@@ -1,28 +1,12 @@
 # AGENTS Guide: /apps/pwa
 
-## Scope
-- Applies to `/apps/pwa` and its direct contents.
-- If a deeper directory has its own `AGENTS.md`, that file takes precedence for its subtree.
-
 ## Purpose
-Progressive web app workspace and high-level docs.
+Installable web client workspace.
 
-## Local Standards
-- Deliver best-in-class quality: elegant, modular, organized, and performant code.
-- Keep code self-explanatory; add comments only for non-obvious constraints or tradeoffs.
-- Avoid over-engineering; add abstractions only when they buy clear maintainability.
-- Keep boundaries explicit between CLI, core runtime, server, desktop shell, and PWA surfaces.
-- Prefer safe implementations; justify `unsafe` usage explicitly if ever required.
+## Guardrails
+- PWA is the primary UX surface; prioritize robustness and latency.
+- Keep offline/service-worker behavior predictable.
+- Do not couple UI state to billing/account internals.
 
-## Quality Gates
-- Rust workspace: `cargo check --workspace`, `cargo test --workspace`, `cargo clippy --workspace -- -D warnings`, `cargo fmt --all -- --check`
-- Server local run: `cargo run -p krusty-server`
-- PWA: `cd apps/pwa/app && bun run check && bun run build`
-- Desktop shell: `cd apps/desktop/shell && cargo check --manifest-path src-tauri/Cargo.toml`
-
-## Structure Map
-### Subdirectories
-- `app/`: Installable PWA chat/workspace client (active web surface). See `apps/pwa/app/AGENTS.md` for local detail.
-
-### Files
-- `README.md`: Human-facing documentation for this directory's purpose and workflows.
+## Validation
+- `cd apps/pwa/app && bun run check && bun run build`

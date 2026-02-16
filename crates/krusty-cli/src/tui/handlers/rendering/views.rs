@@ -258,6 +258,17 @@ impl App {
             Line::from(vec![
                 Span::raw(&padding),
                 Span::styled(
+                    "  /plugins",
+                    Style::default().fg(self.ui.theme.accent_color),
+                ),
+                Span::styled(
+                    "Manage plugins",
+                    Style::default().fg(self.ui.theme.text_color),
+                ),
+            ]),
+            Line::from(vec![
+                Span::raw(&padding),
+                Span::styled(
                     "  /hooks  ",
                     Style::default().fg(self.ui.theme.accent_color),
                 ),
