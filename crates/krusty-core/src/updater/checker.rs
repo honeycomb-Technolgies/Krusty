@@ -516,13 +516,14 @@ fn extract_tar_gz(archive: &Path, dest: &Path) -> Result<()> {
     let extracted_binary = extract_dir.join("krusty");
     if !extracted_binary.exists() {
         // Maybe it's in a subdirectory?
-        let entries: Vec<_> = std::fs::read_dir(&extract_dir)?
-            .filter_map(|e| e.ok())
-            .collect();
-        debug!(
-            "Extracted contents: {:?}",
-            entries.iter().map(|e| e.path()).collect::<Vec<_>>()
-        );
+        let mut extracted_entries = String::new();
+        for entry in std::fs::read_dir(&extract_dir)?.flatten() {
+            if !extracted_entries.is_empty() {
+                extracted_entries.push_str(", ");
+            }
+            extracted_entries.push_str(&entry.path().display().to_string());
+        }
+        debug!("Extracted contents: [{}]", extracted_entries);
         return Err(anyhow!("Binary 'krusty' not found in archive"));
     }
 

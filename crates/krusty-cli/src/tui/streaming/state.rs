@@ -457,13 +457,7 @@ impl StreamingManager {
         if blocks.is_empty() {
             return None;
         }
-        Some(
-            blocks
-                .iter()
-                .map(|b| b.thinking.as_str())
-                .collect::<Vec<_>>()
-                .join("\n"),
-        )
+        Some(join_thinking_blocks(blocks))
     }
 
     /// Reset to idle state
@@ -471,6 +465,17 @@ impl StreamingManager {
         tracing::info!("StreamingManager: resetting to Idle");
         self.phase = StreamPhase::Idle;
     }
+}
+
+fn join_thinking_blocks(blocks: &[ThinkingBlock]) -> String {
+    let mut joined = String::new();
+    for (idx, block) in blocks.iter().enumerate() {
+        if idx > 0 {
+            joined.push('\n');
+        }
+        joined.push_str(&block.thinking);
+    }
+    joined
 }
 
 impl Default for StreamingManager {

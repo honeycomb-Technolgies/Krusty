@@ -263,10 +263,17 @@ async fn get_credential(provider: &str) -> Option<String> {
     if result.is_some() {
         tracing::debug!("Found credential for '{}'", provider);
     } else {
+        let mut available = String::new();
+        for key in creds.keys() {
+            if !available.is_empty() {
+                available.push_str(", ");
+            }
+            available.push_str(key);
+        }
         tracing::warn!(
-            "No credential found for '{}' (available: {:?})",
+            "No credential found for '{}' (available: [{}])",
             provider,
-            creds.keys().collect::<Vec<_>>()
+            available
         );
     }
     result
