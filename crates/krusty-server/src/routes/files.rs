@@ -1,6 +1,8 @@
 //! File operations endpoints
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use axum::{
     extract::{Query, State},
@@ -71,6 +73,13 @@ async fn write_file(
     Query(query): Query<FileQuery>,
     Json(req): Json<FileWriteRequest>,
 ) -> Result<Json<FileWriteResponse>, AppError> {
+    const MAX_FILE_WRITE_SIZE: usize = 100 * 1024 * 1024; // 100MB
+    if req.content.len() > MAX_FILE_WRITE_SIZE {
+        return Err(AppError::BadRequest(
+            "File content exceeds maximum size of 100MB".to_string(),
+        ));
+    }
+
     let workspace = workspace_base(&state, user.as_ref());
     let path = resolve_path(&workspace, &query.path);
 
@@ -119,7 +128,8 @@ async fn get_tree(
         )));
     }
 
-    let entries = build_tree(&root_path, query.depth).await?;
+    let counter = Arc::new(AtomicUsize::new(0));
+    let entries = build_tree(&root_path, query.depth, &counter).await?;
 
     Ok(Json(TreeResponse {
         root: root_path.display().to_string(),
@@ -158,9 +168,15 @@ fn validate_path_within(base: &Path, path: &Path) -> Result<(), AppError> {
     crate::utils::paths::validate_path_within(base, path)
 }
 
+const MAX_TREE_ENTRIES: usize = 10_000;
+
 /// Recursively build directory tree
-async fn build_tree(path: &Path, depth: usize) -> Result<Vec<TreeEntry>, AppError> {
-    if depth == 0 {
+async fn build_tree(
+    path: &Path,
+    depth: usize,
+    counter: &Arc<AtomicUsize>,
+) -> Result<Vec<TreeEntry>, AppError> {
+    if depth == 0 || counter.load(Ordering::Relaxed) >= MAX_TREE_ENTRIES {
         return Ok(vec![]);
     }
 
@@ -174,6 +190,10 @@ async fn build_tree(path: &Path, depth: usize) -> Result<Vec<TreeEntry>, AppErro
         .await
         .map_err(|e| AppError::Internal(format!("Failed to read directory entry: {}", e)))?
     {
+        if counter.load(Ordering::Relaxed) >= MAX_TREE_ENTRIES {
+            break;
+        }
+
         let entry_path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
 
@@ -182,9 +202,11 @@ async fn build_tree(path: &Path, depth: usize) -> Result<Vec<TreeEntry>, AppErro
             continue;
         }
 
+        counter.fetch_add(1, Ordering::Relaxed);
+
         let is_dir = entry_path.is_dir();
         let children = if is_dir && depth > 1 {
-            Some(Box::pin(build_tree(&entry_path, depth - 1)).await?)
+            Some(Box::pin(build_tree(&entry_path, depth - 1, counter)).await?)
         } else {
             None
         };

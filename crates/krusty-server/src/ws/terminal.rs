@@ -87,7 +87,14 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             return;
         }
     };
-    let writer = pair.master.take_writer().unwrap();
+    let writer = match pair.master.take_writer() {
+        Ok(writer) => writer,
+        Err(e) => {
+            tracing::error!("Failed to take PTY writer: {}", e);
+            send_ws_error(&mut ws_sink, &format!("Failed to take PTY writer: {}", e)).await;
+            return;
+        }
+    };
 
     let (output_tx, mut output_rx) = mpsc::channel::<String>(256);
 

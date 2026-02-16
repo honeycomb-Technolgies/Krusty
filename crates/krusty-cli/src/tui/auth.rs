@@ -29,7 +29,18 @@ pub fn create_client_config(
         Some(config) => config,
         None => {
             tracing::warn!("Provider {:?} not found, falling back to MiniMax", provider);
-            get_provider(ProviderId::MiniMax).expect("MiniMax provider must be available")
+            match get_provider(ProviderId::MiniMax) {
+                Some(config) => config,
+                None => {
+                    tracing::error!(
+                        "MiniMax fallback provider not available, using default config"
+                    );
+                    return AiClientConfig {
+                        model: model.to_string(),
+                        ..AiClientConfig::default()
+                    };
+                }
+            }
         }
     };
 

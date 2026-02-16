@@ -56,6 +56,18 @@ impl From<RankedFile> for RankedFileInfo {
     }
 }
 
+/// Safely truncate a string to at most `max_bytes` bytes on a valid UTF-8 char boundary.
+fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 impl PinchContext {
     /// Create a new pinch context
     pub fn new(
@@ -162,7 +174,7 @@ impl PinchContext {
             msg.push_str("Follow these project rules and guidelines:\n\n");
             // Truncate if extremely long (keep most important parts)
             if ctx.len() > 8000 {
-                msg.push_str(&ctx[..8000]);
+                msg.push_str(truncate_utf8(ctx, 8000));
                 msg.push_str("\n\n...[truncated for context limits]\n");
             } else {
                 msg.push_str(ctx);
@@ -178,7 +190,7 @@ impl PinchContext {
                 msg.push_str(&format!("### `{}`\n\n```\n", path));
                 // Truncate very long files
                 if content.len() > 4000 {
-                    msg.push_str(&content[..4000]);
+                    msg.push_str(truncate_utf8(content, 4000));
                     msg.push_str("\n...[truncated]\n");
                 } else {
                     msg.push_str(content);
@@ -196,7 +208,7 @@ impl PinchContext {
             );
             // Truncate if very long
             if plan.len() > 6000 {
-                msg.push_str(&plan[..6000]);
+                msg.push_str(truncate_utf8(plan, 6000));
                 msg.push_str("\n\n...[plan truncated]\n");
             } else {
                 msg.push_str(plan);

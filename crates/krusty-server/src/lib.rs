@@ -299,7 +299,7 @@ async fn serve_pwa(uri: Uri) -> impl IntoResponse {
             .header(header::CONTENT_TYPE, mime.as_ref())
             .header(header::CACHE_CONTROL, cache_control(path))
             .body(Body::from(file.data.to_vec()))
-            .unwrap();
+            .expect("static response builder");
     }
 
     // SPA fallback: serve index.html for all non-file routes
@@ -309,14 +309,14 @@ async fn serve_pwa(uri: Uri) -> impl IntoResponse {
             .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
             .header(header::CACHE_CONTROL, "no-cache")
             .body(Body::from(index.data.to_vec()))
-            .unwrap(),
+            .expect("static response builder"),
         None => Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "text/plain")
             .body(Body::from(
                 "Krusty API server running. PWA frontend not embedded in this build.",
             ))
-            .unwrap(),
+            .expect("static response builder"),
     }
 }
 

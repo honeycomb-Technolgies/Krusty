@@ -84,7 +84,12 @@ export interface Attachment {
 	type: 'image' | 'file';
 }
 
+const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
+
 async function fileToBase64(file: File): Promise<string> {
+	if (file.size > MAX_FILE_SIZE) {
+		throw new Error(`File too large: ${(file.size / 1024 / 1024).toFixed(1)}MB exceeds 50MB limit`);
+	}
 	return new Promise((resolve, reject) => {
 		const reader = new FileReader();
 		reader.onload = () => {
@@ -104,6 +109,9 @@ async function fileToBase64(file: File): Promise<string> {
 }
 
 async function fileToText(file: File): Promise<string> {
+	if (file.size > MAX_FILE_SIZE) {
+		throw new Error(`File too large: ${(file.size / 1024 / 1024).toFixed(1)}MB exceeds 50MB limit`);
+	}
 	return new Promise((resolve, reject) => {
 		const reader = new FileReader();
 		reader.onload = () => resolve(reader.result as string);

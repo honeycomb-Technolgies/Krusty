@@ -55,23 +55,29 @@ pub fn router() -> Router<AppState> {
 /// List all sessions, optionally filtered by working directory
 async fn list_sessions(
     State(state): State<AppState>,
+    user: Option<CurrentUser>,
     Query(query): Query<ListSessionsQuery>,
 ) -> Result<Json<Vec<SessionResponse>>, AppError> {
     let db = Database::new(&state.db_path)?;
     let session_manager = SessionManager::new(db);
 
-    let sessions = session_manager.list_sessions(query.working_dir.as_deref())?;
+    let user_id = user.as_ref().and_then(|u| u.0.user_id.as_deref());
+    let sessions = session_manager.list_sessions_for_user(query.working_dir.as_deref(), user_id)?;
     let response: Vec<SessionResponse> = sessions.into_iter().map(Into::into).collect();
 
     Ok(Json(response))
 }
 
 /// List all directories that have sessions
-async fn list_directories(State(state): State<AppState>) -> Result<Json<Vec<String>>, AppError> {
+async fn list_directories(
+    State(state): State<AppState>,
+    user: Option<CurrentUser>,
+) -> Result<Json<Vec<String>>, AppError> {
     let db = Database::new(&state.db_path)?;
     let session_manager = SessionManager::new(db);
 
-    let directories = session_manager.list_session_directories()?;
+    let user_id = user.as_ref().and_then(|u| u.0.user_id.as_deref());
+    let directories = session_manager.list_session_directories_for_user(user_id)?;
 
     Ok(Json(directories))
 }
@@ -110,7 +116,11 @@ async fn get_session(
 
     let raw_messages = session_manager.load_session_messages(&id)?;
     let offset = query.offset.unwrap_or(0);
-    let limit = query.limit.unwrap_or(usize::MAX);
+    const MAX_MESSAGE_LIMIT: usize = 10_000;
+    let limit = query
+        .limit
+        .unwrap_or(MAX_MESSAGE_LIMIT)
+        .min(MAX_MESSAGE_LIMIT);
 
     let messages: Vec<MessageResponse> = raw_messages
         .into_iter()
@@ -136,6 +146,7 @@ async fn get_session(
 /// Update a session's title
 async fn update_session(
     State(state): State<AppState>,
+    user: Option<CurrentUser>,
     Path(id): Path<String>,
     Json(req): Json<UpdateSessionRequest>,
 ) -> Result<Json<SessionResponse>, AppError> {
@@ -146,6 +157,12 @@ async fn update_session(
     session_manager
         .get_session(&id)?
         .ok_or_else(|| AppError::NotFound(format!("Session {} not found", id)))?;
+
+    // Verify ownership in multi-tenant mode
+    let user_id = user.as_ref().and_then(|u| u.0.user_id.as_deref());
+    if !session_manager.verify_session_ownership(&id, user_id)? {
+        return Err(AppError::NotFound(format!("Session {} not found", id)));
+    }
 
     if req.title.is_none() && req.working_dir.is_none() {
         return Err(AppError::BadRequest(
@@ -177,6 +194,7 @@ async fn update_session(
 /// Delete a session
 async fn delete_session(
     State(state): State<AppState>,
+    user: Option<CurrentUser>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     let db = Database::new(&state.db_path)?;
@@ -186,6 +204,12 @@ async fn delete_session(
     session_manager
         .get_session(&id)?
         .ok_or_else(|| AppError::NotFound(format!("Session {} not found", id)))?;
+
+    // Verify ownership in multi-tenant mode
+    let user_id = user.as_ref().and_then(|u| u.0.user_id.as_deref());
+    if !session_manager.verify_session_ownership(&id, user_id)? {
+        return Err(AppError::NotFound(format!("Session {} not found", id)));
+    }
 
     session_manager.delete_session(&id)?;
 

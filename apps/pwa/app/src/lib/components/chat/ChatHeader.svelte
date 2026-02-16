@@ -38,6 +38,7 @@
 	// Scroll optimization
 	let dirListContainer = $state<HTMLDivElement>(undefined!);
 	let dirScrollTimeout: ReturnType<typeof setTimeout>;
+	let pendingPrefetch: ReturnType<typeof setTimeout> | null = null;
 	let isSwitchingBranch = $state(false);
 	let isSwitchingWorktree = $state(false);
 
@@ -57,6 +58,12 @@
 		startGitPolling();
 		return () => {
 			stopGitPolling();
+			clearTimeout(dirScrollTimeout);
+			if (pendingPrefetch) {
+				clearTimeout(pendingPrefetch);
+				pendingPrefetch = null;
+			}
+			dirCache.clear();
 		};
 	});
 
@@ -140,6 +147,7 @@
 	}
 
 	async function openNewSessionModal() {
+		dirCache.clear();
 		selectedDirectory = getLastDirectory();
 		showNewSessionModal = true;
 		// Load initial directory
@@ -155,14 +163,16 @@
 
 	// Navigation = Selection: wherever you navigate becomes selected
 	function navigateTo(path: string) {
+		if (pendingPrefetch) clearTimeout(pendingPrefetch);
 		selectedDirectory = path;
 		loadDirectory(path);
 		// Pre-fetch visible subdirectories for instant next click
-		setTimeout(() => {
+		pendingPrefetch = setTimeout(() => {
 			const cached = dirCache.get(path);
 			if (cached) {
 				cached.directories.slice(0, 5).forEach(d => prefetchDirectory(d.path));
 			}
+			pendingPrefetch = null;
 		}, 50);
 	}
 
