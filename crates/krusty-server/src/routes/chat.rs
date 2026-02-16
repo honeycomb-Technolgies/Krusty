@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::convert::Infallible;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -24,8 +25,9 @@ use krusty_core::ai::title::generate_title;
 use krusty_core::ai::types::{
     AiToolCall, Content, FinishReason, ModelMessage, Role, ThinkingConfig,
 };
+use krusty_core::plan::{PlanFile, PlanManager, TaskStatus};
 use krusty_core::process::ProcessRegistry;
-use krusty_core::storage::Database;
+use krusty_core::storage::{Database, WorkMode};
 use krusty_core::tools::registry::{
     tool_category, PermissionMode, ToolCategory, ToolContext, ToolRegistry,
 };
@@ -33,7 +35,7 @@ use krusty_core::SessionManager;
 
 use crate::auth::CurrentUser;
 use crate::error::AppError;
-use crate::push::{PushPayload, PushService};
+use crate::push::{PushEventType, PushPayload, PushService};
 use crate::types::{AgenticEvent, ChatRequest, ToolApprovalRequest, ToolResultRequest};
 use crate::AppState;
 
@@ -45,6 +47,7 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 const EXPLORATION_BUDGET_SOFT: usize = 15;
 const EXPLORATION_BUDGET_HARD: usize = 30;
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
+const REPEATED_TOOL_FAILURE_THRESHOLD: usize = 2;
 const SESSION_LOCK_MAX_ENTRIES: usize = 1000;
 const SESSION_LOCK_MAX_AGE: Duration = Duration::from_secs(3600);
 
@@ -63,6 +66,7 @@ struct ChatSessionContext {
     session_id: String,
     session_manager: SessionManager,
     working_dir: PathBuf,
+    work_mode: WorkMode,
     user_id: Option<String>,
     guard: OwnedMutexGuard<()>,
 }
@@ -164,6 +168,7 @@ async fn setup_chat_session(
         session_id: session_id.to_string(),
         session_manager,
         working_dir,
+        work_mode: session.work_mode,
         user_id,
         guard,
     })
@@ -213,6 +218,15 @@ async fn chat(
         req.thinking_enabled,
     )
     .await?;
+
+    let mut work_mode = ctx.work_mode;
+    if let Some(requested_mode) = req.mode {
+        if requested_mode != work_mode {
+            ctx.session_manager
+                .update_session_work_mode(&session_id, requested_mode)?;
+            work_mode = requested_mode;
+        }
+    }
 
     let permission_mode = req.permission_mode;
 
@@ -272,6 +286,7 @@ async fn chat(
             db_path,
             working_dir,
             ctx_user_id,
+            work_mode,
             permission_mode,
             pending_approvals,
             push_service,
@@ -331,6 +346,20 @@ async fn tool_result(
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, AppError> {
     let mut ctx = setup_chat_session(&state, user.as_ref(), &req.session_id, None, false).await?;
 
+    if req.tool_call_id.starts_with("plan-confirm-") {
+        if let Some(choice) = parse_plan_confirm_choice(&req.result) {
+            if choice == "execute" {
+                ctx.session_manager
+                    .update_session_work_mode(&req.session_id, WorkMode::Build)?;
+                ctx.work_mode = WorkMode::Build;
+            } else if choice == "abandon" {
+                if let Ok(plan_manager) = PlanManager::new((*state.db_path).clone()) {
+                    let _ = plan_manager.abandon_plan(&req.session_id);
+                }
+            }
+        }
+    }
+
     let has_thinking = ctx.conversation.iter().any(|msg| {
         msg.content
             .iter()
@@ -368,6 +397,7 @@ async fn tool_result(
         conversation,
         session_id,
         working_dir,
+        work_mode,
         user_id,
         guard,
         ..
@@ -386,6 +416,7 @@ async fn tool_result(
             db_path,
             working_dir,
             user_id,
+            work_mode,
             PermissionMode::Autonomous,
             pending_approvals,
             push_service,
@@ -434,6 +465,7 @@ async fn run_agentic_loop(
     db_path: Arc<PathBuf>,
     working_dir: PathBuf,
     user_id: Option<String>,
+    mut work_mode: WorkMode,
     permission_mode: PermissionMode,
     pending_approvals: Arc<RwLock<HashMap<String, oneshot::Sender<bool>>>>,
     push_service: Option<Arc<PushService>>,
@@ -456,6 +488,7 @@ async fn run_agentic_loop(
     let mut client_connected = true;
     let mut last_token_count = 0usize;
     let mut exploration_budget_count = 0usize;
+    let mut tool_failure_signatures: HashMap<String, usize> = HashMap::new();
     let _ = session_manager.set_agent_state(&session_id, "streaming");
 
     for iteration in 1..=MAX_ITERATIONS {
@@ -482,18 +515,17 @@ async fn run_agentic_loop(
                     let _ = session_manager.update_token_count(&session_id, last_token_count);
                 }
                 let _ = session_manager.set_agent_state(&session_id, "error");
-                if !client_connected {
-                    fire_push(
-                        &push_service,
-                        user_id.as_deref(),
-                        PushPayload {
-                            title: "Krusty".into(),
-                            body: "Session encountered an error".into(),
-                            session_id: Some(session_id),
-                            tag: None,
-                        },
-                    );
-                }
+                fire_push(
+                    &push_service,
+                    user_id.as_deref(),
+                    PushPayload {
+                        title: "Krusty".into(),
+                        body: "Session encountered an error".into(),
+                        session_id: Some(session_id),
+                        tag: None,
+                    },
+                    PushEventType::Error,
+                );
                 return;
             }
         };
@@ -512,47 +544,70 @@ async fn run_agentic_loop(
         }
 
         if tool_calls.is_empty() {
-            if let Some(plan) = try_detect_plan(&text) {
-                if client_connected {
-                    send_event(
-                        &sse_tx,
-                        AgenticEvent::PlanUpdate {
-                            items: plan.tasks.clone(),
-                        },
-                    )
-                    .await;
-                    let tool_call_id = format!("plan-confirm-{}", uuid::Uuid::new_v4());
-                    send_event(
-                        &sse_tx,
-                        AgenticEvent::PlanComplete {
-                            tool_call_id: tool_call_id.clone(),
-                            title: plan.title,
-                            task_count: plan.tasks.len(),
-                        },
-                    )
-                    .await;
-                    send_event(
-                        &sse_tx,
-                        AgenticEvent::AwaitingInput {
-                            tool_call_id,
-                            tool_name: "PlanConfirm".to_string(),
-                        },
-                    )
-                    .await;
-                }
-                if last_token_count > 0 {
-                    let _ = session_manager.update_token_count(&session_id, last_token_count);
-                }
-                let _ = session_manager.set_agent_state(&session_id, "awaiting_input");
-                if client_connected {
-                    send_event(
-                        &sse_tx,
-                        AgenticEvent::Finish {
-                            session_id: session_id.clone(),
-                        },
-                    )
-                    .await;
-                } else {
+            if work_mode == WorkMode::Plan {
+                if let Some(mut plan) = try_detect_plan(&text) {
+                    plan.plan_file.session_id = Some(session_id.clone());
+                    plan.plan_file.working_dir = Some(working_dir.to_string_lossy().to_string());
+
+                    match PlanManager::new((*db_path).clone()) {
+                        Ok(plan_manager) => {
+                            if let Err(e) =
+                                plan_manager.save_plan_for_session(&session_id, &plan.plan_file)
+                            {
+                                tracing::warn!(
+                                    session_id = %session_id,
+                                    "Failed to save detected plan: {}", e
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                session_id = %session_id,
+                                "Failed to initialize plan manager for detected plan: {}", e
+                            );
+                        }
+                    }
+
+                    if client_connected {
+                        send_event(
+                            &sse_tx,
+                            AgenticEvent::PlanUpdate {
+                                items: plan.tasks.clone(),
+                            },
+                        )
+                        .await;
+                        let tool_call_id = format!("plan-confirm-{}", uuid::Uuid::new_v4());
+                        send_event(
+                            &sse_tx,
+                            AgenticEvent::PlanComplete {
+                                tool_call_id: tool_call_id.clone(),
+                                title: plan.title.clone(),
+                                task_count: plan.tasks.len(),
+                            },
+                        )
+                        .await;
+                        send_event(
+                            &sse_tx,
+                            AgenticEvent::AwaitingInput {
+                                tool_call_id,
+                                tool_name: "PlanConfirm".to_string(),
+                            },
+                        )
+                        .await;
+                    }
+                    if last_token_count > 0 {
+                        let _ = session_manager.update_token_count(&session_id, last_token_count);
+                    }
+                    let _ = session_manager.set_agent_state(&session_id, "awaiting_input");
+                    if client_connected {
+                        send_event(
+                            &sse_tx,
+                            AgenticEvent::Finish {
+                                session_id: session_id.clone(),
+                            },
+                        )
+                        .await;
+                    }
                     fire_push(
                         &push_service,
                         user_id.as_deref(),
@@ -562,9 +617,10 @@ async fn run_agentic_loop(
                             session_id: Some(session_id),
                             tag: None,
                         },
+                        PushEventType::AwaitingInput,
                     );
+                    return;
                 }
-                return;
             }
 
             if client_connected {
@@ -578,24 +634,6 @@ async fn run_agentic_loop(
                 .await;
             }
             break;
-        }
-
-        if client_connected {
-            for call in tool_calls.iter().filter(|t| t.name == "enter_plan_mode") {
-                let reason = call
-                    .arguments
-                    .get("reason")
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
-                send_event(
-                    &sse_tx,
-                    AgenticEvent::ModeChange {
-                        mode: "plan".to_string(),
-                        reason,
-                    },
-                )
-                .await;
-            }
         }
 
         let ask_user_calls: Vec<_> = tool_calls
@@ -628,18 +666,18 @@ async fn run_agentic_loop(
                     },
                 )
                 .await;
-            } else {
-                fire_push(
-                    &push_service,
-                    user_id.as_deref(),
-                    PushPayload {
-                        title: "Krusty".into(),
-                        body: "Krusty needs your input".into(),
-                        session_id: Some(session_id),
-                        tag: None,
-                    },
-                );
             }
+            fire_push(
+                &push_service,
+                user_id.as_deref(),
+                PushPayload {
+                    title: "Krusty".into(),
+                    body: "Krusty needs your input".into(),
+                    session_id: Some(session_id),
+                    tag: None,
+                },
+                PushEventType::AwaitingInput,
+            );
             return;
         }
 
@@ -649,7 +687,16 @@ async fn run_agentic_loop(
         let has_action = tool_calls.iter().any(|t| {
             matches!(
                 t.name.as_str(),
-                "edit" | "write" | "bash" | "build" | "task_start" | "task_complete"
+                "edit"
+                    | "write"
+                    | "bash"
+                    | "build"
+                    | "task_start"
+                    | "task_complete"
+                    | "add_subtask"
+                    | "set_dependency"
+                    | "set_work_mode"
+                    | "enter_plan_mode"
             )
         });
         if has_action {
@@ -659,7 +706,7 @@ async fn run_agentic_loop(
         }
 
         let _ = session_manager.set_agent_state(&session_id, "tool_executing");
-        let tool_results = execute_tools(
+        let (tool_results, next_work_mode) = execute_tools(
             &tool_registry,
             &tool_calls,
             &working_dir,
@@ -668,8 +715,15 @@ async fn run_agentic_loop(
             user_id.as_deref(),
             permission_mode,
             &pending_approvals,
+            &session_id,
+            db_path.as_ref().as_path(),
+            work_mode,
         )
         .await;
+        work_mode = next_work_mode;
+
+        let fail_fast_diagnostic =
+            detect_repeated_tool_failures(&mut tool_failure_signatures, &tool_calls, &tool_results);
 
         if exploration_budget_count >= EXPLORATION_BUDGET_HARD {
             tracing::warn!(
@@ -689,6 +743,36 @@ async fn run_agentic_loop(
         };
         conversation.push(tool_msg.clone());
         save_message(&session_manager, &session_id, &tool_msg);
+
+        if let Some(diagnostic) = fail_fast_diagnostic {
+            tracing::warn!(
+                threshold = REPEATED_TOOL_FAILURE_THRESHOLD,
+                iteration,
+                session_id = %session_id,
+                diagnostic = %diagnostic,
+                "Fail-fast: stopping repeated tool failure loop"
+            );
+            let _ = session_manager.set_agent_state(&session_id, "idle");
+
+            if client_connected && !sse_tx.is_closed() {
+                send_event(
+                    &sse_tx,
+                    AgenticEvent::Error {
+                        error: diagnostic.clone(),
+                    },
+                )
+                .await;
+                send_event(
+                    &sse_tx,
+                    AgenticEvent::TurnComplete {
+                        turn: iteration,
+                        has_more: false,
+                    },
+                )
+                .await;
+            }
+            break;
+        }
 
         let _ = session_manager.set_agent_state(&session_id, "streaming");
 
@@ -712,27 +796,33 @@ async fn run_agentic_loop(
     let _ = session_manager.set_agent_state(&session_id, "idle");
 
     if client_connected && !sse_tx.is_closed() {
-        send_event(&sse_tx, AgenticEvent::Finish { session_id }).await;
-    } else {
-        // Client disconnected mid-run — get session title for the notification
-        let title = session_manager
-            .get_session(&session_id)
-            .ok()
-            .flatten()
-            .map(|s| s.title)
-            .unwrap_or_else(|| "Session".to_string());
-
-        fire_push(
-            &push_service,
-            user_id.as_deref(),
-            PushPayload {
-                title: "Krusty".into(),
-                body: format!("{title} is complete"),
-                session_id: Some(session_id.clone()),
-                tag: Some(format!("session-{session_id}")),
+        send_event(
+            &sse_tx,
+            AgenticEvent::Finish {
+                session_id: session_id.clone(),
             },
-        );
+        )
+        .await;
     }
+
+    let title = session_manager
+        .get_session(&session_id)
+        .ok()
+        .flatten()
+        .map(|s| s.title)
+        .unwrap_or_else(|| "Session".to_string());
+
+    fire_push(
+        &push_service,
+        user_id.as_deref(),
+        PushPayload {
+            title: "Krusty".into(),
+            body: format!("{title} is complete"),
+            session_id: Some(session_id.clone()),
+            tag: Some(format!("session-{session_id}")),
+        },
+        PushEventType::Completion,
+    );
 }
 
 struct ThinkingBlock {
@@ -755,42 +845,54 @@ async fn process_stream(
     let mut tool_calls = Vec::new();
     let mut finish_reason = FinishReason::Stop;
     let mut prompt_tokens = 0usize;
+    let mut client_alive = true;
 
     loop {
         let part = match tokio::time::timeout(AI_STREAM_TIMEOUT, api_rx.recv()).await {
             Ok(Some(part)) => part,
             Ok(None) => break,
             Err(_) => {
-                send_event(
-                    sse_tx,
-                    AgenticEvent::Error {
-                        error: "AI stream timeout: no data received for 120 seconds".to_string(),
-                    },
-                )
-                .await;
+                if client_alive {
+                    send_event(
+                        sse_tx,
+                        AgenticEvent::Error {
+                            error: "AI stream timeout: no data received for 120 seconds"
+                                .to_string(),
+                        },
+                    )
+                    .await;
+                }
                 break;
             }
         };
 
+        if client_alive && sse_tx.is_closed() {
+            client_alive = false;
+        }
+
         match &part {
             StreamPart::TextDelta { delta } => {
                 text_buffer.push_str(delta);
-                send_event(
-                    sse_tx,
-                    AgenticEvent::TextDelta {
-                        delta: delta.clone(),
-                    },
-                )
-                .await;
+                if client_alive {
+                    send_event(
+                        sse_tx,
+                        AgenticEvent::TextDelta {
+                            delta: delta.clone(),
+                        },
+                    )
+                    .await;
+                }
             }
             StreamPart::ThinkingDelta { thinking, .. } => {
-                send_event(
-                    sse_tx,
-                    AgenticEvent::ThinkingDelta {
-                        thinking: thinking.clone(),
-                    },
-                )
-                .await;
+                if client_alive {
+                    send_event(
+                        sse_tx,
+                        AgenticEvent::ThinkingDelta {
+                            thinking: thinking.clone(),
+                        },
+                    )
+                    .await;
+                }
             }
             StreamPart::ThinkingComplete {
                 thinking,
@@ -803,53 +905,57 @@ async fn process_stream(
                 });
             }
             StreamPart::ToolCallStart { id, name } => {
-                send_event(
-                    sse_tx,
-                    AgenticEvent::ToolCallStart {
-                        id: id.clone(),
-                        name: name.clone(),
-                    },
-                )
-                .await;
+                if client_alive {
+                    send_event(
+                        sse_tx,
+                        AgenticEvent::ToolCallStart {
+                            id: id.clone(),
+                            name: name.clone(),
+                        },
+                    )
+                    .await;
+                }
             }
             StreamPart::ToolCallComplete { tool_call } => {
                 tool_calls.push(tool_call.clone());
-                send_event(
-                    sse_tx,
-                    AgenticEvent::ToolCallComplete {
-                        id: tool_call.id.clone(),
-                        name: tool_call.name.clone(),
-                        arguments: tool_call.arguments.clone(),
-                    },
-                )
-                .await;
+                if client_alive {
+                    send_event(
+                        sse_tx,
+                        AgenticEvent::ToolCallComplete {
+                            id: tool_call.id.clone(),
+                            name: tool_call.name.clone(),
+                            arguments: tool_call.arguments.clone(),
+                        },
+                    )
+                    .await;
+                }
             }
             StreamPart::Finish { reason } => finish_reason = reason.clone(),
             StreamPart::Usage { usage } => {
                 prompt_tokens = usage.prompt_tokens + usage.completion_tokens;
-                send_event(
-                    sse_tx,
-                    AgenticEvent::Usage {
-                        prompt_tokens,
-                        completion_tokens: usage.completion_tokens,
-                    },
-                )
-                .await;
+                if client_alive {
+                    send_event(
+                        sse_tx,
+                        AgenticEvent::Usage {
+                            prompt_tokens,
+                            completion_tokens: usage.completion_tokens,
+                        },
+                    )
+                    .await;
+                }
             }
             StreamPart::Error { error } => {
-                send_event(
-                    sse_tx,
-                    AgenticEvent::Error {
-                        error: error.clone(),
-                    },
-                )
-                .await;
+                if client_alive {
+                    send_event(
+                        sse_tx,
+                        AgenticEvent::Error {
+                            error: error.clone(),
+                        },
+                    )
+                    .await;
+                }
             }
             _ => {}
-        }
-
-        if sse_tx.is_closed() {
-            break;
         }
     }
 
@@ -871,7 +977,11 @@ async fn execute_tools(
     user_id: Option<&str>,
     permission_mode: PermissionMode,
     pending_approvals: &Arc<RwLock<HashMap<String, oneshot::Sender<bool>>>>,
-) -> Vec<Content> {
+    session_id: &str,
+    db_path: &Path,
+    current_mode: WorkMode,
+) -> (Vec<Content>, WorkMode) {
+    let mut work_mode = current_mode;
     let mut results = Vec::new();
 
     for call in tool_calls {
@@ -971,32 +1081,59 @@ async fn execute_tools(
         )
         .await;
 
-        if call.name == "enter_plan_mode" {
-            let reason = call
-                .arguments
-                .get("reason")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Starting planning phase");
+        if call.name == "set_work_mode" || call.name == "enter_plan_mode" {
+            let (result, next_mode, mode_change_reason) =
+                handle_mode_switch_tool_call(call, session_id, db_path, work_mode);
+            work_mode = next_mode;
 
-            let output = format!(
-                "Now in Plan mode. {}\n\nCreate a phase-based checkbox plan before making changes.",
-                reason
-            );
+            if let Some(reason) = mode_change_reason {
+                send_event(
+                    sse_tx,
+                    AgenticEvent::ModeChange {
+                        mode: work_mode.to_string(),
+                        reason: Some(reason),
+                    },
+                )
+                .await;
+            }
 
+            let output = truncate_output(&result.output);
             send_event(
                 sse_tx,
                 AgenticEvent::ToolResult {
                     id: call.id.clone(),
                     output: output.clone(),
-                    is_error: false,
+                    is_error: result.is_error,
                 },
             )
             .await;
-
             results.push(Content::ToolResult {
                 tool_use_id: call.id.clone(),
                 output: serde_json::Value::String(output),
-                is_error: None,
+                is_error: if result.is_error { Some(true) } else { None },
+            });
+            continue;
+        }
+
+        if matches!(
+            call.name.as_str(),
+            "task_start" | "task_complete" | "add_subtask" | "set_dependency"
+        ) {
+            let result = handle_plan_task_tool_call(call, session_id, db_path);
+            let output = truncate_output(&result.output);
+            send_event(
+                sse_tx,
+                AgenticEvent::ToolResult {
+                    id: call.id.clone(),
+                    output: output.clone(),
+                    is_error: result.is_error,
+                },
+            )
+            .await;
+            results.push(Content::ToolResult {
+                tool_use_id: call.id.clone(),
+                output: serde_json::Value::String(output),
+                is_error: if result.is_error { Some(true) } else { None },
             });
             continue;
         }
@@ -1053,7 +1190,7 @@ async fn execute_tools(
         let ctx = ToolContext {
             working_dir: working_dir.to_path_buf(),
             process_registry: Some(process_registry.clone()),
-            plan_mode: false,
+            plan_mode: work_mode == WorkMode::Plan,
             user_id: user_id.map(ToString::to_string),
             sandbox_root: Some(working_dir.to_path_buf()),
             ..Default::default()
@@ -1095,7 +1232,384 @@ async fn execute_tools(
         });
     }
 
-    results
+    (results, work_mode)
+}
+
+fn handle_mode_switch_tool_call(
+    call: &AiToolCall,
+    session_id: &str,
+    db_path: &Path,
+    current_mode: WorkMode,
+) -> (
+    krusty_core::tools::registry::ToolResult,
+    WorkMode,
+    Option<String>,
+) {
+    let clear_existing = call
+        .arguments
+        .get("clear_existing")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let (target_mode, fallback_reason) = if call.name == "enter_plan_mode" {
+        (WorkMode::Plan, "Starting planning phase")
+    } else {
+        let Some(mode) = call.arguments.get("mode").and_then(|v| v.as_str()) else {
+            return (
+                krusty_core::tools::registry::ToolResult {
+                    output: "Error: mode parameter is required (build|plan)".to_string(),
+                    is_error: true,
+                },
+                current_mode,
+                None,
+            );
+        };
+        let parsed_mode = match mode {
+            "build" => WorkMode::Build,
+            "plan" => WorkMode::Plan,
+            other => {
+                return (
+                    krusty_core::tools::registry::ToolResult {
+                        output: format!("Error: invalid mode '{}'. Use 'build' or 'plan'.", other),
+                        is_error: true,
+                    },
+                    current_mode,
+                    None,
+                );
+            }
+        };
+        let fallback_reason = if parsed_mode == WorkMode::Plan {
+            "Starting planning phase"
+        } else {
+            "Starting implementation phase"
+        };
+        (parsed_mode, fallback_reason)
+    };
+
+    let reason = call
+        .arguments
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .unwrap_or(fallback_reason)
+        .to_string();
+
+    let mut clear_plan_note = String::new();
+    if clear_existing && target_mode == WorkMode::Plan {
+        match PlanManager::new(db_path.to_path_buf()) {
+            Ok(plan_manager) => {
+                if let Err(e) = plan_manager.abandon_plan(session_id) {
+                    clear_plan_note = format!("\n\nWarning: failed to clear existing plan: {}", e);
+                } else {
+                    clear_plan_note = "\n\nCleared any existing active plan.".to_string();
+                }
+            }
+            Err(e) => {
+                clear_plan_note = format!("\n\nWarning: failed to initialize plan manager: {}", e);
+            }
+        }
+    }
+
+    let mut next_mode = current_mode;
+    let mut mode_change_reason = None;
+    if target_mode != current_mode {
+        let session_manager = match Database::new(db_path) {
+            Ok(db) => SessionManager::new(db),
+            Err(e) => {
+                return (
+                    krusty_core::tools::registry::ToolResult {
+                        output: format!("Error: failed to open database for mode switch: {}", e),
+                        is_error: true,
+                    },
+                    current_mode,
+                    None,
+                );
+            }
+        };
+        if let Err(e) = session_manager.update_session_work_mode(session_id, target_mode) {
+            return (
+                krusty_core::tools::registry::ToolResult {
+                    output: format!("Error: failed to switch work mode: {}", e),
+                    is_error: true,
+                },
+                current_mode,
+                None,
+            );
+        }
+        next_mode = target_mode;
+        mode_change_reason = Some(reason.clone());
+    }
+
+    let output = if target_mode == WorkMode::Plan {
+        format!(
+            "Now in Plan mode. {}\n\nCreate a phase-based checkbox plan before making changes.{}",
+            reason, clear_plan_note
+        )
+    } else {
+        format!(
+            "Now in Build mode. {}\n\nProceed with implementation and keep plan task status updated.{}",
+            reason, clear_plan_note
+        )
+    };
+
+    (
+        krusty_core::tools::registry::ToolResult {
+            output,
+            is_error: false,
+        },
+        next_mode,
+        mode_change_reason,
+    )
+}
+
+fn handle_plan_task_tool_call(
+    call: &AiToolCall,
+    session_id: &str,
+    db_path: &Path,
+) -> krusty_core::tools::registry::ToolResult {
+    let plan_manager = match PlanManager::new(db_path.to_path_buf()) {
+        Ok(manager) => manager,
+        Err(e) => {
+            return krusty_core::tools::registry::ToolResult {
+                output: format!("Error: failed to initialize plan manager: {}", e),
+                is_error: true,
+            };
+        }
+    };
+
+    let mut plan = match plan_manager.get_plan(session_id) {
+        Ok(Some(plan)) => plan,
+        Ok(None) => {
+            return krusty_core::tools::registry::ToolResult {
+                output: "Error: No active plan. Create a plan first.".to_string(),
+                is_error: true,
+            };
+        }
+        Err(e) => {
+            return krusty_core::tools::registry::ToolResult {
+                output: format!("Error: failed to load plan: {}", e),
+                is_error: true,
+            };
+        }
+    };
+
+    match call.name.as_str() {
+        "task_start" => {
+            let Some(task_id) = call.arguments.get("task_id").and_then(|v| v.as_str()) else {
+                return krusty_core::tools::registry::ToolResult {
+                    output: "Error: task_id required".to_string(),
+                    is_error: true,
+                };
+            };
+
+            match plan.start_task(task_id) {
+                Ok(()) => {
+                    if let Err(e) = plan_manager.save_plan_for_session(session_id, &plan) {
+                        return krusty_core::tools::registry::ToolResult {
+                            output: format!("Error: failed to save plan: {}", e),
+                            is_error: true,
+                        };
+                    }
+                    krusty_core::tools::registry::ToolResult {
+                        output: format!("Started task {}. Status: in_progress", task_id),
+                        is_error: false,
+                    }
+                }
+                Err(e) => krusty_core::tools::registry::ToolResult {
+                    output: format!("Error: {}", e),
+                    is_error: true,
+                },
+            }
+        }
+        "task_complete" => {
+            let result_text = call
+                .arguments
+                .get("result")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            if result_text.is_empty() {
+                return krusty_core::tools::registry::ToolResult {
+                    output: "Error: 'result' parameter is required. Describe what you accomplished for this specific task.".to_string(),
+                    is_error: true,
+                };
+            }
+
+            if call
+                .arguments
+                .get("task_ids")
+                .and_then(|v| v.as_array())
+                .is_some()
+            {
+                return krusty_core::tools::registry::ToolResult {
+                    output: "Error: Batch completion (task_ids) is not allowed. Complete ONE task at a time with task_id. This ensures focused, quality work.".to_string(),
+                    is_error: true,
+                };
+            }
+
+            let Some(task_id) = call.arguments.get("task_id").and_then(|v| v.as_str()) else {
+                return krusty_core::tools::registry::ToolResult {
+                    output: "Error: task_id required. Specify which task you're completing."
+                        .to_string(),
+                    is_error: true,
+                };
+            };
+
+            let task_status = plan.find_task(task_id).map(|t| t.status);
+            match task_status {
+                None => {
+                    return krusty_core::tools::registry::ToolResult {
+                        output: format!("Error: Task '{}' not found in plan.", task_id),
+                        is_error: true,
+                    };
+                }
+                Some(TaskStatus::Completed) => {
+                    return krusty_core::tools::registry::ToolResult {
+                        output: format!("Error: Task '{}' is already completed.", task_id),
+                        is_error: true,
+                    };
+                }
+                Some(TaskStatus::Blocked) => {
+                    return krusty_core::tools::registry::ToolResult {
+                        output: format!(
+                            "Error: Task '{}' is blocked. Complete its dependencies first, then use task_start.",
+                            task_id
+                        ),
+                        is_error: true,
+                    };
+                }
+                Some(TaskStatus::Pending) => {
+                    return krusty_core::tools::registry::ToolResult {
+                        output: format!(
+                            "Error: Task '{}' was not started. Use task_start(\"{}\") first, do the work, then complete it.",
+                            task_id, task_id
+                        ),
+                        is_error: true,
+                    };
+                }
+                Some(TaskStatus::InProgress) => {}
+            }
+
+            if let Err(e) = plan.complete_task(task_id, &result_text) {
+                return krusty_core::tools::registry::ToolResult {
+                    output: format!("Error: {}", e),
+                    is_error: true,
+                };
+            }
+            if let Err(e) = plan_manager.save_plan_for_session(session_id, &plan) {
+                return krusty_core::tools::registry::ToolResult {
+                    output: format!("Error: failed to save plan: {}", e),
+                    is_error: true,
+                };
+            }
+
+            let (completed, total) = plan.progress();
+            let mut msg = format!(
+                "Completed task {}. Progress: {}/{}",
+                task_id, completed, total
+            );
+            if completed == total {
+                msg.push_str("\n\nAll tasks complete. Plan finished.");
+            } else {
+                let ready = plan.get_ready_tasks();
+                if !ready.is_empty() {
+                    msg.push_str("\n\nReady to work on next:");
+                    for task in &ready {
+                        msg.push_str(&format!("\n  → Task {}: {}", task.id, task.description));
+                    }
+                    msg.push_str("\n\nPick one and call task_start immediately.");
+                } else {
+                    msg.push_str("\n\nNo tasks currently unblocked. Check dependencies.");
+                }
+            }
+
+            krusty_core::tools::registry::ToolResult {
+                output: msg,
+                is_error: false,
+            }
+        }
+        "add_subtask" => {
+            let parent_id = call
+                .arguments
+                .get("parent_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let description = call
+                .arguments
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let context = call.arguments.get("context").and_then(|v| v.as_str());
+
+            if parent_id.is_empty() || description.is_empty() {
+                return krusty_core::tools::registry::ToolResult {
+                    output: "Error: parent_id and description required".to_string(),
+                    is_error: true,
+                };
+            }
+
+            match plan.add_subtask(parent_id, description, context) {
+                Ok(subtask_id) => {
+                    if let Err(e) = plan_manager.save_plan_for_session(session_id, &plan) {
+                        return krusty_core::tools::registry::ToolResult {
+                            output: format!("Error: failed to save plan: {}", e),
+                            is_error: true,
+                        };
+                    }
+                    krusty_core::tools::registry::ToolResult {
+                        output: format!("Created subtask {} under {}", subtask_id, parent_id),
+                        is_error: false,
+                    }
+                }
+                Err(e) => krusty_core::tools::registry::ToolResult {
+                    output: format!("Error: {}", e),
+                    is_error: true,
+                },
+            }
+        }
+        "set_dependency" => {
+            let task_id = call
+                .arguments
+                .get("task_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let blocked_by = call
+                .arguments
+                .get("blocked_by")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            if task_id.is_empty() || blocked_by.is_empty() {
+                return krusty_core::tools::registry::ToolResult {
+                    output: "Error: task_id and blocked_by required".to_string(),
+                    is_error: true,
+                };
+            }
+
+            match plan.add_dependency(task_id, blocked_by) {
+                Ok(()) => {
+                    if let Err(e) = plan_manager.save_plan_for_session(session_id, &plan) {
+                        return krusty_core::tools::registry::ToolResult {
+                            output: format!("Error: failed to save plan: {}", e),
+                            is_error: true,
+                        };
+                    }
+                    krusty_core::tools::registry::ToolResult {
+                        output: format!("Task {} is now blocked by {}", task_id, blocked_by),
+                        is_error: false,
+                    }
+                }
+                Err(e) => krusty_core::tools::registry::ToolResult {
+                    output: format!("Error: {}", e),
+                    is_error: true,
+                },
+            }
+        }
+        _ => krusty_core::tools::registry::ToolResult {
+            output: format!("Error: unsupported plan tool '{}'", call.name),
+            is_error: true,
+        },
+    }
 }
 
 fn build_assistant_message(
@@ -1166,11 +1680,24 @@ fn truncate_output(output: &str) -> String {
 }
 
 /// Fire a push notification in a background task (non-blocking, failure only logged).
-fn fire_push(push_service: &Option<Arc<PushService>>, user_id: Option<&str>, payload: PushPayload) {
+fn fire_push(
+    push_service: &Option<Arc<PushService>>,
+    user_id: Option<&str>,
+    payload: PushPayload,
+    event_type: PushEventType,
+) {
     if let Some(svc) = push_service.clone() {
         let uid = user_id.map(String::from);
         tokio::spawn(async move {
-            svc.notify_user(uid.as_deref(), payload).await;
+            let stats = svc.notify_user(uid.as_deref(), payload, event_type).await;
+            tracing::info!(
+                event_type = event_type.as_str(),
+                attempted = stats.attempted,
+                sent = stats.sent,
+                stale_removed = stats.stale_removed,
+                failed = stats.failed,
+                "Push event dispatched"
+            );
         });
     }
 }
@@ -1185,57 +1712,258 @@ async fn send_event(sse_tx: &mpsc::Sender<Result<Event, Infallible>>, event: Age
 struct ParsedPlan {
     title: String,
     tasks: Vec<crate::types::PlanItem>,
+    plan_file: PlanFile,
 }
 
 fn try_detect_plan(text: &str) -> Option<ParsedPlan> {
-    let plan_patterns = [
-        r"(?m)^#{1,3}\s*Plan:\s*(.+)$",
-        r"(?m)^#{1,3}\s*([\w\s]+Plan[\w\s]*)$",
-        r"(?m)^#{1,3}\s*Plan\s*$",
-    ];
+    let plan_file = PlanFile::try_parse_from_response(text)?;
+    let title = if plan_file.title.trim().is_empty() {
+        "Implementation Plan".to_string()
+    } else {
+        plan_file.title.clone()
+    };
 
-    let mut title = String::new();
-    for pattern in &plan_patterns {
-        if let Ok(regex) = regex::Regex::new(pattern) {
-            if let Some(captures) = regex.captures(text) {
-                title = captures
-                    .get(1)
-                    .map(|m| m.as_str().trim().to_string())
-                    .unwrap_or_else(|| "Implementation Plan".to_string());
-                break;
+    let tasks: Vec<crate::types::PlanItem> = plan_file
+        .phases
+        .iter()
+        .flat_map(|phase| phase.tasks.iter())
+        .filter_map(|task| {
+            let content = task.description.trim().to_string();
+            if content.is_empty() {
+                None
+            } else {
+                Some(crate::types::PlanItem {
+                    content,
+                    completed: task.completed || task.status == TaskStatus::Completed,
+                })
+            }
+        })
+        .collect();
+
+    if tasks.is_empty() {
+        return None;
+    }
+
+    Some(ParsedPlan {
+        title,
+        tasks,
+        plan_file,
+    })
+}
+
+fn parse_plan_confirm_choice(raw: &str) -> Option<String> {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) {
+        if let Some(choice) = value.get("choice").and_then(|v| v.as_str()) {
+            let normalized = choice.trim().to_ascii_lowercase();
+            if normalized == "execute" || normalized == "abandon" {
+                return Some(normalized);
             }
         }
     }
 
-    if title.is_empty() {
-        let phase_regex = regex::Regex::new(r"(?m)^#{2,3}\s*Phase\s+\d").ok()?;
-        if phase_regex.is_match(text) {
-            title = "Implementation Plan".to_string();
-        }
-    }
-    if title.is_empty() {
-        return None;
-    }
-
-    let task_regex = regex::Regex::new(r"(?m)^[\s]*-\s*\[([ xX])\]\s*(.+)$").ok()?;
-    let mut tasks = Vec::new();
-    for cap in task_regex.captures_iter(text) {
-        let completed = cap
-            .get(1)
-            .map(|m| m.as_str().eq_ignore_ascii_case("x"))
-            .unwrap_or(false);
-        let content = cap
-            .get(2)
-            .map(|m| m.as_str().trim().to_string())
-            .unwrap_or_default();
-        if !content.is_empty() {
-            tasks.push(crate::types::PlanItem { content, completed });
-        }
-    }
-
-    if tasks.is_empty() {
-        None
+    let normalized = raw.trim().to_ascii_lowercase();
+    if normalized.contains("execute") {
+        Some("execute".to_string())
+    } else if normalized.contains("abandon") {
+        Some("abandon".to_string())
     } else {
-        Some(ParsedPlan { title, tasks })
+        None
+    }
+}
+
+fn detect_repeated_tool_failures(
+    counters: &mut HashMap<String, usize>,
+    tool_calls: &[AiToolCall],
+    tool_results: &[Content],
+) -> Option<String> {
+    let mut call_meta: HashMap<&str, (String, u64)> = HashMap::new();
+    for call in tool_calls {
+        call_meta.insert(
+            call.id.as_str(),
+            (call.name.clone(), hash_tool_arguments(&call.arguments)),
+        );
+    }
+
+    let mut saw_success = false;
+
+    for result in tool_results {
+        let Content::ToolResult {
+            tool_use_id,
+            output,
+            is_error,
+        } = result
+        else {
+            continue;
+        };
+
+        if !is_error.unwrap_or(false) {
+            saw_success = true;
+            continue;
+        }
+
+        let Some((tool_name, args_hash)) = call_meta.get(tool_use_id.as_str()) else {
+            continue;
+        };
+
+        let output_str = match output {
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        let (error_code, error_fingerprint) = extract_error_signature(&output_str);
+        let signature = format!(
+            "{}|{}|{}|{}",
+            tool_name, error_code, error_fingerprint, args_hash
+        );
+        let count = counters
+            .entry(signature)
+            .and_modify(|c| *c += 1)
+            .or_insert(1);
+
+        if *count >= REPEATED_TOOL_FAILURE_THRESHOLD {
+            return Some(format!(
+                "Stopping tool loop: '{}' failed {} times with the same '{}' error. A different strategy is required.",
+                tool_name, *count, error_code
+            ));
+        }
+    }
+
+    if saw_success {
+        counters.clear();
+    }
+
+    None
+}
+
+fn hash_tool_arguments(arguments: &serde_json::Value) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    arguments.to_string().hash(&mut hasher);
+    hasher.finish()
+}
+
+fn extract_error_signature(output_str: &str) -> (String, String) {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(output_str) {
+        if let Some(error) = value.get("error") {
+            if let Some(error_obj) = error.as_object() {
+                let message = error_obj
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let code = error_obj
+                    .get("code")
+                    .and_then(|v| v.as_str())
+                    .map(|c| c.to_ascii_lowercase())
+                    .filter(|c| !c.is_empty())
+                    .unwrap_or_else(|| classify_error_code(message));
+                return (code, normalize_error_fingerprint(message));
+            }
+
+            if let Some(message) = error.as_str() {
+                return (
+                    classify_error_code(message),
+                    normalize_error_fingerprint(message),
+                );
+            }
+        }
+    }
+
+    (
+        classify_error_code(output_str),
+        normalize_error_fingerprint(output_str),
+    )
+}
+
+fn classify_error_code(message: &str) -> String {
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("invalid parameters")
+        || lower.contains("missing field")
+        || lower.contains("unknown field")
+    {
+        "invalid_parameters".to_string()
+    } else if lower.contains("unknown tool") {
+        "unknown_tool".to_string()
+    } else if lower.contains("access denied") || lower.contains("outside workspace") {
+        "access_denied".to_string()
+    } else if lower.contains("timed out") || lower.contains("timeout") {
+        "timeout".to_string()
+    } else if lower.contains("denied") {
+        "permission_denied".to_string()
+    } else {
+        "tool_error".to_string()
+    }
+}
+
+fn normalize_error_fingerprint(message: &str) -> String {
+    let compact = message.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.is_empty() {
+        return "unknown".to_string();
+    }
+
+    compact.to_ascii_lowercase().chars().take(160).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        classify_error_code, detect_repeated_tool_failures, extract_error_signature,
+        normalize_error_fingerprint, AiToolCall, Content,
+    };
+    use std::collections::HashMap;
+
+    #[test]
+    fn extract_error_signature_handles_structured_and_legacy_formats() {
+        let structured = r#"{"error":{"code":"invalid_parameters","message":"Invalid parameters: missing field `prompt`"}}"#;
+        let (code, fingerprint) = extract_error_signature(structured);
+        assert_eq!(code, "invalid_parameters");
+        assert!(fingerprint.contains("missing field"));
+
+        let legacy = r#"{"error":"Invalid parameters: missing field `pattern`"}"#;
+        let (code, fingerprint) = extract_error_signature(legacy);
+        assert_eq!(code, "invalid_parameters");
+        assert!(fingerprint.contains("missing field"));
+    }
+
+    #[test]
+    fn normalize_error_fingerprint_collapses_whitespace() {
+        let normalized = normalize_error_fingerprint("  A   spaced\n error\tmessage  ");
+        assert_eq!(normalized, "a spaced error message");
+    }
+
+    #[test]
+    fn classify_error_code_matches_invalid_params() {
+        assert_eq!(
+            classify_error_code("Invalid parameters: missing field `pattern`"),
+            "invalid_parameters"
+        );
+    }
+
+    #[test]
+    fn detect_repeated_tool_failures_trips_at_threshold() {
+        let call = AiToolCall {
+            id: "call_1".to_string(),
+            name: "glob".to_string(),
+            arguments: serde_json::json!({"pattern":"**/*"}),
+        };
+        let result = Content::ToolResult {
+            tool_use_id: "call_1".to_string(),
+            output: serde_json::Value::String(
+                r#"{"error":"Invalid parameters: missing field `pattern`"}"#.to_string(),
+            ),
+            is_error: Some(true),
+        };
+
+        let mut counters = HashMap::new();
+        let first = detect_repeated_tool_failures(
+            &mut counters,
+            std::slice::from_ref(&call),
+            std::slice::from_ref(&result),
+        );
+        assert!(first.is_none());
+
+        let second = detect_repeated_tool_failures(
+            &mut counters,
+            std::slice::from_ref(&call),
+            std::slice::from_ref(&result),
+        );
+        assert!(second.is_some());
     }
 }

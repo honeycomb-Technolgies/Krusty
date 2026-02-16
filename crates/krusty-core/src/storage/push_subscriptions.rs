@@ -18,6 +18,10 @@ pub struct PushSubscription {
     pub auth: String,
     pub created_at: String,
     pub last_used_at: Option<String>,
+    pub last_success_at: Option<String>,
+    pub last_failure_at: Option<String>,
+    pub last_failure_reason: Option<String>,
+    pub failure_count: i64,
 }
 
 pub struct PushSubscriptionStore<'a> {
@@ -46,7 +50,10 @@ impl<'a> PushSubscriptionStore<'a> {
              ON CONFLICT(endpoint) DO UPDATE SET
                 user_id = excluded.user_id,
                 p256dh = excluded.p256dh,
-                auth = excluded.auth",
+                auth = excluded.auth,
+                last_failure_at = NULL,
+                last_failure_reason = NULL,
+                failure_count = 0",
             params![id, user_id, endpoint, p256dh, auth, now],
         )?;
 
@@ -65,7 +72,8 @@ impl<'a> PushSubscriptionStore<'a> {
     /// Get all subscriptions for a specific user.
     pub fn get_for_user(&self, user_id: &str) -> Result<Vec<PushSubscription>> {
         let mut stmt = self.db.conn().prepare(
-            "SELECT id, user_id, endpoint, p256dh, auth, created_at, last_used_at
+            "SELECT id, user_id, endpoint, p256dh, auth, created_at, last_used_at,
+                    last_success_at, last_failure_at, last_failure_reason, failure_count
              FROM push_subscriptions WHERE user_id = ?1",
         )?;
 
@@ -78,6 +86,10 @@ impl<'a> PushSubscriptionStore<'a> {
                 auth: row.get(4)?,
                 created_at: row.get(5)?,
                 last_used_at: row.get(6)?,
+                last_success_at: row.get(7)?,
+                last_failure_at: row.get(8)?,
+                last_failure_reason: row.get(9)?,
+                failure_count: row.get(10)?,
             })
         })?;
 
@@ -87,7 +99,8 @@ impl<'a> PushSubscriptionStore<'a> {
     /// Get all subscriptions (for single-tenant mode).
     pub fn get_all(&self) -> Result<Vec<PushSubscription>> {
         let mut stmt = self.db.conn().prepare(
-            "SELECT id, user_id, endpoint, p256dh, auth, created_at, last_used_at
+            "SELECT id, user_id, endpoint, p256dh, auth, created_at, last_used_at,
+                    last_success_at, last_failure_at, last_failure_reason, failure_count
              FROM push_subscriptions",
         )?;
 
@@ -100,19 +113,62 @@ impl<'a> PushSubscriptionStore<'a> {
                 auth: row.get(4)?,
                 created_at: row.get(5)?,
                 last_used_at: row.get(6)?,
+                last_success_at: row.get(7)?,
+                last_failure_at: row.get(8)?,
+                last_failure_reason: row.get(9)?,
+                failure_count: row.get(10)?,
             })
         })?;
 
         subs.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
-    /// Update last_used_at timestamp for a subscription.
-    pub fn touch(&self, endpoint: &str) -> Result<()> {
+    /// Update success timestamps and clear failure state for a subscription.
+    pub fn mark_success(&self, endpoint: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.db.conn().execute(
-            "UPDATE push_subscriptions SET last_used_at = ?1 WHERE endpoint = ?2",
+            "UPDATE push_subscriptions
+             SET last_used_at = ?1,
+                 last_success_at = ?1,
+                 last_failure_at = NULL,
+                 last_failure_reason = NULL,
+                 failure_count = 0
+             WHERE endpoint = ?2",
             params![now, endpoint],
         )?;
         Ok(())
+    }
+
+    /// Update failure state for a subscription.
+    pub fn mark_failure(&self, endpoint: &str, reason: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.db.conn().execute(
+            "UPDATE push_subscriptions
+             SET last_failure_at = ?1,
+                 last_failure_reason = ?2,
+                 failure_count = failure_count + 1
+             WHERE endpoint = ?3",
+            params![now, reason, endpoint],
+        )?;
+        Ok(())
+    }
+
+    /// Count subscriptions for a user, or all subscriptions in single-tenant mode.
+    pub fn count_for_user(&self, user_id: Option<&str>) -> Result<usize> {
+        let count: i64 =
+            match user_id {
+                Some(uid) => self.db.conn().query_row(
+                    "SELECT COUNT(*) FROM push_subscriptions WHERE user_id = ?1",
+                    [uid],
+                    |row| row.get(0),
+                )?,
+                None => self.db.conn().query_row(
+                    "SELECT COUNT(*) FROM push_subscriptions",
+                    [],
+                    |row| row.get(0),
+                )?,
+            };
+
+        Ok(count as usize)
     }
 }

@@ -5,13 +5,13 @@ use ratatui::style::Color;
 pub fn night_owl() -> Theme {
     ThemeBuilder::new("night-owl", "Night Owl")
         .core_colors(
-            Color::Rgb(11, 39, 63),
-            Color::Rgb(5, 63, 88),
-            Color::Rgb(127, 219, 202),
+            Color::Rgb(1, 22, 39),
+            Color::Rgb(29, 59, 83),
+            Color::Rgb(130, 170, 255),
             Color::Rgb(130, 170, 255),
             Color::Rgb(214, 222, 235),
             Color::Rgb(34, 193, 195),
-            Color::Rgb(87, 109, 143),
+            Color::Rgb(99, 119, 119),
         )
         .mode_colors(
             Color::Rgb(34, 193, 195),

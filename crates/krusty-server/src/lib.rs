@@ -25,7 +25,7 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-use krusty_core::agent::UserHookManager;
+use krusty_core::agent::{LoggingHook, PlanModeHook, SafetyHook, UserHookManager};
 use krusty_core::ai::client::{AiClient, AiClientConfig};
 use krusty_core::ai::models::{create_model_registry, ModelMetadata, SharedModelRegistry};
 use krusty_core::ai::providers::{builtin_providers, get_provider, ProviderId};
@@ -207,7 +207,11 @@ pub async fn build_router(config: &ServerConfig) -> anyhow::Result<(Router, AppS
     let ai_client = create_ai_client(&credential_store_inner).map(Arc::new);
 
     let process_registry = Arc::new(ProcessRegistry::new());
-    let tool_registry = Arc::new(ToolRegistry::new());
+    let mut tool_registry_inner = ToolRegistry::new();
+    tool_registry_inner.add_pre_hook(Arc::new(SafetyHook::new()));
+    tool_registry_inner.add_pre_hook(Arc::new(PlanModeHook::new()));
+    tool_registry_inner.add_post_hook(Arc::new(LoggingHook::new()));
+    let tool_registry = Arc::new(tool_registry_inner);
     register_all_tools(&tool_registry).await;
 
     let model_registry = create_model_registry();

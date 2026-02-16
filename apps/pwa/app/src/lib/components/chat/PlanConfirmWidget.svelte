@@ -4,7 +4,7 @@
 	import Trash2 from 'lucide-svelte/icons/trash-2';
 	import Check from 'lucide-svelte/icons/check';
 	import type { ToolCall } from '$stores/session';
-	import { sendMessage, setMode } from '$stores/session';
+	import { setMode, submitToolResult } from '$stores/session';
 
 	interface Props {
 		toolCall: ToolCall;
@@ -26,13 +26,10 @@
 
 		try {
 			if (choice === 'execute') {
-				// Switch to build mode and tell AI to proceed
+				// Switch to build mode before continuing execution
 				setMode('build');
-				await sendMessage('Execute the plan. Proceed with implementation.');
-			} else {
-				// Tell AI plan was abandoned
-				await sendMessage('Abandon the plan. Do not proceed with implementation.');
 			}
+			await submitToolResult(toolCall.id, JSON.stringify({ choice }));
 		} catch (err) {
 			console.error('[PlanConfirm] Failed to submit:', err);
 			didSubmit = false;

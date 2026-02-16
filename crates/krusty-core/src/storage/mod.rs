@@ -13,10 +13,13 @@ mod agent_state;
 mod block_ui;
 pub mod credentials;
 mod database;
+#[cfg(test)]
+mod database_tests;
 mod file_activity;
 mod messages;
 mod plans;
 mod preferences;
+pub mod push_delivery_attempts;
 pub mod push_subscriptions;
 mod sessions;
 
@@ -28,8 +31,11 @@ pub use file_activity::{FileActivityTracker, RankedFile};
 pub use messages::MessageStore;
 pub use plans::{PlanStore, PlanSummary};
 pub use preferences::Preferences;
+pub use push_delivery_attempts::{
+    PushDeliveryAttempt, PushDeliveryAttemptStore, PushDeliverySummary,
+};
 pub use push_subscriptions::{PushSubscription, PushSubscriptionStore};
-pub use sessions::{SessionInfo, SessionManager};
+pub use sessions::{SessionInfo, SessionManager, WorkMode};
 
 /// Get current Unix timestamp in seconds
 #[inline]

@@ -51,6 +51,10 @@ interface SessionState {
 	error: string | null;
 }
 
+function toErrorMessage(err: unknown, fallback = 'Unknown error'): string {
+	return err instanceof Error ? err.message : fallback;
+}
+
 function loadPermissionMode(): PermissionMode {
 	try {
 		const stored = localStorage.getItem('krusty-permission-mode');
@@ -94,14 +98,12 @@ async function fileToBase64(file: File): Promise<string> {
 		const reader = new FileReader();
 		reader.onload = () => {
 			const result = reader.result as string;
-			// Remove data URL prefix (e.g., "data:image/png;base64,")
-			const parts = result.split(',');
-			if (parts.length < 2) {
+			const commaIndex = result.indexOf(',');
+			if (commaIndex < 0) {
 				reject(new Error('Invalid data URL format'));
 				return;
 			}
-			const base64 = parts[1];
-			resolve(base64);
+			resolve(result.slice(commaIndex + 1));
 		};
 		reader.onerror = reject;
 		reader.readAsDataURL(file);
@@ -139,15 +141,16 @@ async function buildContentBlocks(text: string, attachments: Attachment[]): Prom
 	}
 
 	// Process text files - prepend their content to the message
-	let fileContent = '';
+	const fileSections: string[] = [];
 	for (const att of attachments) {
 		if (att.type === 'file') {
 			const content = await fileToText(att.file);
-			fileContent += `\n\n--- ${att.file.name} ---\n${content}`;
+			fileSections.push(`\n\n--- ${att.file.name} ---\n${content}`);
 		}
 	}
 
 	// Add text block
+	const fileContent = fileSections.join('');
 	const fullText = fileContent ? `${text}\n${fileContent}` : text;
 	blocks.push({ type: 'text', text: fullText });
 
@@ -175,9 +178,15 @@ function createStreamCallbacks(ref: AssistantMessageRef): StreamCallbacks {
 	}
 
 	function mapToolCalls(id: string, mapper: (tc: ToolCall) => ToolCall) {
-		ref.current.toolCalls = ref.current.toolCalls?.map((tc) =>
-			tc.id === id ? mapper(tc) : tc
-		);
+		const toolCalls = ref.current.toolCalls;
+		if (!toolCalls || toolCalls.length === 0) return;
+
+		const index = toolCalls.findIndex((tc) => tc.id === id);
+		if (index < 0) return;
+
+		const nextToolCalls = [...toolCalls];
+		nextToolCalls[index] = mapper(nextToolCalls[index]);
+		ref.current.toolCalls = nextToolCalls;
 		updateLastAssistantMessage();
 	}
 
@@ -207,10 +216,10 @@ function createStreamCallbacks(ref: AssistantMessageRef): StreamCallbacks {
 			setPlanItems(items);
 		},
 		onModeChange: (mode) => {
-			sessionStore.update((s) => ({ ...s, mode: mode as SessionMode }));
-			if (mode === 'plan') {
-				setPlanVisible(true);
-			}
+			const nextMode: SessionMode = mode === 'plan' ? 'plan' : 'build';
+			sessionStore.update((s) => ({ ...s, mode: nextMode }));
+			setPlanVisible(nextMode === 'plan');
+			void persistSessionMode(nextMode);
 		},
 		onPlanComplete: (toolCallId, title, taskCount) => {
 			const planConfirmCall: ToolCall = {
@@ -337,7 +346,8 @@ export async function sendMessage(content: string, attachments: Attachment[] = [
 				message: content,
 				content: contentBlocks,
 				thinking_enabled: state.thinkingEnabled,
-				permission_mode: state.permissionMode
+				permission_mode: state.permissionMode,
+				mode: state.mode
 			},
 			createStreamCallbacks(ref),
 			abortController.signal
@@ -347,7 +357,7 @@ export async function sendMessage(content: string, attachments: Attachment[] = [
 			...s,
 			isLoading: false,
 			isStreaming: false,
-			error: err instanceof Error ? err.message : 'Unknown error'
+			error: toErrorMessage(err)
 		}));
 	} finally {
 		stopStatePolling();
@@ -368,10 +378,13 @@ function extractTextContent(content: unknown): string {
 	if (typeof content === 'string') return content;
 
 	if (Array.isArray(content)) {
-		return content
-			.filter((block): block is { type: 'text'; text: string } => block?.type === 'text')
-			.map((block) => block.text)
-			.join('\n');
+		let text = '';
+		for (const block of content) {
+			if (!block || typeof block !== 'object') continue;
+			if (block.type !== 'text' || typeof block.text !== 'string') continue;
+			text += text ? `\n${block.text}` : block.text;
+		}
+		return text;
 	}
 
 	if (content && typeof content === 'object' && 'text' in content) {
@@ -392,15 +405,19 @@ export async function loadSession(sessionId: string, isRefresh = false) {
 			...s,
 			sessionId: data.session.id,
 			title: data.session.title || 'Untitled',
+			mode: data.session.mode ?? 'build',
 			messages: processedMessages,
 			isLoading: false
 		}));
+		setPlanVisible((data.session.mode ?? 'build') === 'plan');
 
 		workspaceStore.initFromSession(data.session.id, data.session.working_dir ?? null);
 
 		if (!isRefresh) {
 			try {
 				const state = await apiClient.getSessionState(sessionId);
+				sessionStore.update((s) => ({ ...s, mode: state.mode ?? s.mode }));
+				setPlanVisible((state.mode ?? 'build') === 'plan');
 				if (state.agent_state === 'streaming' || state.agent_state === 'tool_executing') {
 					sessionStore.update((s) => ({ ...s, isStreaming: true }));
 					startStatePolling(sessionId);
@@ -413,7 +430,7 @@ export async function loadSession(sessionId: string, isRefresh = false) {
 		sessionStore.update((s) => ({
 			...s,
 			isLoading: false,
-			error: err instanceof Error ? err.message : 'Failed to load session'
+			error: toErrorMessage(err, 'Failed to load session')
 		}));
 	}
 }
@@ -528,6 +545,20 @@ export function setTitle(title: string) {
 
 export function setMode(mode: SessionMode) {
 	sessionStore.update((s) => ({ ...s, mode }));
+	setPlanVisible(mode === 'plan');
+	void persistSessionMode(mode);
+}
+
+async function persistSessionMode(mode: SessionMode) {
+	const state = get(sessionStore);
+	if (!state.sessionId) return;
+
+	try {
+		await apiClient.updateSession(state.sessionId, { mode });
+		loadSessions();
+	} catch (err) {
+		console.error('Failed to persist session mode:', err);
+	}
 }
 
 export async function updateSessionTitle(sessionId: string, title: string) {
@@ -585,7 +616,7 @@ export async function submitToolResult(toolCallId: string, result: string) {
 			...s,
 			isLoading: false,
 			isStreaming: false,
-			error: err instanceof Error ? err.message : 'Unknown error'
+			error: toErrorMessage(err)
 		}));
 	} finally {
 		stopStatePolling();
@@ -598,6 +629,8 @@ export function startStatePolling(sessionId: string) {
 	statePollingInterval = setInterval(async () => {
 		try {
 			const state = await apiClient.getSessionState(sessionId);
+			sessionStore.update((s) => ({ ...s, mode: state.mode ?? s.mode }));
+			setPlanVisible((state.mode ?? 'build') === 'plan');
 
 			if (state.agent_state === 'idle') {
 				stopStatePolling();
@@ -637,6 +670,8 @@ if (typeof document !== 'undefined') {
 		} else {
 			// Foregrounded — immediately check session state
 			apiClient.getSessionState(state.sessionId).then((serverState) => {
+				sessionStore.update((s) => ({ ...s, mode: serverState.mode ?? s.mode }));
+				setPlanVisible((serverState.mode ?? 'build') === 'plan');
 				if (serverState.agent_state === 'idle') {
 					sessionStore.update((s) => ({ ...s, isStreaming: false, isThinking: false }));
 					void loadSession(state.sessionId!, true);

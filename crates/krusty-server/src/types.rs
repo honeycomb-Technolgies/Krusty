@@ -1,6 +1,6 @@
 //! Request and response types for the API
 
-use krusty_core::storage::SessionInfo;
+use krusty_core::storage::{SessionInfo, WorkMode};
 use krusty_core::tools::registry::PermissionMode;
 use serde::{Deserialize, Serialize};
 
@@ -19,6 +19,7 @@ pub struct CreateSessionRequest {
 pub struct UpdateSessionRequest {
     pub title: Option<String>,
     pub working_dir: Option<String>,
+    pub mode: Option<WorkMode>,
 }
 
 #[derive(Deserialize)]
@@ -49,6 +50,7 @@ pub struct SessionResponse {
     pub token_count: Option<usize>,
     pub parent_session_id: Option<String>,
     pub working_dir: Option<String>,
+    pub mode: WorkMode,
 }
 
 impl From<SessionInfo> for SessionResponse {
@@ -60,6 +62,7 @@ impl From<SessionInfo> for SessionResponse {
             token_count: s.token_count,
             parent_session_id: s.parent_session_id,
             working_dir: s.working_dir,
+            mode: s.work_mode,
         }
     }
 }
@@ -81,6 +84,8 @@ pub struct SessionStateResponse {
     pub started_at: Option<String>,
     /// Last event timestamp (for activity tracking)
     pub last_event_at: Option<String>,
+    /// Current persisted work mode
+    pub mode: WorkMode,
 }
 
 #[derive(Serialize)]
@@ -104,6 +109,8 @@ pub struct ChatRequest {
     /// Enable extended thinking
     #[serde(default)]
     pub thinking_enabled: bool,
+    /// Optional mode override for the session before starting this turn
+    pub mode: Option<WorkMode>,
     /// Permission mode for tool execution
     #[serde(default)]
     pub permission_mode: PermissionMode,
@@ -157,6 +164,8 @@ pub struct ToolExecuteRequest {
     pub params: serde_json::Value,
     /// Optional working directory override
     pub working_dir: Option<String>,
+    /// Optional mode override for one-off tool execution context
+    pub mode: Option<WorkMode>,
 }
 
 #[derive(Serialize)]
@@ -363,7 +372,7 @@ pub enum AgenticEvent {
         tool_call_id: String,
         tool_name: String,
     },
-    /// Mode change (enter_plan_mode tool)
+    /// Mode change (set_work_mode / enter_plan_mode tools)
     ModeChange {
         mode: String,
         reason: Option<String>,

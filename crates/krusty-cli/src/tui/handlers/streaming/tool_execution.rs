@@ -2,7 +2,11 @@
 //!
 //! Handles the execution of AI tool calls and processing of results.
 
-use std::time::Duration;
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+    time::Duration,
+};
 
 use tokio::sync::{mpsc, oneshot};
 
@@ -15,22 +19,62 @@ use crate::tui::components::{PromptOption, PromptQuestion};
 const MAX_ITERATIONS: usize = 50;
 const MAX_TOOL_OUTPUT_CHARS: usize = 30_000;
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
+const REPEATED_TOOL_FAILURE_THRESHOLD: usize = 2;
 
 impl App {
-    /// Handle enter_plan_mode tool calls to switch modes
-    pub(super) fn handle_enter_plan_mode_tools(&mut self, tool_calls: Vec<AiToolCall>) {
+    /// Handle mode-switch tools (`set_work_mode` and legacy `enter_plan_mode`)
+    pub(super) fn handle_mode_switch_tools(&mut self, tool_calls: Vec<AiToolCall>) {
         use crate::tui::app::WorkMode;
 
         let mut results = Vec::new();
 
         for tool_call in tool_calls {
-            tracing::info!("Handling enter_plan_mode tool call: {}", tool_call.id);
+            tracing::info!(
+                "Handling mode switch tool call: {} ({})",
+                tool_call.id,
+                tool_call.name
+            );
 
+            let target_mode = if tool_call.name == "enter_plan_mode" {
+                WorkMode::Plan
+            } else {
+                match tool_call.arguments.get("mode").and_then(|v| v.as_str()) {
+                    Some("plan") => WorkMode::Plan,
+                    Some("build") => WorkMode::Build,
+                    Some(other) => {
+                        results.push(Content::ToolResult {
+                            tool_use_id: tool_call.id.clone(),
+                            output: serde_json::Value::String(format!(
+                                "Error: invalid mode '{}'. Use 'build' or 'plan'.",
+                                other
+                            )),
+                            is_error: Some(true),
+                        });
+                        continue;
+                    }
+                    None => {
+                        results.push(Content::ToolResult {
+                            tool_use_id: tool_call.id.clone(),
+                            output: serde_json::Value::String(
+                                "Error: mode parameter is required (build|plan)".to_string(),
+                            ),
+                            is_error: Some(true),
+                        });
+                        continue;
+                    }
+                }
+            };
+
+            let default_reason = if target_mode == WorkMode::Plan {
+                "Starting planning phase"
+            } else {
+                "Starting implementation phase"
+            };
             let reason = tool_call
                 .arguments
                 .get("reason")
                 .and_then(|v| v.as_str())
-                .unwrap_or("Starting planning phase")
+                .unwrap_or(default_reason)
                 .to_string();
 
             let clear_existing = tool_call
@@ -39,19 +83,27 @@ impl App {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
-            if clear_existing {
+            if clear_existing && target_mode == WorkMode::Plan {
                 self.clear_plan();
                 tracing::info!("Cleared existing plan");
             }
-            self.ui.work_mode = WorkMode::Plan;
-            tracing::info!("Switched to Plan mode: {}", reason);
+            self.ui.work_mode = target_mode;
+            tracing::info!("Switched to {:?} mode: {}", target_mode, reason);
 
-            results.push(Content::ToolResult {
-                tool_use_id: tool_call.id.clone(),
-                output: serde_json::Value::String(format!(
+            let output = if target_mode == WorkMode::Plan {
+                format!(
                     "Now in Plan mode. {}. Create a plan using the standard format (# Plan: Title, ## Phase N: Name, - [ ] Task). The user will review and approve before implementation.",
                     reason
-                )),
+                )
+            } else {
+                format!(
+                    "Now in Build mode. {}. Proceed with implementation and keep plan task status updated.",
+                    reason
+                )
+            };
+            results.push(Content::ToolResult {
+                tool_use_id: tool_call.id.clone(),
+                output: serde_json::Value::String(output),
                 is_error: None,
             });
         }
@@ -574,14 +626,14 @@ impl App {
             self.handle_set_dependency_tools(set_dependency_tools);
         }
 
-        // Intercept enter_plan_mode tool
+        // Intercept set_work_mode and legacy enter_plan_mode tools
         let (plan_mode_tools, tool_calls): (Vec<_>, Vec<_>) = tool_calls
             .into_iter()
-            .partition(|t| t.name == "enter_plan_mode");
+            .partition(|t| t.name == "set_work_mode" || t.name == "enter_plan_mode");
 
         let has_plan_mode = !plan_mode_tools.is_empty();
         if has_plan_mode {
-            self.handle_enter_plan_mode_tools(plan_mode_tools);
+            self.handle_mode_switch_tools(plan_mode_tools);
         }
 
         let has_plan_tools = has_task_complete
@@ -1115,6 +1167,20 @@ impl App {
         self.runtime.chat.conversation.push(tool_result_msg.clone());
         self.save_model_message(&tool_result_msg);
 
+        if let Some(diagnostic) = self.detect_repeated_tool_failures(&tool_result_msg.content) {
+            tracing::warn!(
+                threshold = REPEATED_TOOL_FAILURE_THRESHOLD,
+                diagnostic = %diagnostic,
+                "Fail-fast: stopping repeated tool failure loop"
+            );
+            self.runtime
+                .chat
+                .messages
+                .push(("system".to_string(), diagnostic));
+            self.stop_streaming();
+            return;
+        }
+
         // Enforce agentic loop iteration limit
         if self.runtime.agent_state.current_turn >= MAX_ITERATIONS {
             tracing::warn!(
@@ -1224,6 +1290,79 @@ impl App {
         }
     }
 
+    fn detect_repeated_tool_failures(&mut self, tool_results: &[Content]) -> Option<String> {
+        let mut saw_success = false;
+
+        for result in tool_results {
+            let Content::ToolResult {
+                tool_use_id,
+                output,
+                is_error,
+            } = result
+            else {
+                continue;
+            };
+
+            if !is_error.unwrap_or(false) {
+                saw_success = true;
+                continue;
+            }
+
+            let output_str = match output {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+
+            let Some((tool_name, args_hash)) = self.find_tool_use_metadata(tool_use_id) else {
+                continue;
+            };
+
+            let (error_code, error_fingerprint) = extract_error_signature(&output_str);
+            let signature = format!(
+                "{}|{}|{}|{}",
+                tool_name, error_code, error_fingerprint, args_hash
+            );
+            let count = self
+                .runtime
+                .tool_failure_signatures
+                .entry(signature)
+                .and_modify(|c| *c += 1)
+                .or_insert(1);
+
+            if *count >= REPEATED_TOOL_FAILURE_THRESHOLD {
+                return Some(format!(
+                    "Stopping tool loop: '{}' failed {} times with the same '{}' error. I need a different tool strategy.",
+                    tool_name, *count, error_code
+                ));
+            }
+        }
+
+        if saw_success {
+            self.runtime.tool_failure_signatures.clear();
+        }
+
+        None
+    }
+
+    fn find_tool_use_metadata(&self, tool_use_id: &str) -> Option<(String, u64)> {
+        for message in self.runtime.chat.conversation.iter().rev() {
+            for content in &message.content {
+                let Content::ToolUse { id, name, input } = content else {
+                    continue;
+                };
+                if id != tool_use_id {
+                    continue;
+                }
+
+                let mut hasher = DefaultHasher::new();
+                input.to_string().hash(&mut hasher);
+                return Some((name.clone(), hasher.finish()));
+            }
+        }
+
+        None
+    }
+
     /// Check if a tool approval prompt has timed out and auto-reject if so
     pub fn check_approval_timeout(&mut self) {
         if self.ui.decision_prompt.prompt_type != crate::tui::components::PromptType::ToolApproval
@@ -1281,4 +1420,105 @@ fn truncate_tool_output(output: &str) -> String {
         output.len(),
         clean.len()
     )
+}
+
+fn extract_error_signature(output_str: &str) -> (String, String) {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(output_str) {
+        if let Some(error) = value.get("error") {
+            if let Some(error_obj) = error.as_object() {
+                let message = error_obj
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let code = error_obj
+                    .get("code")
+                    .and_then(|v| v.as_str())
+                    .map(|c| c.to_ascii_lowercase())
+                    .filter(|c| !c.is_empty())
+                    .unwrap_or_else(|| classify_error_code(message));
+                return (code, normalize_error_fingerprint(message));
+            }
+
+            if let Some(message) = error.as_str() {
+                return (
+                    classify_error_code(message),
+                    normalize_error_fingerprint(message),
+                );
+            }
+        }
+    }
+
+    (
+        classify_error_code(output_str),
+        normalize_error_fingerprint(output_str),
+    )
+}
+
+fn classify_error_code(message: &str) -> String {
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("invalid parameters")
+        || lower.contains("missing field")
+        || lower.contains("unknown field")
+    {
+        "invalid_parameters".to_string()
+    } else if lower.contains("unknown tool") {
+        "unknown_tool".to_string()
+    } else if lower.contains("access denied") || lower.contains("outside workspace") {
+        "access_denied".to_string()
+    } else if lower.contains("timed out") || lower.contains("timeout") {
+        "timeout".to_string()
+    } else if lower.contains("denied") {
+        "permission_denied".to_string()
+    } else {
+        "tool_error".to_string()
+    }
+}
+
+fn normalize_error_fingerprint(message: &str) -> String {
+    let compact = message.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.is_empty() {
+        return "unknown".to_string();
+    }
+
+    compact.to_ascii_lowercase().chars().take(160).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{classify_error_code, extract_error_signature, normalize_error_fingerprint};
+
+    #[test]
+    fn extract_error_signature_supports_structured_error_object() {
+        let output = r#"{"error":{"code":"invalid_parameters","message":"Invalid parameters: missing field `prompt`"}}"#;
+        let (code, fingerprint) = extract_error_signature(output);
+        assert_eq!(code, "invalid_parameters");
+        assert!(fingerprint.contains("missing field"));
+    }
+
+    #[test]
+    fn extract_error_signature_supports_legacy_error_string() {
+        let output = r#"{"error":"Invalid parameters: missing field `pattern`"}"#;
+        let (code, fingerprint) = extract_error_signature(output);
+        assert_eq!(code, "invalid_parameters");
+        assert!(fingerprint.contains("missing field"));
+    }
+
+    #[test]
+    fn classify_error_code_covers_common_categories() {
+        assert_eq!(
+            classify_error_code("Invalid parameters: missing field `pattern`"),
+            "invalid_parameters"
+        );
+        assert_eq!(classify_error_code("Unknown tool: nope"), "unknown_tool");
+        assert_eq!(
+            classify_error_code("Access denied: path is outside workspace"),
+            "access_denied"
+        );
+    }
+
+    #[test]
+    fn normalize_error_fingerprint_collapses_whitespace() {
+        let normalized = normalize_error_fingerprint("  A   spaced\n error\tmessage  ");
+        assert_eq!(normalized, "a spaced error message");
+    }
 }

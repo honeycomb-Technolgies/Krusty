@@ -79,6 +79,141 @@ fn spawn_sse_stream_task<S, P>(
     });
 }
 
+fn first_text_block(content: &[Content]) -> Option<&str> {
+    content.iter().find_map(|block| match block {
+        Content::Text { text } => Some(text.as_str()),
+        _ => None,
+    })
+}
+
+fn collect_system_message_text(messages: &[ModelMessage]) -> String {
+    let mut combined = String::new();
+    for message in messages.iter().filter(|m| m.role == Role::System) {
+        if let Some(text) = first_text_block(&message.content) {
+            if !combined.is_empty() {
+                combined.push_str("\n\n");
+            }
+            combined.push_str(text);
+        }
+    }
+    combined
+}
+
+fn collect_message_text(content: &[Content], separator: &str) -> String {
+    let mut combined = String::new();
+    for block in content {
+        if let Content::Text { text } = block {
+            if !combined.is_empty() {
+                combined.push_str(separator);
+            }
+            combined.push_str(text);
+        }
+    }
+    combined
+}
+
+fn build_default_system_prompt(messages: &[ModelMessage], options: &CallOptions) -> String {
+    let system = collect_system_message_text(messages);
+    if !system.is_empty() {
+        format!("{}\n\n{}", KRUSTY_SYSTEM_PROMPT, system)
+    } else if let Some(custom) = &options.system_prompt {
+        custom.clone()
+    } else {
+        KRUSTY_SYSTEM_PROMPT.to_string()
+    }
+}
+
+async fn ensure_success_stream_response(
+    response: reqwest::Response,
+    call_start: Instant,
+    response_label: &str,
+    error_label: &str,
+) -> Result<reqwest::Response> {
+    let status = response.status();
+    info!(
+        "{}: {} in {:?}",
+        response_label,
+        status,
+        call_start.elapsed()
+    );
+
+    if status.is_success() {
+        return Ok(response);
+    }
+
+    let error_text = response
+        .text()
+        .await
+        .unwrap_or_else(|_| "Unknown error".to_string());
+    error!("{}: {} - {}", error_label, status, error_text);
+    Err(anyhow::anyhow!(
+        "{}: {} - {}",
+        error_label,
+        status,
+        error_text
+    ))
+}
+
+fn start_sse_stream<P>(
+    response: reqwest::Response,
+    parser: P,
+    label: &'static str,
+) -> mpsc::UnboundedReceiver<StreamPart>
+where
+    P: SseParser + 'static,
+{
+    let (tx, rx, buffer_tx, buffer_rx) = create_streaming_channels();
+    spawn_buffer_processor(buffer_rx, tx.clone());
+
+    let processor = SseStreamProcessor::new(tx.clone(), buffer_tx);
+    spawn_sse_stream_task(response.bytes_stream(), processor, parser, tx, label);
+
+    rx
+}
+
+enum CodexPayloadState {
+    Continue,
+    Complete,
+    Error,
+}
+
+async fn process_codex_ws_payload(
+    payload: &str,
+    parser: &OpenAIParser,
+    processor: &mut SseStreamProcessor,
+    tx_err: &mpsc::UnboundedSender<StreamPart>,
+) -> CodexPayloadState {
+    if let Ok(json) = serde_json::from_str::<Value>(payload) {
+        let event_type = json.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        if matches!(event_type, "error" | "response.failed") || event_type.contains("error") {
+            let detail = AiClient::codex_ws_error_message(&json)
+                .unwrap_or_else(|| "unknown websocket error".to_string());
+            let _ = tx_err.send(StreamPart::Error {
+                error: format!("Codex websocket API error: {}", detail),
+            });
+            return CodexPayloadState::Error;
+        }
+        if matches!(event_type, "response.done" | "response.completed") {
+            if let Err(e) = processor.process_sse_data(payload, parser).await {
+                let _ = tx_err.send(StreamPart::Error {
+                    error: format!("Codex websocket parsing error: {}", e),
+                });
+                return CodexPayloadState::Error;
+            }
+            return CodexPayloadState::Complete;
+        }
+    }
+
+    if let Err(e) = processor.process_sse_data(payload, parser).await {
+        let _ = tx_err.send(StreamPart::Error {
+            error: format!("Codex websocket parsing error: {}", e),
+        });
+        return CodexPayloadState::Error;
+    }
+
+    CodexPayloadState::Continue
+}
+
 impl AiClient {
     /// Call the API with streaming response
     pub async fn call_streaming(
@@ -127,17 +262,7 @@ impl AiClient {
             format_handler.convert_messages(&messages, Some(self.provider_id()));
 
         // Extract any system messages from conversation (e.g., pinch context)
-        let injected_context: String = messages
-            .iter()
-            .filter(|m| m.role == Role::System)
-            .filter_map(|m| {
-                m.content.iter().find_map(|c| match c {
-                    Content::Text { text } => Some(text.clone()),
-                    _ => None,
-                })
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
+        let injected_context = collect_system_message_text(&messages);
 
         // Build system prompt
         let mut system = if let Some(custom) = &options.system_prompt {
@@ -241,30 +366,16 @@ impl AiClient {
         // Send request
         info!("Sending API request...");
         let response = request.json(&body).send().await?;
-        let request_duration = call_start.elapsed();
-
-        let status = response.status();
-        info!("API response: {} in {:?}", status, request_duration);
-
-        if !status.is_success() {
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            error!("API error response: {} - {}", status, error_text);
-            return Err(anyhow::anyhow!("API error: {} - {}", status, error_text));
-        }
-
-        let (tx, rx, buffer_tx, buffer_rx) = create_streaming_channels();
-        spawn_buffer_processor(buffer_rx, tx.clone());
-
-        let processor = SseStreamProcessor::new(tx.clone(), buffer_tx);
-        let parser = AnthropicParser::new();
+        let response =
+            ensure_success_stream_response(response, call_start, "API response", "API error")
+                .await?;
 
         info!("Starting Anthropic stream processing task");
-        spawn_sse_stream_task(response.bytes_stream(), processor, parser, tx, "Anthropic");
-
-        Ok(rx)
+        Ok(start_sse_stream(
+            response,
+            AnthropicParser::new(),
+            "Anthropic",
+        ))
     }
 
     /// Streaming call using OpenAI format
@@ -299,26 +410,7 @@ impl AiClient {
 
         let format_handler = OpenAIFormat::new(self.config().api_format);
 
-        // Extract system prompt
-        let system: String = messages
-            .iter()
-            .filter(|m| m.role == Role::System)
-            .filter_map(|m| {
-                m.content.iter().find_map(|c| match c {
-                    Content::Text { text } => Some(text.clone()),
-                    _ => None,
-                })
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
-
-        let system_prompt = if !system.is_empty() {
-            Some(format!("{}\n\n{}", KRUSTY_SYSTEM_PROMPT, system))
-        } else if options.system_prompt.is_some() {
-            options.system_prompt.clone()
-        } else {
-            Some(KRUSTY_SYSTEM_PROMPT.to_string())
-        };
+        let system_prompt = build_default_system_prompt(&messages, options);
 
         let max_tokens = options.max_tokens.unwrap_or(self.config().max_tokens);
 
@@ -343,16 +435,14 @@ impl AiClient {
         body[messages_key] = serde_json::json!(openai_messages);
 
         // Add system message at the start
-        if let Some(sys) = system_prompt {
-            if let Some(msgs) = body.get_mut(messages_key).and_then(|m| m.as_array_mut()) {
-                msgs.insert(
-                    0,
-                    serde_json::json!({
-                        "role": "system",
-                        "content": sys
-                    }),
-                );
-            }
+        if let Some(msgs) = body.get_mut(messages_key).and_then(|m| m.as_array_mut()) {
+            msgs.insert(
+                0,
+                serde_json::json!({
+                    "role": "system",
+                    "content": system_prompt
+                }),
+            );
         }
 
         // Add temperature
@@ -376,30 +466,12 @@ impl AiClient {
 
         info!("Sending OpenAI format request...");
         let response = request.json(&body).send().await?;
-        let request_duration = call_start.elapsed();
-
-        let status = response.status();
-        info!("API response: {} in {:?}", status, request_duration);
-
-        if !status.is_success() {
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            error!("API error response: {} - {}", status, error_text);
-            return Err(anyhow::anyhow!("API error: {} - {}", status, error_text));
-        }
-
-        let (tx, rx, buffer_tx, buffer_rx) = create_streaming_channels();
-        spawn_buffer_processor(buffer_rx, tx.clone());
-
-        let processor = SseStreamProcessor::new(tx.clone(), buffer_tx);
-        let parser = OpenAIParser::new();
+        let response =
+            ensure_success_stream_response(response, call_start, "API response", "API error")
+                .await?;
 
         info!("Starting OpenAI stream processing task");
-        spawn_sse_stream_task(response.bytes_stream(), processor, parser, tx, "OpenAI");
-
-        Ok(rx)
+        Ok(start_sse_stream(response, OpenAIParser::new(), "OpenAI"))
     }
 
     /// Streaming call for ChatGPT Codex over WebSocket (no SSE fallback).
@@ -411,25 +483,7 @@ impl AiClient {
     ) -> Result<mpsc::UnboundedReceiver<StreamPart>> {
         let format_handler = OpenAIFormat::new(self.config().api_format);
 
-        let system: String = messages
-            .iter()
-            .filter(|m| m.role == Role::System)
-            .filter_map(|m| {
-                m.content.iter().find_map(|c| match c {
-                    Content::Text { text } => Some(text.clone()),
-                    _ => None,
-                })
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
-
-        let system_prompt = if !system.is_empty() {
-            Some(format!("{}\n\n{}", KRUSTY_SYSTEM_PROMPT, system))
-        } else if options.system_prompt.is_some() {
-            options.system_prompt.clone()
-        } else {
-            Some(KRUSTY_SYSTEM_PROMPT.to_string())
-        };
+        let system_prompt = build_default_system_prompt(&messages, options);
 
         let max_tokens = options.max_tokens.unwrap_or(self.config().max_tokens);
         let body = self.build_chatgpt_codex_body(
@@ -517,7 +571,6 @@ impl AiClient {
         tokio::spawn(async move {
             let (_write, mut read) = ws_stream.split();
 
-            let mut saw_completion = false;
             let mut pending_first = first_ws_message;
 
             loop {
@@ -533,77 +586,46 @@ impl AiClient {
                 match msg {
                     Ok(Message::Text(text)) => {
                         let payload = text.to_string();
-                        if let Ok(json) = serde_json::from_str::<Value>(&payload) {
-                            let event_type =
-                                json.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                            if matches!(event_type, "error" | "response.failed")
-                                || event_type.contains("error")
-                            {
-                                let detail = Self::codex_ws_error_message(&json)
-                                    .unwrap_or_else(|| "unknown websocket error".to_string());
-                                let _ = tx_err.send(StreamPart::Error {
-                                    error: format!("Codex websocket API error: {}", detail),
-                                });
+                        match process_codex_ws_payload(&payload, &parser, &mut processor, &tx_err)
+                            .await
+                        {
+                            CodexPayloadState::Continue => {}
+                            CodexPayloadState::Complete => {
                                 break;
                             }
-                            if matches!(event_type, "response.done" | "response.completed") {
-                                saw_completion = true;
-                            }
-                        }
-                        if let Err(e) = processor.process_sse_data(&payload, &parser).await {
-                            let _ = tx_err.send(StreamPart::Error {
-                                error: format!("Codex websocket parsing error: {}", e),
-                            });
-                            break;
-                        }
-                        if saw_completion {
-                            break;
+                            CodexPayloadState::Error => break,
                         }
                     }
                     Ok(Message::Binary(bytes)) => {
-                        let payload = String::from_utf8_lossy(&bytes).to_string();
-                        if let Ok(json) = serde_json::from_str::<Value>(&payload) {
-                            let event_type =
-                                json.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                            if matches!(event_type, "error" | "response.failed")
-                                || event_type.contains("error")
-                            {
-                                let detail = Self::codex_ws_error_message(&json)
-                                    .unwrap_or_else(|| "unknown websocket error".to_string());
-                                let _ = tx_err.send(StreamPart::Error {
-                                    error: format!("Codex websocket API error: {}", detail),
-                                });
+                        let payload = String::from_utf8_lossy(&bytes);
+                        match process_codex_ws_payload(
+                            payload.as_ref(),
+                            &parser,
+                            &mut processor,
+                            &tx_err,
+                        )
+                        .await
+                        {
+                            CodexPayloadState::Continue => {}
+                            CodexPayloadState::Complete => {
                                 break;
                             }
-                            if matches!(event_type, "response.done" | "response.completed") {
-                                saw_completion = true;
-                            }
-                        }
-                        if let Err(e) = processor.process_sse_data(&payload, &parser).await {
-                            let _ = tx_err.send(StreamPart::Error {
-                                error: format!("Codex websocket parsing error: {}", e),
-                            });
-                            break;
-                        }
-                        if saw_completion {
-                            break;
+                            CodexPayloadState::Error => break,
                         }
                     }
                     Ok(Message::Close(frame)) => {
-                        if !saw_completion {
-                            let (code, reason) = frame
-                                .as_ref()
-                                .map(|f| (f.code.to_string(), f.reason.to_string()))
-                                .unwrap_or_else(|| {
-                                    ("no close code".to_string(), "no close reason".to_string())
-                                });
-                            let _ = tx_err.send(StreamPart::Error {
-                                error: format!(
-                                    "Codex websocket closed before completion (websocket-only mode): code={}, reason={}",
-                                    code, reason
-                                ),
+                        let (code, reason) = frame
+                            .as_ref()
+                            .map(|f| (f.code.to_string(), f.reason.to_string()))
+                            .unwrap_or_else(|| {
+                                ("no close code".to_string(), "no close reason".to_string())
                             });
-                        }
+                        let _ = tx_err.send(StreamPart::Error {
+                            error: format!(
+                                "Codex websocket closed before completion (websocket-only mode): code={}, reason={}",
+                                code, reason
+                            ),
+                        });
                         break;
                     }
                     Ok(Message::Ping(_)) | Ok(Message::Pong(_)) => {}
@@ -634,35 +656,19 @@ impl AiClient {
 
         info!("Falling back to ChatGPT Codex HTTP streaming");
         let response = request.json(&body).send().await?;
-        let request_duration = call_start.elapsed();
+        let response = ensure_success_stream_response(
+            response,
+            call_start,
+            "ChatGPT Codex HTTP response",
+            "ChatGPT Codex HTTP fallback error",
+        )
+        .await?;
 
-        let status = response.status();
-        info!(
-            "ChatGPT Codex HTTP response: {} in {:?}",
-            status, request_duration
-        );
-
-        if !status.is_success() {
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(anyhow::anyhow!(
-                "ChatGPT Codex HTTP fallback error: {} - {}",
-                status,
-                error_text
-            ));
-        }
-
-        let (tx, rx, buffer_tx, buffer_rx) = create_streaming_channels();
-        spawn_buffer_processor(buffer_rx, tx.clone());
-
-        let processor = SseStreamProcessor::new(tx.clone(), buffer_tx);
-        let parser = OpenAIParser::new();
-
-        spawn_sse_stream_task(response.bytes_stream(), processor, parser, tx, "Codex HTTP");
-
-        Ok(rx)
+        Ok(start_sse_stream(
+            response,
+            OpenAIParser::new(),
+            "Codex HTTP",
+        ))
     }
 
     /// Streaming call using Google format
@@ -677,26 +683,7 @@ impl AiClient {
         let format_handler = GoogleFormat::new();
         let contents = format_handler.convert_messages(&messages, Some(self.provider_id()));
 
-        // Extract system prompt
-        let system: String = messages
-            .iter()
-            .filter(|m| m.role == Role::System)
-            .filter_map(|m| {
-                m.content.iter().find_map(|c| match c {
-                    Content::Text { text } => Some(text.clone()),
-                    _ => None,
-                })
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
-
-        let system_instruction = if !system.is_empty() {
-            Some(format!("{}\n\n{}", KRUSTY_SYSTEM_PROMPT, system))
-        } else if let Some(custom) = &options.system_prompt {
-            Some(custom.clone())
-        } else {
-            Some(KRUSTY_SYSTEM_PROMPT.to_string())
-        };
+        let system_instruction = build_default_system_prompt(&messages, options);
 
         let max_tokens = options.max_tokens.unwrap_or(self.config().max_tokens);
 
@@ -707,11 +694,9 @@ impl AiClient {
             }
         });
 
-        if let Some(sys) = system_instruction {
-            body["systemInstruction"] = serde_json::json!({
-                "parts": [{"text": sys}]
-            });
-        }
+        body["systemInstruction"] = serde_json::json!({
+            "parts": [{"text": system_instruction}]
+        });
 
         if let Some(temp) = options.temperature {
             body["generationConfig"]["temperature"] = serde_json::json!(temp);
@@ -732,30 +717,12 @@ impl AiClient {
 
         info!("Sending Google format request...");
         let response = request.json(&body).send().await?;
-        let request_duration = call_start.elapsed();
-
-        let status = response.status();
-        info!("API response: {} in {:?}", status, request_duration);
-
-        if !status.is_success() {
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            error!("API error response: {} - {}", status, error_text);
-            return Err(anyhow::anyhow!("API error: {} - {}", status, error_text));
-        }
-
-        let (tx, rx, buffer_tx, buffer_rx) = create_streaming_channels();
-        spawn_buffer_processor(buffer_rx, tx.clone());
-
-        let processor = SseStreamProcessor::new(tx.clone(), buffer_tx);
-        let parser = GoogleParser::new();
+        let response =
+            ensure_success_stream_response(response, call_start, "API response", "API error")
+                .await?;
 
         info!("Starting Google stream processing task");
-        spawn_sse_stream_task(response.bytes_stream(), processor, parser, tx, "Google");
-
-        Ok(rx)
+        Ok(start_sse_stream(response, GoogleParser::new(), "Google"))
     }
 
     /// Add server-executed tools (web search, web fetch) to the request
@@ -1075,7 +1042,7 @@ impl AiClient {
     fn build_chatgpt_codex_body(
         &self,
         messages: &[ModelMessage],
-        system_prompt: &Option<String>,
+        system_prompt: &str,
         _max_tokens: usize, // Not used - Codex doesn't support this parameter
         options: &CallOptions,
         format_handler: &OpenAIFormat,
@@ -1129,15 +1096,7 @@ impl AiClient {
 
             if has_tool_use && role == "assistant" {
                 // First add any text content as a message
-                let text_content: String = msg
-                    .content
-                    .iter()
-                    .filter_map(|c| match c {
-                        Content::Text { text } => Some(text.clone()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
+                let text_content = collect_message_text(&msg.content, "\n");
 
                 if !text_content.is_empty() {
                     input_messages.push(serde_json::json!({
@@ -1165,15 +1124,7 @@ impl AiClient {
             }
 
             // Regular message - extract text
-            let text: String = msg
-                .content
-                .iter()
-                .filter_map(|c| match c {
-                    Content::Text { text } => Some(text.clone()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
+            let text = collect_message_text(&msg.content, "\n");
 
             if !text.is_empty() {
                 // Codex format: wrapped message with typed content
@@ -1205,7 +1156,7 @@ impl AiClient {
         // Build Codex request body - exact format from reverse-engineering
         let mut body = serde_json::json!({
             "model": self.config().model,
-            "instructions": system_prompt.as_deref().unwrap_or(KRUSTY_SYSTEM_PROMPT),
+            "instructions": system_prompt,
             "input": input_messages,
             "tools": [],
             "tool_choice": "auto",

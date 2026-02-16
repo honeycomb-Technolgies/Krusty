@@ -4,6 +4,8 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::str::FromStr;
 
 use super::database::Database;
 use crate::agent::PinchContext;
@@ -21,6 +23,38 @@ pub struct SessionInfo {
     pub working_dir: Option<String>,
     /// User ID for multi-tenant isolation
     pub user_id: Option<String>,
+    /// Current work mode for this session
+    pub work_mode: WorkMode,
+}
+
+/// Session work mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkMode {
+    #[default]
+    Build,
+    Plan,
+}
+
+impl fmt::Display for WorkMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            WorkMode::Build => write!(f, "build"),
+            WorkMode::Plan => write!(f, "plan"),
+        }
+    }
+}
+
+impl FromStr for WorkMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "build" => Ok(WorkMode::Build),
+            "plan" => Ok(WorkMode::Plan),
+            other => Err(format!("Unknown work mode: {}", other)),
+        }
+    }
 }
 
 /// Session manager for CRUD operations
@@ -98,7 +132,7 @@ impl SessionManager {
         };
 
         let sql = format!(
-            "SELECT id, title, updated_at, token_count, parent_session_id, working_dir, user_id
+            "SELECT id, title, updated_at, token_count, parent_session_id, working_dir, user_id, work_mode
              FROM sessions {}
              ORDER BY updated_at DESC",
             where_clause
@@ -118,6 +152,7 @@ impl SessionManager {
     fn map_session_row(row: &rusqlite::Row) -> rusqlite::Result<SessionInfo> {
         let updated_at: String = row.get(2)?;
         let token_count: Option<i64> = row.get(3)?;
+        let work_mode_raw: String = row.get(7)?;
 
         Ok(SessionInfo {
             id: row.get(0)?,
@@ -129,6 +164,7 @@ impl SessionManager {
             parent_session_id: row.get(4)?,
             working_dir: row.get(5)?,
             user_id: row.get(6)?,
+            work_mode: work_mode_raw.parse().unwrap_or_default(),
         })
     }
 
@@ -196,7 +232,7 @@ impl SessionManager {
         use std::collections::HashMap;
 
         let mut stmt = self.db.conn().prepare(
-            "SELECT id, title, updated_at, token_count, parent_session_id, working_dir, user_id
+            "SELECT id, title, updated_at, token_count, parent_session_id, working_dir, user_id, work_mode
              FROM sessions
              WHERE working_dir IS NOT NULL
              ORDER BY working_dir, updated_at DESC",
@@ -208,6 +244,7 @@ impl SessionManager {
             let updated_at: String = row.get(2)?;
             let token_count: Option<i64> = row.get(3)?;
             let working_dir: String = row.get(5)?;
+            let work_mode_raw: String = row.get(7)?;
 
             Ok((
                 working_dir.clone(),
@@ -221,6 +258,7 @@ impl SessionManager {
                     parent_session_id: row.get(4)?,
                     working_dir: Some(working_dir),
                     user_id: row.get(6)?,
+                    work_mode: work_mode_raw.parse().unwrap_or_default(),
                 },
             ))
         })?;
@@ -236,12 +274,13 @@ impl SessionManager {
     /// Get a specific session
     pub fn get_session(&self, session_id: &str) -> Result<Option<SessionInfo>> {
         let mut stmt = self.db.conn().prepare(
-            "SELECT id, title, updated_at, token_count, parent_session_id, working_dir, user_id FROM sessions WHERE id = ?1",
+            "SELECT id, title, updated_at, token_count, parent_session_id, working_dir, user_id, work_mode FROM sessions WHERE id = ?1",
         )?;
 
         let session = stmt.query_row([session_id], |row| {
             let updated_at: String = row.get(2)?;
             let token_count: Option<i64> = row.get(3)?;
+            let work_mode_raw: String = row.get(7)?;
 
             Ok(SessionInfo {
                 id: row.get(0)?,
@@ -253,6 +292,7 @@ impl SessionManager {
                 parent_session_id: row.get(4)?,
                 working_dir: row.get(5)?,
                 user_id: row.get(6)?,
+                work_mode: work_mode_raw.parse().unwrap_or_default(),
             })
         });
 
@@ -288,6 +328,18 @@ impl SessionManager {
         self.db.conn().execute(
             "UPDATE sessions SET working_dir = ?1, updated_at = ?2 WHERE id = ?3",
             params![working_dir, now, session_id],
+        )?;
+
+        Ok(())
+    }
+
+    /// Update session work mode
+    pub fn update_session_work_mode(&self, session_id: &str, work_mode: WorkMode) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+
+        self.db.conn().execute(
+            "UPDATE sessions SET work_mode = ?1, updated_at = ?2 WHERE id = ?3",
+            params![work_mode.to_string(), now, session_id],
         )?;
 
         Ok(())

@@ -5,7 +5,7 @@ use ratatui::style::Color;
 pub fn catppuccin_mocha() -> Theme {
     ThemeBuilder::new("catppuccin-mocha", "Catppuccin Mocha")
         .core_colors(
-            Color::Rgb(40, 40, 56),
+            Color::Rgb(30, 30, 46),
             Color::Rgb(88, 91, 112),
             Color::Rgb(137, 220, 235),
             Color::Rgb(203, 166, 247),
@@ -23,7 +23,7 @@ pub fn catppuccin_mocha() -> Theme {
         .special_colors(
             Color::Rgb(249, 226, 175),
             Color::Rgb(243, 139, 168),
-            Color::Rgb(36, 39, 58),
+            Color::Rgb(24, 24, 37),
         )
         .ui_colors(
             Color::Rgb(203, 166, 247),

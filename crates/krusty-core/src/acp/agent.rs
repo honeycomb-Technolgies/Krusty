@@ -127,6 +127,7 @@ impl KrustyAgent {
                         info!("Fetching models from OpenRouter...");
                         match openrouter::fetch_models(api_key).await {
                             Ok(fetched) => {
+                                let fetched_count = fetched.len();
                                 for model in fetched {
                                     let model_id =
                                         format!("{}:{}", provider.storage_key(), model.id);
@@ -138,13 +139,7 @@ impl KrustyAgent {
                                         model.display_name.clone(),
                                     ));
                                 }
-                                info!(
-                                    "Added {} models from OpenRouter",
-                                    models
-                                        .iter()
-                                        .filter(|(_, p, _, _, _)| *p == ProviderId::OpenRouter)
-                                        .count()
-                                );
+                                info!("Added {} models from OpenRouter", fetched_count);
                             }
                             Err(e) => {
                                 warn!("Failed to fetch OpenRouter models: {}", e);
@@ -203,7 +198,9 @@ impl KrustyAgent {
             .find(|(id, _, _, _, _)| id == model_id)
             .ok_or_else(|| AcpError::ProtocolError(format!("Model not found: {}", model_id)))?;
 
-        let (_, provider, actual_model_id, api_key, _display_name) = model_config.clone();
+        let provider = model_config.1;
+        let actual_model_id = model_config.2.clone();
+        let api_key = model_config.3.clone();
 
         info!(
             "Switching to model: {} (provider: {:?})",
@@ -338,10 +335,7 @@ impl KrustyAgent {
             if let Err(e) = tx.send(notification).await {
                 warn!("Failed to send available commands: {}", e);
             } else {
-                info!(
-                    "Sent {} available commands",
-                    self.get_available_commands().len()
-                );
+                info!("Sent available commands update");
             }
         }
     }
@@ -406,13 +400,16 @@ impl Agent for KrustyAgent {
             mcp_servers.len()
         );
 
+        // Build once before cwd gets moved into session creation.
+        let workspace_context = build_workspace_context(&cwd);
+
         // Update the processor's working directory to match the session's cwd
         // This ensures tools execute in the correct directory (the project open in Zed)
         self.processor.write().await.set_cwd(cwd.clone());
 
         // Pass as Option to our session manager which handles defaults
         let session = self.sessions.create_session(
-            Some(cwd.clone()),
+            Some(cwd),
             if mcp_servers.is_empty() {
                 None
             } else {
@@ -421,9 +418,8 @@ impl Agent for KrustyAgent {
         );
 
         // Build and inject workspace context so the AI understands the codebase
-        let workspace_context = build_workspace_context(&cwd);
         session.add_system_context(workspace_context).await;
-        info!("Injected workspace context for: {:?}", cwd);
+        info!("Injected workspace context for session cwd");
 
         // Detect available models from all configured providers
         let detected_models = self.detect_available_models().await;
@@ -673,17 +669,16 @@ impl Agent for KrustyAgent {
 
 /// Extract text content from ACP content blocks
 fn extract_prompt_text(content: &[ContentBlock]) -> String {
-    content
-        .iter()
-        .filter_map(|block| {
-            if let ContentBlock::Text(text) = block {
-                Some(text.text.as_str())
-            } else {
-                None
+    let mut prompt_text = String::new();
+    for block in content {
+        if let ContentBlock::Text(text) = block {
+            if !prompt_text.is_empty() {
+                prompt_text.push('\n');
             }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+            prompt_text.push_str(&text.text);
+        }
+    }
+    prompt_text
 }
 
 /// Build workspace context for the AI
@@ -739,13 +734,20 @@ fn build_workspace_context(cwd: &std::path::Path) -> String {
         let mut items: Vec<String> = entries
             .filter_map(|e| e.ok())
             .filter_map(|e| {
-                let name = e.file_name().to_string_lossy().to_string();
+                let file_name = e.file_name();
+                let name = file_name.to_string_lossy();
                 // Skip hidden files except .git
                 if name.starts_with('.') && name != ".git" {
                     return None;
                 }
                 let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
-                Some(if is_dir { format!("{}/", name) } else { name })
+                if is_dir {
+                    let mut dir_name = name.into_owned();
+                    dir_name.push('/');
+                    Some(dir_name)
+                } else {
+                    Some(name.into_owned())
+                }
             })
             .collect();
 

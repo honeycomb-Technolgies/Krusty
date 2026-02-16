@@ -182,9 +182,10 @@ impl HelpPopup {
                 "Global",
                 vec![
                     ("Ctrl+Q", "Quit"),
-                    ("Ctrl+B", "Toggle BUILD/PLAN mode"),
+                    ("Ctrl+G", "Toggle BUILD/PLAN mode"),
                     ("Ctrl+T", "Toggle plan sidebar"),
-                    ("Ctrl+P", "Open process list"),
+                    ("Ctrl+B", "Open process list"),
+                    ("Ctrl+P", "Toggle plugin window"),
                     ("Tab", "Cycle thinking intensity"),
                     ("Esc", "Cancel AI / close popup"),
                 ],

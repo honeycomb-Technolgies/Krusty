@@ -5,7 +5,7 @@ use ratatui::style::Color;
 pub fn github_dark() -> Theme {
     ThemeBuilder::new("github-dark", "GitHub Dark")
         .core_colors(
-            Color::Rgb(32, 37, 46),
+            Color::Rgb(13, 17, 23),
             Color::Rgb(48, 54, 61),
             Color::Rgb(88, 166, 255),
             Color::Rgb(188, 140, 255),

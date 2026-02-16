@@ -5,8 +5,8 @@ use ratatui::style::Color;
 pub fn one_dark() -> Theme {
     ThemeBuilder::new("one-dark", "One Dark")
         .core_colors(
-            Color::Rgb(49, 54, 63),
-            Color::Rgb(59, 66, 79),
+            Color::Rgb(40, 44, 52),
+            Color::Rgb(61, 68, 81),
             Color::Rgb(97, 175, 239),
             Color::Rgb(198, 120, 221),
             Color::Rgb(171, 178, 191),
@@ -23,7 +23,7 @@ pub fn one_dark() -> Theme {
         .special_colors(
             Color::Rgb(229, 192, 123),
             Color::Rgb(224, 108, 117),
-            Color::Rgb(49, 54, 63),
+            Color::Rgb(33, 37, 43),
         )
         .ui_colors(
             Color::Rgb(198, 120, 221),

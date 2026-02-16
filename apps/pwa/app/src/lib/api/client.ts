@@ -14,6 +14,7 @@ export interface SessionResponse {
 	token_count?: number | null;
 	working_dir: string | null;
 	parent_session_id: string | null;
+	mode: 'build' | 'plan';
 	updated_at: string;
 }
 
@@ -121,6 +122,26 @@ export interface ProviderStatus {
 	has_oauth: boolean;
 }
 
+/** Push diagnostics summary */
+export interface PushStatusResponse {
+	push_configured: boolean;
+	subscription_count: number;
+	last_attempt_at: string | null;
+	last_success_at: string | null;
+	last_failure_at: string | null;
+	last_failure_reason: string | null;
+	recent_failures_24h: number;
+}
+
+/** Push test-send response */
+export interface PushTestResponse {
+	accepted: boolean;
+	attempted: number;
+	sent: number;
+	stale_removed: number;
+	failed: number;
+}
+
 /** SSE stream event types */
 export type StreamEvent =
 	| { type: 'text_delta'; delta: string }
@@ -221,7 +242,7 @@ export const apiClient = {
 	deleteSession: (id: string) =>
 		request<void>(`/sessions/${id}`, { method: 'DELETE' }),
 
-	updateSession: (id: string, data: { title?: string; working_dir?: string }) =>
+	updateSession: (id: string, data: { title?: string; working_dir?: string; mode?: 'build' | 'plan' }) =>
 		request<SessionResponse>(`/sessions/${id}`, {
 			method: 'PATCH',
 			body: JSON.stringify(data)
@@ -247,6 +268,7 @@ export const apiClient = {
 			agent_state: string;
 			started_at: string | null;
 			last_event_at: string | null;
+			mode: 'build' | 'plan';
 		}>(`/sessions/${id}/state`),
 
 	// Models
@@ -336,6 +358,14 @@ export const apiClient = {
 			method: 'DELETE',
 			body: JSON.stringify(data)
 		}),
+
+	getPushStatus: () => request<PushStatusResponse>('/push/status'),
+
+	sendPushTest: (payload: { session_id?: string; title?: string; body?: string } = {}) =>
+		request<PushTestResponse>('/push/test', {
+			method: 'POST',
+			body: JSON.stringify(payload)
+		}),
 };
 
 // Chat streaming
@@ -362,6 +392,7 @@ interface ChatRequest {
 	model?: string;
 	thinking_enabled?: boolean;
 	permission_mode?: 'supervised' | 'autonomous';
+	mode?: 'build' | 'plan';
 }
 
 export interface PlanItem {

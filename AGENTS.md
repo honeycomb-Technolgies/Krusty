@@ -1,42 +1,45 @@
-# Repository Guidelines
+# AGENTS Guide: /
 
-## Project Structure & Module Organization
-- `crates/krusty-cli`: terminal client (`krusty`) and TUI handlers.
-- `crates/krusty-core`: shared runtime (AI providers, tools, storage, planning, MCP/ACP).
-- `crates/krusty-server`: self-host API used by app clients.
-- `apps/pwa/app`: active installable PWA chat/workspace client.
-- `apps/desktop/shell`: Tauri wrapper around the PWA surface.
-- `apps/marketing/site`: static marketing/legal pages only.
+## Scope
+- Applies to `/` and its direct contents.
+- If a deeper directory has its own `AGENTS.md`, that file takes precedence for its subtree.
 
-## Build, Test, and Development Commands
-- Rust workspace:
-  `cargo check --workspace`, `cargo test --workspace`, `cargo clippy --workspace -- -D warnings`, `cargo fmt --all -- --check`
-- Server local run:
-  `cargo run -p krusty-server` (defaults to `http://localhost:3000`)
-- PWA:
-  `cd apps/pwa/app && bun install && bun run check && bun run build`
-- Desktop shell:
-  `cd apps/desktop/shell && bun install && cargo check --manifest-path src-tauri/Cargo.toml`
-- Marketing site smoke:
-  verify files in `apps/marketing/site` and serve with `python3 -m http.server 8080`.
+## Purpose
+Workspace root coordinating crates, apps, packaging, and governance docs.
 
-## Coding Style & Naming Conventions
-- Rust: 2021 edition, `rustfmt` defaults, `snake_case` functions/modules, `CamelCase` types.
-- Svelte/TypeScript: keep components focused; colocate state in `src/lib/stores`.
-- Prefer explicit boundaries: marketing code must not import app runtime; PWA must not include billing/account coupling.
+## Local Standards
+- Deliver best-in-class quality: elegant, modular, organized, and performant code.
+- Keep code self-explanatory; add comments only for non-obvious constraints or tradeoffs.
+- Avoid over-engineering; add abstractions only when they buy clear maintainability.
+- Keep boundaries explicit between CLI, core runtime, server, desktop shell, and PWA surfaces.
+- Prefer safe implementations; justify `unsafe` usage explicitly if ever required.
+- Keep AGENTS guidance current: when a notable change impacts structure, file responsibilities, workflows, or standards, stop and update the relevant `AGENTS.md` files in the same change.
 
-## Testing Guidelines
-- Keep Rust unit tests near implementation (`#[cfg(test)]`).
-- Use `#[tokio::test]` for async behavior.
-- For frontend changes, run `bun run check` and `bun run build` in `apps/pwa/app`.
-- Treat warnings as cleanup candidates even if builds pass.
+## Quality Gates
+- Quality gates are blocking: all listed checks must pass with no warnings/errors before considering work complete.
+- Rust workspace: `cargo check --workspace`, `cargo test --workspace`, `cargo clippy --workspace -- -D warnings`, `cargo fmt --all -- --check`
+- Server local run: `cargo run -p krusty-server`
+- PWA: `cd apps/pwa/app && bun run check && bun run build`
+- Desktop shell: `cd apps/desktop/shell && cargo check --manifest-path src-tauri/Cargo.toml`
 
-## Commit & Pull Request Guidelines
-- Use Conventional Commit prefixes (`feat:`, `fix:`, `refactor:`, `docs:`, `chore:`).
-- Keep PRs scoped by boundary (`server`, `pwa`, `desktop`, `marketing`).
-- Include: problem statement, change summary, test evidence (commands run), and screenshots for UI updates.
+## Structure Map
+### Subdirectories
+- `.githooks/`: Git hook scripts that enforce local quality checks before commits. See `.githooks/AGENTS.md` for local detail.
+- `.github/`: GitHub automation and release infrastructure configuration. See `.github/AGENTS.md` for local detail.
+- `apps/`: Application surfaces built on top of the shared Rust runtime. See `apps/AGENTS.md` for local detail.
+- `aur/`: Arch Linux packaging metadata for AUR distribution. See `aur/AGENTS.md` for local detail.
+- `crates/`: Rust workspace crates implementing CLI, core runtime, and server. See `crates/AGENTS.md` for local detail.
+- `wit/`: Top-level WIT contracts shared across extension tooling. See `wit/AGENTS.md` for local detail.
 
-## Security & Configuration Tips
-- Never commit provider keys or local credential files.
-- Use env vars (`PORT`, `KRUSTY_PROVIDER`, `KRUSTY_MODEL`, provider API keys) or `/api/credentials/*`.
-- Self-host focus: avoid introducing Kubernetes-only assumptions in runtime paths.
+### Files
+- `.gitignore`: Ignore rules for generated files and local-only artifacts.
+- `AGENTS.md`: Repository-level agent instructions and standards for all contributors.
+- `CLAUDE.md`: Claude guidance document describing values, architecture, and coding standards for this scope.
+- `Cargo.lock`: Pinned Rust dependency lockfile for reproducible builds.
+- `Cargo.toml`: Workspace manifest declaring crate members and shared dependency settings.
+- `Cross.toml`: Cross-compilation configuration for multi-target Rust builds.
+- `KRAB.md`: Project internal reference/spec document used by maintainers.
+- `LICENSE`: Project license terms and usage permissions.
+- `README.md`: Human-facing documentation for this directory's purpose and workflows.
+- `RESTRUCTURE_ROADMAP.md`: Roadmap detailing current restructuring phases and migration targets.
+- `install.sh`: Installer script for provisioning krusty binaries and assets.

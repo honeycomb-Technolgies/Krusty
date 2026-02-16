@@ -12,7 +12,8 @@ use tracing::{debug, info, warn};
 use crate::agent::subagent::{SubAgentPool, SubAgentTask};
 use crate::agent::{AgentCancellation, SharedBuildContext};
 use crate::ai::client::AiClient;
-use crate::tools::registry::{Tool, ToolContext, ToolResult};
+use crate::tools::registry::Tool;
+use crate::tools::{parse_params, ToolContext, ToolResult};
 
 /// Build tool for spawning parallel Opus builder agents
 pub struct BuildTool {
@@ -107,14 +108,11 @@ impl Tool for BuildTool {
             params
         );
 
-        let params: Params = match serde_json::from_value(params) {
+        let params = match parse_params::<Params>(params) {
             Ok(p) => p,
             Err(e) => {
-                warn!("Build tool: Invalid parameters: {}", e);
-                return ToolResult {
-                    output: json!({"error": format!("Invalid parameters: {}", e)}).to_string(),
-                    is_error: true,
-                };
+                warn!("Build tool parameter validation failed: {}", e.output);
+                return e;
             }
         };
 

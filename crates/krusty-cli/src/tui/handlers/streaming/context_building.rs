@@ -67,7 +67,7 @@ Key formatting rules:
 - Dependencies: `> Blocked-By: task_ids` - tasks that must complete first
 - Subtasks: Indent 2 spaces for subtasks under a parent task
 
-After exploring the codebase, output your plan in this format. The user can exit plan mode with Ctrl+B to begin implementation."#.to_string();
+After exploring the codebase, output your plan in this format. The user can exit plan mode with Ctrl+G to begin implementation."#.to_string();
         };
 
         // Build context from active plan (truncated if large)
@@ -99,7 +99,7 @@ In plan mode:
 ---
 
 When working on tasks, update progress by telling the user which task you're working on.
-The user can exit plan mode with Ctrl+B when ready to implement."#,
+The user can exit plan mode with Ctrl+G when ready to implement."#,
             sanitize_plan_title(&plan.title),
             completed,
             total,

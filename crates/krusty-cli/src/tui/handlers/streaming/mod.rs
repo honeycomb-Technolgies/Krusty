@@ -42,6 +42,9 @@ impl App {
             return;
         }
 
+        // New user input starts a fresh failure-tracking window.
+        self.runtime.tool_failure_signatures.clear();
+
         if self.ui.view == View::StartMenu {
             self.ui.view = View::Chat;
         }

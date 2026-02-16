@@ -705,7 +705,7 @@ impl App {
                             }
 
                             // Silent tools - don't create any visual element
-                            "task_complete" | "enter_plan_mode" | "todowrite" => {
+                            "task_complete" | "enter_plan_mode" | "set_work_mode" | "todowrite" => {
                                 // These tools are intentionally silent and should not
                                 // create any UI blocks when rebuilding from conversation
                             }

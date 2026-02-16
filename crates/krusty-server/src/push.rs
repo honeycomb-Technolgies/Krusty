@@ -5,16 +5,23 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use axum::http;
 use base64ct::{Base64UrlUnpadded, Encoding};
 use serde::Serialize;
+use tokio::time::sleep;
 use web_push_native::jwt_simple::algorithms::{ECDSAP256PublicKeyLike, ES256KeyPair};
 use web_push_native::p256::PublicKey;
 use web_push_native::{Auth, WebPushBuilder};
 
-use krusty_core::storage::{Database, PushSubscriptionStore};
+use krusty_core::storage::{
+    Database, PushDeliveryAttemptStore, PushSubscription, PushSubscriptionStore,
+};
+
+const MAX_PUSH_ATTEMPTS: usize = 3;
+const PUSH_RETRY_BASE_DELAY_MS: u64 = 300;
 
 /// Payload sent inside a push notification.
 #[derive(Debug, Clone, Serialize)]
@@ -25,12 +32,55 @@ pub struct PushPayload {
     pub tag: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum PushEventType {
+    Completion,
+    AwaitingInput,
+    Error,
+    Test,
+}
+
+impl PushEventType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Completion => "completion",
+            Self::AwaitingInput => "awaiting_input",
+            Self::Error => "error",
+            Self::Test => "test",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct PushNotifyStats {
+    pub attempted: usize,
+    pub sent: usize,
+    pub stale_removed: usize,
+    pub failed: usize,
+}
+
 pub struct PushService {
     keypair: ES256KeyPair,
     public_key_base64url: String,
     contact: String,
     db_path: Arc<PathBuf>,
     http_client: reqwest::Client,
+}
+
+enum DeliveryOutcome {
+    Success {
+        status: u16,
+        latency_ms: u64,
+    },
+    Stale {
+        status: u16,
+        latency_ms: u64,
+    },
+    Failure {
+        status: Option<u16>,
+        reason: String,
+        latency_ms: Option<u64>,
+    },
 }
 
 impl PushService {
@@ -58,10 +108,15 @@ impl PushService {
         let public_key_bytes = keypair.public_key().public_key().to_bytes_uncompressed();
         let public_key_base64url = Base64UrlUnpadded::encode_string(&public_key_bytes);
 
+        let contact = std::env::var("KRUSTY_PUSH_CONTACT")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| "mailto:krusty@localhost".to_string());
+
         Ok(Self {
             keypair,
             public_key_base64url,
-            contact: "mailto:krusty@localhost".to_string(),
+            contact,
             db_path,
             http_client: reqwest::Client::new(),
         })
@@ -73,15 +128,13 @@ impl PushService {
         &self.public_key_base64url
     }
 
-    /// Send a push notification to a single subscription endpoint.
-    /// Returns Ok(true) if sent, Ok(false) if subscription was stale (deleted).
-    async fn send(
+    async fn send_once(
         &self,
         endpoint: &str,
         p256dh: &str,
         auth: &str,
         payload: &PushPayload,
-    ) -> Result<bool> {
+    ) -> Result<reqwest::Response> {
         let endpoint_uri: http::Uri = endpoint
             .parse()
             .context("Invalid push subscription endpoint")?;
@@ -118,73 +171,240 @@ impl PushService {
             }
         }
 
-        let response = req_builder
+        req_builder
             .body(body_bytes)
             .send()
             .await
-            .context("Failed to send push notification")?;
+            .context("Failed to send push notification")
+    }
 
-        let status = response.status().as_u16();
+    async fn send_with_retry(
+        &self,
+        subscription: &PushSubscription,
+        payload: &PushPayload,
+    ) -> DeliveryOutcome {
+        let start = Instant::now();
 
-        // 404 or 410 = subscription expired/invalid → clean up
-        if status == 404 || status == 410 {
-            tracing::info!(endpoint, "Push subscription expired, removing");
-            if let Ok(db) = Database::new(&self.db_path) {
-                let store = PushSubscriptionStore::new(&db);
-                let _ = store.remove_by_endpoint(endpoint);
+        for attempt in 1..=MAX_PUSH_ATTEMPTS {
+            match self
+                .send_once(
+                    &subscription.endpoint,
+                    &subscription.p256dh,
+                    &subscription.auth,
+                    payload,
+                )
+                .await
+            {
+                Ok(response) => {
+                    let status = response.status().as_u16();
+                    let latency_ms = elapsed_ms(start);
+
+                    if (200..300).contains(&status) {
+                        return DeliveryOutcome::Success { status, latency_ms };
+                    }
+
+                    if status == 404 || status == 410 {
+                        return DeliveryOutcome::Stale { status, latency_ms };
+                    }
+
+                    let body = response.text().await.unwrap_or_default();
+                    let reason = if body.is_empty() {
+                        format!("Push failed with status {}", status)
+                    } else {
+                        format!("Push failed with status {}: {}", status, body)
+                    };
+
+                    if is_transient_status(status) && attempt < MAX_PUSH_ATTEMPTS {
+                        tracing::warn!(
+                            endpoint = %subscription.endpoint,
+                            status,
+                            attempt,
+                            "Transient push failure, retrying"
+                        );
+                        sleep(backoff_delay(attempt)).await;
+                        continue;
+                    }
+
+                    return DeliveryOutcome::Failure {
+                        status: Some(status),
+                        reason,
+                        latency_ms: Some(latency_ms),
+                    };
+                }
+                Err(err) => {
+                    let reason = err.to_string();
+                    let latency_ms = Some(elapsed_ms(start));
+
+                    if attempt < MAX_PUSH_ATTEMPTS {
+                        tracing::warn!(
+                            endpoint = %subscription.endpoint,
+                            attempt,
+                            error = %reason,
+                            "Push send error, retrying"
+                        );
+                        sleep(backoff_delay(attempt)).await;
+                        continue;
+                    }
+
+                    return DeliveryOutcome::Failure {
+                        status: None,
+                        reason,
+                        latency_ms,
+                    };
+                }
             }
-            return Ok(false);
         }
 
-        if !(200..300).contains(&(status as usize)) {
-            let body = response.text().await.unwrap_or_default();
-            tracing::warn!(status, endpoint, body, "Push delivery failed");
-            return Err(anyhow::anyhow!("Push failed with status {}", status));
+        DeliveryOutcome::Failure {
+            status: None,
+            reason: "Exhausted push retry attempts".to_string(),
+            latency_ms: None,
         }
-
-        // Update last_used_at
-        if let Ok(db) = Database::new(&self.db_path) {
-            let store = PushSubscriptionStore::new(&db);
-            let _ = store.touch(endpoint);
-        }
-
-        Ok(true)
     }
 
     /// Send a notification to all subscriptions for a user.
     /// In single-tenant mode (user_id = None), sends to all subscriptions.
-    pub async fn notify_user(&self, user_id: Option<&str>, payload: PushPayload) {
-        let subscriptions = match Database::new(&self.db_path) {
-            Ok(db) => {
-                let store = PushSubscriptionStore::new(&db);
-                match user_id {
-                    Some(uid) => store.get_for_user(uid).unwrap_or_default(),
-                    None => store.get_all().unwrap_or_default(),
+    pub async fn notify_user(
+        &self,
+        user_id: Option<&str>,
+        payload: PushPayload,
+        event_type: PushEventType,
+    ) -> PushNotifyStats {
+        let subscriptions = {
+            let db = match Database::new(&self.db_path) {
+                Ok(db) => db,
+                Err(e) => {
+                    tracing::error!("Failed to open DB for push: {}", e);
+                    return PushNotifyStats::default();
                 }
-            }
-            Err(e) => {
-                tracing::error!("Failed to open DB for push: {}", e);
-                return;
+            };
+            let store = PushSubscriptionStore::new(&db);
+            match user_id {
+                Some(uid) => store.get_for_user(uid).unwrap_or_default(),
+                None => store.get_all().unwrap_or_default(),
             }
         };
 
         if subscriptions.is_empty() {
-            return;
+            tracing::info!(
+                user_id = user_id.unwrap_or("<single-tenant>"),
+                event_type = event_type.as_str(),
+                "No push subscriptions found"
+            );
+            return PushNotifyStats::default();
         }
 
-        tracing::debug!(count = subscriptions.len(), "Sending push notifications");
+        tracing::info!(
+            user_id = user_id.unwrap_or("<single-tenant>"),
+            event_type = event_type.as_str(),
+            count = subscriptions.len(),
+            "Sending push notifications"
+        );
+
+        let mut stats = PushNotifyStats::default();
 
         for sub in subscriptions {
-            match self
-                .send(&sub.endpoint, &sub.p256dh, &sub.auth, &payload)
-                .await
-            {
-                Ok(true) => tracing::debug!(endpoint = %sub.endpoint, "Push sent"),
-                Ok(false) => {
-                    tracing::debug!(endpoint = %sub.endpoint, "Stale subscription removed")
+            stats.attempted += 1;
+
+            let outcome = self.send_with_retry(&sub, &payload).await;
+            match &outcome {
+                DeliveryOutcome::Success { .. } => stats.sent += 1,
+                DeliveryOutcome::Stale { .. } => stats.stale_removed += 1,
+                DeliveryOutcome::Failure { .. } => stats.failed += 1,
+            }
+
+            let db = match Database::new(&self.db_path) {
+                Ok(db) => db,
+                Err(error) => {
+                    tracing::error!(
+                        endpoint = %sub.endpoint,
+                        error = %error,
+                        "Failed to open DB while recording push outcome"
+                    );
+                    continue;
                 }
-                Err(e) => tracing::warn!(endpoint = %sub.endpoint, "Push failed: {}", e),
+            };
+            let store = PushSubscriptionStore::new(&db);
+            let attempt_store = PushDeliveryAttemptStore::new(&db);
+
+            match outcome {
+                DeliveryOutcome::Success { status, latency_ms } => {
+                    let _ = store.mark_success(&sub.endpoint);
+                    let _ = attempt_store.record_attempt(
+                        sub.user_id.as_deref(),
+                        payload.session_id.as_deref(),
+                        &sub.endpoint,
+                        event_type.as_str(),
+                        "success",
+                        Some(status),
+                        None,
+                        Some(latency_ms),
+                    );
+                    tracing::debug!(endpoint = %sub.endpoint, status, "Push sent");
+                }
+                DeliveryOutcome::Stale { status, latency_ms } => {
+                    tracing::info!(
+                        endpoint = %sub.endpoint,
+                        status,
+                        "Push subscription expired, removing"
+                    );
+                    let _ = store.remove_by_endpoint(&sub.endpoint);
+                    let _ = attempt_store.record_attempt(
+                        sub.user_id.as_deref(),
+                        payload.session_id.as_deref(),
+                        &sub.endpoint,
+                        event_type.as_str(),
+                        "stale",
+                        Some(status),
+                        Some("subscription expired"),
+                        Some(latency_ms),
+                    );
+                }
+                DeliveryOutcome::Failure {
+                    status,
+                    reason,
+                    latency_ms,
+                } => {
+                    let _ = store.mark_failure(&sub.endpoint, &reason);
+                    let _ = attempt_store.record_attempt(
+                        sub.user_id.as_deref(),
+                        payload.session_id.as_deref(),
+                        &sub.endpoint,
+                        event_type.as_str(),
+                        "failure",
+                        status,
+                        Some(&reason),
+                        latency_ms,
+                    );
+                    tracing::warn!(endpoint = %sub.endpoint, status, "Push failed: {}", reason);
+                }
             }
         }
+
+        tracing::info!(
+            user_id = user_id.unwrap_or("<single-tenant>"),
+            event_type = event_type.as_str(),
+            attempted = stats.attempted,
+            sent = stats.sent,
+            stale_removed = stats.stale_removed,
+            failed = stats.failed,
+            "Push notifications finished"
+        );
+
+        stats
     }
+}
+
+fn is_transient_status(status: u16) -> bool {
+    status == 429 || status >= 500
+}
+
+fn backoff_delay(attempt: usize) -> Duration {
+    let exponent = (attempt.saturating_sub(1)).min(10) as u32;
+    let multiplier = 1u64 << exponent;
+    Duration::from_millis(PUSH_RETRY_BASE_DELAY_MS.saturating_mul(multiplier))
+}
+
+fn elapsed_ms(start: Instant) -> u64 {
+    u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)
 }

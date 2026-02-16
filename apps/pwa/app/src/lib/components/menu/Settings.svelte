@@ -1,6 +1,15 @@
 <script lang="ts">
-	import { ArrowLeft, Bell, Server } from 'lucide-svelte';
-	import { subscribeToPush, unsubscribeFromPush, isPushSubscribed, isPushSupported } from '$lib/push';
+	import { onMount } from 'svelte';
+	import { ArrowLeft, Bell, Loader2, Server, TestTube2 } from 'lucide-svelte';
+	import { apiClient, type PushStatusResponse } from '$lib/api/client';
+	import {
+		getCurrentPushState,
+		isPushSupported,
+		reconcilePushSubscription,
+		subscribeToPush,
+		type PushState,
+		unsubscribeFromPush
+	} from '$lib/push';
 
 	interface Props {
 		onBack: () => void;
@@ -8,32 +17,109 @@
 
 	let { onBack }: Props = $props();
 
-	let notifications = $state(isPushSubscribed());
+	let notifications = $state(false);
+	let initializing = $state(true);
 	let subscribing = $state(false);
 	let pushError = $state('');
+	let pushSupported = $state(false);
+	let pushPermission = $state<NotificationPermission | 'unsupported'>('unsupported');
+	let pushEndpoint = $state<string | null>(null);
+	let pushStatus = $state<PushStatusResponse | null>(null);
+	let statusError = $state('');
+	let testingPush = $state(false);
+	let testMessage = $state('');
 	let serverUrl = $state('http://localhost:3000');
 
+	onMount(() => {
+		void initializePushSettings();
+	});
+
+	function applyPushState(state: PushState) {
+		notifications = state.subscribed;
+		pushSupported = state.supported;
+		pushPermission = state.permission;
+		pushEndpoint = state.endpoint;
+	}
+
+	async function refreshPushStatus() {
+		statusError = '';
+		try {
+			pushStatus = await apiClient.getPushStatus();
+		} catch (e) {
+			pushStatus = null;
+			statusError = e instanceof Error ? e.message : 'Failed to load push status';
+		}
+	}
+
+	async function initializePushSettings() {
+		initializing = true;
+		pushError = '';
+		try {
+			applyPushState(await reconcilePushSubscription());
+		} catch (e) {
+			pushError = e instanceof Error ? e.message : 'Failed to initialize push notifications';
+			try {
+				applyPushState(await getCurrentPushState());
+			} catch {
+				pushSupported = isPushSupported();
+			}
+		}
+		await refreshPushStatus();
+		initializing = false;
+	}
+
 	async function toggleNotifications() {
-		if (subscribing) return;
+		if (subscribing || initializing) return;
 		subscribing = true;
 		pushError = '';
+		testMessage = '';
 
 		try {
 			if (notifications) {
 				await unsubscribeFromPush();
-				notifications = false;
 			} else {
 				const ok = await subscribeToPush();
-				if (ok) {
-					notifications = true;
-				} else {
-					pushError = 'Permission denied';
+				if (!ok) {
+					pushError =
+						Notification.permission === 'denied'
+							? 'Permission denied in browser settings'
+							: 'Permission not granted';
 				}
 			}
+			applyPushState(await getCurrentPushState());
+			await refreshPushStatus();
 		} catch (e) {
 			pushError = e instanceof Error ? e.message : 'Failed';
+			try {
+				applyPushState(await getCurrentPushState());
+			} catch {
+				// ignore
+			}
 		} finally {
 			subscribing = false;
+		}
+	}
+
+	async function sendTestNotification() {
+		if (testingPush) return;
+		testingPush = true;
+		testMessage = '';
+		pushError = '';
+
+		try {
+			const result = await apiClient.sendPushTest();
+			if (result.sent > 0) {
+				testMessage = `Sent to ${result.sent}/${result.attempted} subscription${result.sent === 1 ? '' : 's'}.`;
+			} else if (result.attempted === 0) {
+				testMessage = 'No active subscriptions found on the server.';
+			} else {
+				testMessage = `No successful deliveries (${result.failed} failed, ${result.stale_removed} stale removed).`;
+			}
+			await refreshPushStatus();
+		} catch (e) {
+			testMessage = e instanceof Error ? e.message : 'Failed to send test notification';
+		} finally {
+			testingPush = false;
 		}
 	}
 </script>
@@ -59,31 +145,98 @@
 						<div>
 							<div class="font-medium">Push Notifications</div>
 							<div class="text-sm text-muted-foreground">
-								{#if subscribing}
-									Subscribing...
+								{#if initializing}
+									Loading state...
+								{:else if subscribing}
+									Updating subscription...
 								{:else if pushError}
 									{pushError}
-								{:else if !isPushSupported()}
+								{:else if !pushSupported}
 									Not supported in this browser
+								{:else if pushPermission === 'denied'}
+									Permission denied in browser settings
+								{:else if notifications}
+									Subscribed on this device
 								{:else}
-									Get notified on responses
+									Not subscribed
+								{/if}
+							</div>
+							<div class="text-xs text-muted-foreground">
+								Permission: {pushPermission}
+								{#if pushEndpoint}
+									· Synced endpoint
 								{/if}
 							</div>
 						</div>
 					</div>
 					<button
 						onclick={toggleNotifications}
-						disabled={subscribing || !isPushSupported()}
+						disabled={initializing || subscribing || !pushSupported}
 						aria-label="Toggle push notifications"
 						class="relative h-6 w-11 rounded-full transition-colors
 							{notifications ? 'bg-primary' : 'bg-muted'}
-							{subscribing || !isPushSupported() ? 'opacity-50' : ''}"
+							{initializing || subscribing || !pushSupported ? 'opacity-50' : ''}"
 					>
 						<span
 							class="absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform
 								{notifications ? 'left-[22px]' : 'left-0.5'}"
 						></span>
 					</button>
+				</div>
+
+				<div class="rounded-xl bg-card p-4">
+					<div class="mb-3 flex items-center gap-3">
+						<Server class="h-5 w-5 text-muted-foreground" />
+						<div>
+							<div class="font-medium">Delivery Diagnostics</div>
+							<div class="text-sm text-muted-foreground">
+								Server health and recent push delivery outcomes
+							</div>
+						</div>
+					</div>
+
+					{#if statusError}
+						<div class="mb-3 text-sm text-destructive">{statusError}</div>
+					{:else if !pushStatus}
+						<div class="mb-3 flex items-center gap-2 text-sm text-muted-foreground">
+							<Loader2 class="h-4 w-4 animate-spin" />
+							Loading push status...
+						</div>
+					{:else}
+						<div class="mb-3 grid grid-cols-2 gap-x-3 gap-y-1 text-sm">
+							<div class="text-muted-foreground">Configured</div>
+							<div>{pushStatus.push_configured ? 'Yes' : 'No'}</div>
+							<div class="text-muted-foreground">Subscriptions</div>
+							<div>{pushStatus.subscription_count}</div>
+							<div class="text-muted-foreground">Last Attempt</div>
+							<div>{pushStatus.last_attempt_at ?? 'Never'}</div>
+							<div class="text-muted-foreground">Last Success</div>
+							<div>{pushStatus.last_success_at ?? 'Never'}</div>
+							<div class="text-muted-foreground">Failures (24h)</div>
+							<div>{pushStatus.recent_failures_24h}</div>
+						</div>
+						{#if pushStatus.last_failure_reason}
+							<div class="mb-3 text-xs text-destructive">
+								Last failure: {pushStatus.last_failure_reason}
+							</div>
+						{/if}
+					{/if}
+
+					<button
+						onclick={sendTestNotification}
+						disabled={testingPush || !notifications}
+						class="flex w-full items-center justify-center gap-2 rounded-lg border border-input px-3 py-2 text-sm transition-colors hover:bg-muted disabled:opacity-50"
+					>
+						{#if testingPush}
+							<Loader2 class="h-4 w-4 animate-spin" />
+						{:else}
+							<TestTube2 class="h-4 w-4" />
+						{/if}
+						Send Test Notification
+					</button>
+					{#if testMessage}
+						<div class="mt-2 text-xs text-muted-foreground">{testMessage}</div>
+					{/if}
 				</div>
 			</div>
 		</section>

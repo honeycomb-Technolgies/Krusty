@@ -605,7 +605,7 @@ impl App {
                     self.runtime.chat.messages.push((
                         "system".to_string(),
                         "No active plan.\n\
-                        • Enter PLAN mode (Ctrl+B) and ask the AI to create a plan\n\
+                        • Enter PLAN mode (Ctrl+G) and ask the AI to create a plan\n\
                         • Use /plan list to see completed plans"
                             .to_string(),
                     ));

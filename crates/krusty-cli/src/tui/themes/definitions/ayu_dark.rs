@@ -5,13 +5,13 @@ use ratatui::style::Color;
 pub fn ayu_dark() -> Theme {
     ThemeBuilder::new("ayu-dark", "Ayu Dark")
         .core_colors(
-            Color::Rgb(25, 30, 42),
+            Color::Rgb(10, 14, 20),
             Color::Rgb(37, 51, 64),
             Color::Rgb(57, 186, 230),
-            Color::Rgb(255, 180, 91),
-            Color::Rgb(191, 197, 206),
-            Color::Rgb(134, 179, 85),
-            Color::Rgb(92, 103, 115),
+            Color::Rgb(255, 180, 84),
+            Color::Rgb(230, 225, 207),
+            Color::Rgb(145, 179, 98),
+            Color::Rgb(95, 106, 119),
         )
         .mode_colors(
             Color::Rgb(134, 179, 85),
@@ -21,9 +21,9 @@ pub fn ayu_dark() -> Theme {
             Color::Rgb(255, 180, 91),
         )
         .special_colors(
-            Color::Rgb(255, 180, 91),
+            Color::Rgb(255, 180, 84),
             Color::Rgb(240, 113, 113),
-            Color::Rgb(15, 20, 30),
+            Color::Rgb(21, 29, 40),
         )
         .ui_colors(
             Color::Rgb(255, 180, 91),

@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use tracing::info;
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 13;
+const SCHEMA_VERSION: i32 = 15;
 
 /// Shared database handle for connection reuse
 ///
@@ -551,6 +551,56 @@ impl Database {
                 "#,
             )?;
             self.set_schema_version_tx(&tx, 13)?;
+        }
+
+        // Migration 14: Push delivery observability + subscription health fields
+        if current_version < 14 {
+            info!("Running migration 14: Push delivery observability");
+            tx.execute_batch(
+                r#"
+                ALTER TABLE push_subscriptions ADD COLUMN last_success_at TEXT;
+                ALTER TABLE push_subscriptions ADD COLUMN last_failure_at TEXT;
+                ALTER TABLE push_subscriptions ADD COLUMN last_failure_reason TEXT;
+                ALTER TABLE push_subscriptions ADD COLUMN failure_count INTEGER NOT NULL DEFAULT 0;
+
+                CREATE TABLE IF NOT EXISTS push_delivery_attempts (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT,
+                    session_id TEXT,
+                    endpoint_hash TEXT NOT NULL,
+                    provider_host TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    outcome TEXT NOT NULL,
+                    http_status INTEGER,
+                    error_message TEXT,
+                    latency_ms INTEGER,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_push_delivery_attempts_user_created
+                    ON push_delivery_attempts(user_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_push_delivery_attempts_outcome_created
+                    ON push_delivery_attempts(outcome, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_push_delivery_attempts_session_created
+                    ON push_delivery_attempts(session_id, created_at DESC);
+                "#,
+            )?;
+            self.set_schema_version_tx(&tx, 14)?;
+        }
+
+        // Migration 15: Persist session work mode
+        if current_version < 15 {
+            info!("Running migration 15: Session work mode");
+            tx.execute_batch(
+                r#"
+                ALTER TABLE sessions ADD COLUMN work_mode TEXT NOT NULL DEFAULT 'build'
+                    CHECK (work_mode IN ('build', 'plan'));
+
+                CREATE INDEX IF NOT EXISTS idx_sessions_work_mode
+                    ON sessions(work_mode);
+                "#,
+            )?;
+            self.set_schema_version_tx(&tx, 15)?;
         }
 
         tx.commit()?;

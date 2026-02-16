@@ -5,20 +5,20 @@ use ratatui::style::Color;
 pub fn rosepine() -> Theme {
     ThemeBuilder::new("rosepine", "Rosé Pine")
         .core_colors(
-            Color::Rgb(48, 45, 70),
-            Color::Rgb(64, 61, 82),
+            Color::Rgb(25, 23, 36),
+            Color::Rgb(38, 35, 58),
             Color::Rgb(156, 207, 216),
-            Color::Rgb(235, 188, 186),
+            Color::Rgb(196, 167, 231),
             Color::Rgb(224, 222, 244),
             Color::Rgb(49, 116, 143),
-            Color::Rgb(110, 106, 134),
+            Color::Rgb(144, 140, 170),
         )
         .mode_colors(
             Color::Rgb(49, 116, 143),
             Color::Rgb(235, 188, 186),
-            Color::Rgb(235, 188, 186),
+            Color::Rgb(196, 167, 231),
             Color::Rgb(246, 193, 119),
-            Color::Rgb(235, 188, 186),
+            Color::Rgb(196, 167, 231),
         )
         .special_colors(
             Color::Rgb(246, 193, 119),
@@ -26,7 +26,7 @@ pub fn rosepine() -> Theme {
             Color::Rgb(38, 35, 58),
         )
         .ui_colors(
-            Color::Rgb(235, 188, 186),
+            Color::Rgb(196, 167, 231),
             Color::Rgb(44, 41, 64),
             Color::Rgb(224, 222, 244),
         )

@@ -6,8 +6,8 @@ pub fn tokyo_night() -> Theme {
     ThemeBuilder::new("tokyo-night", "Tokyo Night")
         .core_colors(
             Color::Rgb(26, 27, 38),    // bg
-            Color::Rgb(86, 95, 137),   // border
-            Color::Rgb(125, 207, 255), // title
+            Color::Rgb(65, 72, 104),   // border
+            Color::Rgb(122, 162, 247), // title
             Color::Rgb(187, 154, 247), // accent
             Color::Rgb(192, 202, 245), // text
             Color::Rgb(158, 206, 106), // success

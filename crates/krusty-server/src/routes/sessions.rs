@@ -154,7 +154,7 @@ async fn update_session(
     let session_manager = SessionManager::new(db);
 
     // Verify session exists
-    session_manager
+    let _session = session_manager
         .get_session(&id)?
         .ok_or_else(|| AppError::NotFound(format!("Session {} not found", id)))?;
 
@@ -164,9 +164,9 @@ async fn update_session(
         return Err(AppError::NotFound(format!("Session {} not found", id)));
     }
 
-    if req.title.is_none() && req.working_dir.is_none() {
+    if req.title.is_none() && req.working_dir.is_none() && req.mode.is_none() {
         return Err(AppError::BadRequest(
-            "At least one of title or working_dir must be provided".to_string(),
+            "At least one of title, working_dir, or mode must be provided".to_string(),
         ));
     }
 
@@ -182,6 +182,10 @@ async fn update_session(
             Some(trimmed)
         };
         session_manager.update_session_working_dir(&id, normalized)?;
+    }
+
+    if let Some(mode) = req.mode {
+        session_manager.update_session_work_mode(&id, mode)?;
     }
 
     let session = session_manager
@@ -201,7 +205,7 @@ async fn delete_session(
     let session_manager = SessionManager::new(db);
 
     // Verify session exists
-    session_manager
+    let _session = session_manager
         .get_session(&id)?
         .ok_or_else(|| AppError::NotFound(format!("Session {} not found", id)))?;
 
@@ -232,7 +236,7 @@ async fn get_session_state(
     let session_manager = SessionManager::new(db);
 
     // Verify session exists
-    session_manager
+    let session = session_manager
         .get_session(&id)?
         .ok_or_else(|| AppError::NotFound(format!("Session {} not found", id)))?;
 
@@ -257,6 +261,7 @@ async fn get_session_state(
         agent_state: agent_state.state,
         started_at: agent_state.started_at,
         last_event_at: agent_state.last_event_at,
+        mode: session.work_mode,
     }))
 }
 

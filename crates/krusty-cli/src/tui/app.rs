@@ -304,6 +304,8 @@ pub struct AppRuntime {
     pub approval_requested_at: Option<Instant>,
     /// Exploration budget tracking
     pub exploration_budget_count: usize,
+    /// Counts of repeated tool failure signatures for fail-fast loop protection
+    pub tool_failure_signatures: std::collections::HashMap<String, usize>,
     /// Just updated flag
     pub just_updated: bool,
     /// Update status
@@ -356,6 +358,7 @@ impl AppRuntime {
             permission_mode: PermissionMode::Supervised,
             approval_requested_at: None,
             exploration_budget_count: 0,
+            tool_failure_signatures: std::collections::HashMap::new(),
             just_updated: false,
             update_status: None,
             should_quit: false,

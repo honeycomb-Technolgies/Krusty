@@ -5,11 +5,11 @@ use ratatui::style::Color;
 pub fn solarized_dark() -> Theme {
     ThemeBuilder::new("solarized-dark", "Solarized Dark")
         .core_colors(
-            Color::Rgb(17, 64, 78),
-            Color::Rgb(7, 54, 66),
+            Color::Rgb(0, 43, 54),
+            Color::Rgb(88, 110, 117),
             Color::Rgb(38, 139, 210),
             Color::Rgb(108, 113, 196),
-            Color::Rgb(147, 161, 161),
+            Color::Rgb(131, 148, 150),
             Color::Rgb(133, 153, 0),
             Color::Rgb(88, 110, 117),
         )
