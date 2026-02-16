@@ -137,31 +137,33 @@ pub fn branches(path: &Path) -> Result<Option<Vec<GitBranchSummary>>> {
     )?;
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    let mut branches = stdout
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| {
-            let mut parts = line.split('\t');
-            let name = parts.next().unwrap_or_default().to_string();
-            let is_current = parts.next().unwrap_or_default().trim() == "*";
-            let upstream = parts.next().and_then(|u| {
-                let trimmed = u.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(trimmed.to_string())
-                }
-            });
-            GitBranchSummary {
-                name,
-                is_current,
-                upstream,
-            }
-        })
-        .collect::<Vec<_>>();
+    let mut branches = Vec::new();
+    for line in stdout.lines().filter(|line| !line.trim().is_empty()) {
+        branches.push(parse_branch_summary_line(line));
+    }
 
     branches.sort_by(|a, b| b.is_current.cmp(&a.is_current).then(a.name.cmp(&b.name)));
     Ok(Some(branches))
+}
+
+fn parse_branch_summary_line(line: &str) -> GitBranchSummary {
+    let mut parts = line.split('\t');
+    let name = parts.next().unwrap_or_default().to_string();
+    let is_current = parts.next().unwrap_or_default().trim() == "*";
+    let upstream = parts.next().and_then(|u| {
+        let trimmed = u.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    });
+
+    GitBranchSummary {
+        name,
+        is_current,
+        upstream,
+    }
 }
 
 /// List worktrees for a repository path.

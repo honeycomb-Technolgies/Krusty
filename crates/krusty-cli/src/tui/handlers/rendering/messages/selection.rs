@@ -57,12 +57,11 @@ pub(super) fn apply_selection_to_rendered_line(
 
     // For full-line selection, just restyle all spans (faster path)
     if sel_start == 0 && sel_end >= total_chars {
-        return Line::from(
-            line.spans
-                .into_iter()
-                .map(|span| Span::styled(span.content, span.style.bg(sel_bg).fg(sel_fg)))
-                .collect::<Vec<_>>(),
-        );
+        let mut spans = Vec::with_capacity(line.spans.len());
+        for span in line.spans {
+            spans.push(Span::styled(span.content, span.style.bg(sel_bg).fg(sel_fg)));
+        }
+        return Line::from(spans);
     }
 
     // Partial selection - split spans at CHARACTER boundaries (UTF-8 safe)
@@ -152,7 +151,7 @@ pub(super) fn apply_selection_to_line(
     let selected: String = chars[sel_start..sel_end].iter().collect();
     let after: String = chars[sel_end..].iter().collect();
 
-    let mut spans = Vec::new();
+    let mut spans = Vec::with_capacity(3);
     if !before.is_empty() {
         spans.push(Span::styled(before, base_style));
     }
