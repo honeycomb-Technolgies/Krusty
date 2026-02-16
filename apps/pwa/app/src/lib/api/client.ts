@@ -1,5 +1,8 @@
 const API_BASE = (import.meta.env.VITE_API_BASE || '/api').replace(/\/+$/, '');
 
+const STREAM_ACTIVITY_TIMEOUT = 30_000; // 30 seconds
+const STREAM_CHECK_INTERVAL = 5_000; // Check every 5 seconds
+
 // ============================================================================
 // Type Definitions
 // ============================================================================
@@ -69,6 +72,8 @@ export type StreamEvent =
 	| { type: 'thinking_delta'; thinking: string }
 	| { type: 'tool_call_start'; id: string; name: string }
 	| { type: 'tool_call_complete'; id: string; name: string; arguments: Record<string, unknown> }
+	| { type: 'tool_executing'; id: string; name: string }
+	| { type: 'tool_output_delta'; id: string; delta: string }
 	| { type: 'tool_result'; id: string; output: string; is_error: boolean }
 	| { type: 'plan_update'; items: PlanItem[] }
 	| { type: 'mode_change'; mode: string; reason?: string }
@@ -256,6 +261,7 @@ interface StreamCallbacks {
 	onToolCallStart: (id: string, name: string) => void;
 	onToolCallComplete: (id: string, name: string, args: Record<string, unknown>) => void;
 	onToolResult: (id: string, output: string, isError: boolean) => void;
+	onToolOutputDelta: (id: string, delta: string) => void;
 	onPlanUpdate: (items: PlanItem[]) => void;
 	onModeChange: (mode: string, reason?: string) => void;
 	onPlanComplete: (toolCallId: string, title: string, taskCount: number) => void;
@@ -303,12 +309,23 @@ export async function streamToolResult(
 
 	const decoder = new TextDecoder();
 	let buffer = '';
+	let lastActivity = Date.now();
+
+	// Activity timeout check
+	const timeoutInterval = setInterval(() => {
+		if (Date.now() - lastActivity > STREAM_ACTIVITY_TIMEOUT) {
+			clearInterval(timeoutInterval);
+			reader.cancel().catch(() => {});
+			callbacks.onError('Stream timeout: no data received for 30 seconds');
+		}
+	}, STREAM_CHECK_INTERVAL);
 
 	try {
 		while (true) {
 			const { done, value } = await reader.read();
 			if (done) break;
 
+			lastActivity = Date.now();
 			buffer += decoder.decode(value, { stream: true });
 			const lines = buffer.split('\n');
 			buffer = lines.pop() || '';
@@ -321,8 +338,8 @@ export async function streamToolResult(
 					try {
 						const event = JSON.parse(data);
 						handleEvent(event, callbacks);
-					} catch {
-						// Ignore parse errors
+					} catch (e) {
+						console.warn('[SSE] Parse error:', data, e);
 					}
 				}
 			}
@@ -333,6 +350,8 @@ export async function streamToolResult(
 		} else {
 			callbacks.onError(err instanceof Error ? err.message : 'Stream error');
 		}
+	} finally {
+		clearInterval(timeoutInterval);
 	}
 }
 
@@ -368,12 +387,23 @@ export async function streamChat(
 
 	const decoder = new TextDecoder();
 	let buffer = '';
+	let lastActivity = Date.now();
+
+	// Activity timeout check
+	const timeoutInterval = setInterval(() => {
+		if (Date.now() - lastActivity > STREAM_ACTIVITY_TIMEOUT) {
+			clearInterval(timeoutInterval);
+			reader.cancel().catch(() => {});
+			callbacks.onError('Stream timeout: no data received for 30 seconds');
+		}
+	}, STREAM_CHECK_INTERVAL);
 
 	try {
 		while (true) {
 			const { done, value } = await reader.read();
 			if (done) break;
 
+			lastActivity = Date.now();
 			buffer += decoder.decode(value, { stream: true });
 			const lines = buffer.split('\n');
 			buffer = lines.pop() || '';
@@ -386,8 +416,8 @@ export async function streamChat(
 					try {
 						const event = JSON.parse(data);
 						handleEvent(event, callbacks);
-					} catch {
-						// Ignore parse errors
+					} catch (e) {
+						console.warn('[SSE] Parse error:', data, e);
 					}
 				}
 			}
@@ -398,6 +428,8 @@ export async function streamChat(
 		} else {
 			callbacks.onError(err instanceof Error ? err.message : 'Stream error');
 		}
+	} finally {
+		clearInterval(timeoutInterval);
 	}
 }
 
@@ -414,6 +446,12 @@ function handleEvent(event: StreamEvent, callbacks: StreamCallbacks) {
 			break;
 		case 'tool_call_complete':
 			callbacks.onToolCallComplete(event.id, event.name, event.arguments);
+			break;
+		case 'tool_executing':
+			// Heartbeat - no-op (activity timeout updated by read loop)
+			break;
+		case 'tool_output_delta':
+			callbacks.onToolOutputDelta(event.id, event.delta);
 			break;
 		case 'tool_result':
 			callbacks.onToolResult(event.id, event.output, event.is_error);

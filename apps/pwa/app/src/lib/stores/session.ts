@@ -140,6 +140,12 @@ export async function sendMessage(content: string, attachments: Attachment[] = [
 	// Create abort controller for cancellation
 	abortController = new AbortController();
 
+	// Start state polling as fallback for stream death recovery
+	const pollingSessionId = state.sessionId;
+	if (pollingSessionId) {
+		startStatePolling(pollingSessionId);
+	}
+
 	try {
 		// Build content blocks if we have attachments
 		const contentBlocks = attachments.length > 0
@@ -225,6 +231,22 @@ export async function sendMessage(content: string, attachments: Attachment[] = [
 						return { ...s, messages };
 					});
 				},
+				onToolOutputDelta: (id, delta) => {
+					const toolCalls = assistantMessage.toolCalls?.map((tc): ToolCall =>
+						tc.id === id
+							? { ...tc, output: (tc.output || '') + delta }
+							: tc
+					);
+					assistantMessage.toolCalls = toolCalls;
+					sessionStore.update((s) => {
+						const messages = [...s.messages];
+						const lastIdx = messages.length - 1;
+						if (messages[lastIdx]?.role === 'assistant') {
+							messages[lastIdx] = { ...assistantMessage };
+						}
+						return { ...s, messages };
+					});
+				},
 				onPlanUpdate: (items: PlanItem[]) => {
 					setPlanItems(items);
 				},
@@ -296,6 +318,8 @@ export async function sendMessage(content: string, attachments: Attachment[] = [
 			isStreaming: false,
 			error: err instanceof Error ? err.message : 'Unknown error'
 		}));
+	} finally {
+		stopStatePolling();
 	}
 }
 
@@ -509,6 +533,9 @@ export async function submitToolResult(toolCallId: string, result: string) {
 	// Create abort controller for cancellation
 	abortController = new AbortController();
 
+	// Start state polling as fallback for stream death recovery
+	startStatePolling(state.sessionId);
+
 	// Create a NEW assistant message for this response - don't merge with previous
 	let assistantMessage: ChatMessage = { role: 'assistant', content: '', thinking: '', toolCalls: [] };
 
@@ -595,6 +622,22 @@ export async function submitToolResult(toolCallId: string, result: string) {
 						return { ...s, messages };
 					});
 				},
+				onToolOutputDelta: (id, delta) => {
+					const toolCalls = assistantMessage.toolCalls?.map((tc): ToolCall =>
+						tc.id === id
+							? { ...tc, output: (tc.output || '') + delta }
+							: tc
+					);
+					assistantMessage.toolCalls = toolCalls;
+					sessionStore.update((s) => {
+						const messages = [...s.messages];
+						const lastIdx = messages.length - 1;
+						if (messages[lastIdx]?.role === 'assistant') {
+							messages[lastIdx] = { ...assistantMessage };
+						}
+						return { ...s, messages };
+					});
+				},
 				onPlanUpdate: (items: PlanItem[]) => {
 					setPlanItems(items);
 				},
@@ -663,6 +706,8 @@ export async function submitToolResult(toolCallId: string, result: string) {
 			isStreaming: false,
 			error: err instanceof Error ? err.message : 'Unknown error'
 		}));
+	} finally {
+		stopStatePolling();
 	}
 }
 

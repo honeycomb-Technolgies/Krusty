@@ -3,6 +3,7 @@
 use std::convert::Infallible;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{
     extract::State,
@@ -33,6 +34,10 @@ use crate::AppState;
 const MAX_ITERATIONS: usize = 50;
 const SSE_CHANNEL_BUFFER: usize = 256;
 const MAX_TOOL_OUTPUT_CHARS: usize = 30_000;
+const AI_STREAM_TIMEOUT: Duration = Duration::from_secs(120);
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+const EXPLORATION_BUDGET_SOFT: usize = 15;
+const EXPLORATION_BUDGET_HARD: usize = 30;
 
 /// Build the chat router.
 pub fn router() -> Router<AppState> {
@@ -315,7 +320,8 @@ async fn run_agentic_loop(
                 AgenticEvent::Error {
                     error: format!("Database error: {}", e),
                 },
-            );
+            )
+            .await;
             return;
         }
     };
@@ -323,6 +329,7 @@ async fn run_agentic_loop(
 
     let mut client_connected = true;
     let mut last_token_count = 0usize;
+    let mut exploration_budget_count = 0usize;
     let _ = session_manager.set_agent_state(&session_id, "streaming");
 
     for iteration in 1..=MAX_ITERATIONS {
@@ -342,7 +349,8 @@ async fn run_agentic_loop(
                         AgenticEvent::Error {
                             error: format!("AI error: {}", e),
                         },
-                    );
+                    )
+                    .await;
                 }
                 if last_token_count > 0 {
                     let _ = session_manager.update_token_count(&session_id, last_token_count);
@@ -373,7 +381,8 @@ async fn run_agentic_loop(
                         AgenticEvent::PlanUpdate {
                             items: plan.tasks.clone(),
                         },
-                    );
+                    )
+                    .await;
                     let tool_call_id = format!("plan-confirm-{}", uuid::Uuid::new_v4());
                     send_event(
                         &sse_tx,
@@ -382,14 +391,16 @@ async fn run_agentic_loop(
                             title: plan.title,
                             task_count: plan.tasks.len(),
                         },
-                    );
+                    )
+                    .await;
                     send_event(
                         &sse_tx,
                         AgenticEvent::AwaitingInput {
                             tool_call_id,
                             tool_name: "PlanConfirm".to_string(),
                         },
-                    );
+                    )
+                    .await;
                 }
                 if last_token_count > 0 {
                     let _ = session_manager.update_token_count(&session_id, last_token_count);
@@ -401,7 +412,8 @@ async fn run_agentic_loop(
                         AgenticEvent::Finish {
                             session_id: session_id.clone(),
                         },
-                    );
+                    )
+                    .await;
                 }
                 return;
             }
@@ -413,7 +425,8 @@ async fn run_agentic_loop(
                         turn: iteration,
                         has_more: false,
                     },
-                );
+                )
+                .await;
             }
             break;
         }
@@ -431,7 +444,8 @@ async fn run_agentic_loop(
                         mode: "plan".to_string(),
                         reason,
                     },
-                );
+                )
+                .await;
             }
         }
 
@@ -449,7 +463,8 @@ async fn run_agentic_loop(
                             tool_call_id: call.id.clone(),
                             tool_name: call.name.clone(),
                         },
-                    );
+                    )
+                    .await;
                 }
             }
             if last_token_count > 0 {
@@ -462,13 +477,30 @@ async fn run_agentic_loop(
                     AgenticEvent::Finish {
                         session_id: session_id.clone(),
                     },
-                );
+                )
+                .await;
             }
             return;
         }
 
+        // Track exploration budget
+        let all_readonly = tool_calls
+            .iter()
+            .all(|t| matches!(t.name.as_str(), "read" | "glob" | "grep"));
+        let has_action = tool_calls.iter().any(|t| {
+            matches!(
+                t.name.as_str(),
+                "edit" | "write" | "bash" | "build" | "task_start" | "task_complete"
+            )
+        });
+        if has_action {
+            exploration_budget_count = 0;
+        } else if all_readonly {
+            exploration_budget_count += tool_calls.len();
+        }
+
         let _ = session_manager.set_agent_state(&session_id, "tool_executing");
-        let tool_results = execute_tools(
+        let mut tool_results = execute_tools(
             &tool_registry,
             &tool_calls,
             &working_dir,
@@ -477,6 +509,32 @@ async fn run_agentic_loop(
             user_id.as_deref(),
         )
         .await;
+
+        // Inject exploration budget warnings
+        if exploration_budget_count >= EXPLORATION_BUDGET_HARD {
+            tool_results.push(Content::Text {
+                text: format!(
+                    "[EXPLORATION BUDGET EXCEEDED]\n\
+                    You have made {} consecutive read-only operations without taking action.\n\
+                    STOP exploring and take action NOW.\n\
+                    If you are working on a plan, call task_start and begin implementation.\n\
+                    If you need more context, use grep or glob for targeted results.\n\
+                    Further exploration without action is unacceptable.",
+                    exploration_budget_count
+                ),
+            });
+        } else if exploration_budget_count >= EXPLORATION_BUDGET_SOFT {
+            tool_results.push(Content::Text {
+                text: format!(
+                    "[EXPLORATION BUDGET]\n\
+                    You have made {} consecutive read-only operations without taking action.\n\
+                    If you are working on a plan, call task_start and begin implementation.\n\
+                    If you need more context, use grep or glob for targeted results.\n\
+                    Continued exploration without action is wasteful. Act now or explain why you need more context.",
+                    exploration_budget_count
+                ),
+            });
+        }
 
         let tool_msg = ModelMessage {
             role: Role::User,
@@ -494,7 +552,8 @@ async fn run_agentic_loop(
                     turn: iteration,
                     has_more: true,
                 },
-            );
+            )
+            .await;
         } else {
             client_connected = false;
         }
@@ -506,7 +565,7 @@ async fn run_agentic_loop(
     let _ = session_manager.set_agent_state(&session_id, "idle");
 
     if client_connected && !sse_tx.is_closed() {
-        send_event(&sse_tx, AgenticEvent::Finish { session_id });
+        send_event(&sse_tx, AgenticEvent::Finish { session_id }).await;
     }
 }
 
@@ -532,7 +591,22 @@ async fn process_stream(
     let mut finish_reason = FinishReason::Stop;
     let mut prompt_tokens = 0usize;
 
-    while let Some(part) = api_rx.recv().await {
+    loop {
+        let part = match tokio::time::timeout(AI_STREAM_TIMEOUT, api_rx.recv()).await {
+            Ok(Some(part)) => part,
+            Ok(None) => break,
+            Err(_) => {
+                send_event(
+                    sse_tx,
+                    AgenticEvent::Error {
+                        error: "AI stream timeout: no data received for 120 seconds".to_string(),
+                    },
+                )
+                .await;
+                break;
+            }
+        };
+
         match &part {
             StreamPart::TextDelta { delta } => {
                 text_buffer.push_str(delta);
@@ -541,7 +615,8 @@ async fn process_stream(
                     AgenticEvent::TextDelta {
                         delta: delta.clone(),
                     },
-                );
+                )
+                .await;
             }
             StreamPart::ThinkingDelta { thinking, .. } => {
                 send_event(
@@ -549,7 +624,8 @@ async fn process_stream(
                     AgenticEvent::ThinkingDelta {
                         thinking: thinking.clone(),
                     },
-                );
+                )
+                .await;
             }
             StreamPart::ThinkingComplete {
                 thinking,
@@ -568,7 +644,8 @@ async fn process_stream(
                         id: id.clone(),
                         name: name.clone(),
                     },
-                );
+                )
+                .await;
             }
             StreamPart::ToolCallComplete { tool_call } => {
                 tool_calls.push(tool_call.clone());
@@ -579,7 +656,8 @@ async fn process_stream(
                         name: tool_call.name.clone(),
                         arguments: tool_call.arguments.clone(),
                     },
-                );
+                )
+                .await;
             }
             StreamPart::Finish { reason } => finish_reason = reason.clone(),
             StreamPart::Usage { usage } => {
@@ -590,7 +668,8 @@ async fn process_stream(
                         prompt_tokens,
                         completion_tokens: usage.completion_tokens,
                     },
-                );
+                )
+                .await;
             }
             StreamPart::Error { error } => {
                 send_event(
@@ -598,7 +677,8 @@ async fn process_stream(
                     AgenticEvent::Error {
                         error: error.clone(),
                     },
-                );
+                )
+                .await;
             }
             _ => {}
         }
@@ -635,7 +715,8 @@ async fn execute_tools(
                 id: call.id.clone(),
                 name: call.name.clone(),
             },
-        );
+        )
+        .await;
 
         if call.name == "enter_plan_mode" {
             let reason = call
@@ -656,7 +737,8 @@ async fn execute_tools(
                     output: output.clone(),
                     is_error: false,
                 },
-            );
+            )
+            .await;
 
             results.push(Content::ToolResult {
                 tool_use_id: call.id.clone(),
@@ -666,8 +748,79 @@ async fn execute_tools(
             continue;
         }
 
-        let result =
-            execute_local_tool(tool_registry, call, working_dir, process_registry, user_id).await;
+        // Create streaming output channel for bash tools
+        let (output_tx, mut output_rx) =
+            mpsc::unbounded_channel::<krusty_core::tools::registry::ToolOutputChunk>();
+
+        // Spawn forwarder task: reads tool output chunks and sends them as SSE events,
+        // with heartbeat events during periods of inactivity
+        let forwarder_sse_tx = sse_tx.clone();
+        let forwarder_tool_id = call.id.clone();
+        let forwarder_tool_name = call.name.clone();
+        let forwarder_handle = tokio::spawn(async move {
+            let mut heartbeat_interval = tokio::time::interval(HEARTBEAT_INTERVAL);
+            heartbeat_interval.tick().await; // consume immediate first tick
+
+            loop {
+                tokio::select! {
+                    chunk = output_rx.recv() => {
+                        match chunk {
+                            Some(chunk) => {
+                                if !chunk.chunk.is_empty() {
+                                    send_event(
+                                        &forwarder_sse_tx,
+                                        AgenticEvent::ToolOutputDelta {
+                                            id: forwarder_tool_id.clone(),
+                                            delta: chunk.chunk,
+                                        },
+                                    )
+                                    .await;
+                                }
+                                if chunk.is_complete {
+                                    break;
+                                }
+                            }
+                            None => break,
+                        }
+                    }
+                    _ = heartbeat_interval.tick() => {
+                        if !send_event(
+                            &forwarder_sse_tx,
+                            AgenticEvent::ToolExecuting {
+                                id: forwarder_tool_id.clone(),
+                                name: forwarder_tool_name.clone(),
+                            },
+                        )
+                        .await
+                        {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+
+        let ctx = ToolContext {
+            working_dir: working_dir.to_path_buf(),
+            process_registry: Some(process_registry.clone()),
+            plan_mode: false,
+            user_id: user_id.map(ToString::to_string),
+            sandbox_root: Some(working_dir.to_path_buf()),
+            ..Default::default()
+        }
+        .with_output_stream(output_tx, call.id.clone());
+
+        let result = tool_registry
+            .execute(&call.name, call.arguments.clone(), &ctx)
+            .await
+            .unwrap_or_else(|| krusty_core::tools::registry::ToolResult {
+                output: format!("Unknown tool: {}", call.name),
+                is_error: true,
+            });
+
+        // Wait for forwarder to drain remaining chunks
+        let _ = forwarder_handle.await;
+
         let output = truncate_output(&result.output);
 
         send_event(
@@ -677,7 +830,8 @@ async fn execute_tools(
                 output: output.clone(),
                 is_error: result.is_error,
             },
-        );
+        )
+        .await;
 
         results.push(Content::ToolResult {
             tool_use_id: call.id.clone(),
@@ -687,31 +841,6 @@ async fn execute_tools(
     }
 
     results
-}
-
-async fn execute_local_tool(
-    tool_registry: &ToolRegistry,
-    call: &AiToolCall,
-    working_dir: &Path,
-    process_registry: &Arc<ProcessRegistry>,
-    user_id: Option<&str>,
-) -> krusty_core::tools::registry::ToolResult {
-    let ctx = ToolContext {
-        working_dir: working_dir.to_path_buf(),
-        process_registry: Some(process_registry.clone()),
-        plan_mode: false,
-        user_id: user_id.map(ToString::to_string),
-        sandbox_root: Some(working_dir.to_path_buf()),
-        ..Default::default()
-    };
-
-    tool_registry
-        .execute(&call.name, call.arguments.clone(), &ctx)
-        .await
-        .unwrap_or_else(|| krusty_core::tools::registry::ToolResult {
-            output: format!("Unknown tool: {}", call.name),
-            is_error: true,
-        })
 }
 
 fn build_assistant_message(
@@ -781,15 +910,11 @@ fn truncate_output(output: &str) -> String {
     )
 }
 
-fn send_event(sse_tx: &mpsc::Sender<Result<Event, Infallible>>, event: AgenticEvent) -> bool {
+async fn send_event(sse_tx: &mpsc::Sender<Result<Event, Infallible>>, event: AgenticEvent) -> bool {
     let sse_event = Event::default()
         .json_data(&event)
         .unwrap_or_else(|_| Event::default().data("error"));
-    match sse_tx.try_send(Ok(sse_event)) {
-        Ok(()) => true,
-        Err(mpsc::error::TrySendError::Full(_)) => true,
-        Err(mpsc::error::TrySendError::Closed(_)) => false,
-    }
+    sse_tx.send(Ok(sse_event)).await.is_ok()
 }
 
 struct ParsedPlan {

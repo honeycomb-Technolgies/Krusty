@@ -268,6 +268,8 @@ pub enum AgenticEvent {
     },
     /// Server is executing a tool
     ToolExecuting { id: String, name: String },
+    /// Streaming output delta from a tool (e.g., bash)
+    ToolOutputDelta { id: String, delta: String },
     /// Tool execution result
     ToolResult {
         id: String,
