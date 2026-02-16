@@ -208,11 +208,13 @@ pub(super) fn style_user_line_with_file_refs(
     }
 
     // Build spans with file refs styled
-    let mut spans = Vec::new();
+    let mut spans = Vec::with_capacity(captures.len() * 2 + 1);
     let mut last_end = 0;
 
     for caps in captures {
-        let full_match = caps.get(0).unwrap();
+        let Some(full_match) = caps.get(0) else {
+            continue;
+        };
 
         // Add text before this match
         if full_match.start() > last_end {

@@ -48,8 +48,13 @@ pub fn parse_input(text: &str, working_dir: &Path) -> Vec<InputSegment> {
 
     // Find bracketed patterns
     for cap in BRACKET_PATTERN.captures_iter(text) {
-        let full_match = cap.get(0).unwrap();
-        let inner = cap.get(1).unwrap().as_str().trim();
+        let Some(full_match) = cap.get(0) else {
+            continue;
+        };
+        let Some(inner_match) = cap.get(1) else {
+            continue;
+        };
+        let inner = inner_match.as_str().trim();
 
         let segment = if inner.starts_with("http://") || inner.starts_with("https://") {
             InputSegment::ImageUrl(inner.to_string())
@@ -72,7 +77,9 @@ pub fn parse_input(text: &str, working_dir: &Path) -> Vec<InputSegment> {
 
     // Find raw file paths (not inside brackets)
     for cap in RAW_PATH_PATTERN.captures_iter(text) {
-        let path_match = cap.get(1).unwrap();
+        let Some(path_match) = cap.get(1) else {
+            continue;
+        };
         let start = path_match.start();
         let end = path_match.end();
 
@@ -155,7 +162,10 @@ pub fn has_file_references(text: &str) -> bool {
         return true;
     }
     BRACKET_PATTERN.captures_iter(text).any(|cap| {
-        let inner = cap.get(1).unwrap().as_str().trim();
+        let Some(inner_match) = cap.get(1) else {
+            return false;
+        };
+        let inner = inner_match.as_str().trim();
         inner.starts_with("http://")
             || inner.starts_with("https://")
             || inner.starts_with("clipboard:")
