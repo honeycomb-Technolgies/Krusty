@@ -11,8 +11,10 @@ use anyhow::{anyhow, bail, Context, Result};
 use once_cell::sync::Lazy;
 use regex::Regex;
 
-static PR_CACHE: Lazy<Mutex<HashMap<String, (Instant, Option<u64>)>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+type PrCacheValue = (Instant, Option<u64>);
+type PrCache = HashMap<String, PrCacheValue>;
+
+static PR_CACHE: Lazy<Mutex<PrCache>> = Lazy::new(|| Mutex::new(HashMap::new()));
 static GH_AVAILABLE: Lazy<bool> = Lazy::new(|| {
     Command::new("gh")
         .arg("--version")
@@ -493,7 +495,7 @@ fn resolve_pr_number(repo_root: &Path, branch: Option<&str>) -> Option<u64> {
     resolved
 }
 
-fn prune_pr_cache(cache: &mut HashMap<String, (Instant, Option<u64>)>, now: Instant) {
+fn prune_pr_cache(cache: &mut PrCache, now: Instant) {
     cache.retain(|_, (timestamp, _)| now.duration_since(*timestamp) < PR_CACHE_TTL);
 
     while cache.len() >= PR_CACHE_MAX_ENTRIES {

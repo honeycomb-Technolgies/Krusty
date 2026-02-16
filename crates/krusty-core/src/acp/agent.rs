@@ -39,6 +39,9 @@ pub struct ModelConfig {
     pub model_id: String,
 }
 
+/// (model_id, provider, actual_model_id, api_key, display_name)
+type AvailableModelRecord = (String, ProviderId, String, String, String);
+
 /// Krusty's ACP Agent implementation
 pub struct KrustyAgent {
     /// Session manager
@@ -56,8 +59,7 @@ pub struct KrustyAgent {
     /// Current model configuration (provider + model)
     current_model: RwLock<Option<ModelConfig>>,
     /// Available model configurations from all providers
-    /// (model_id, provider, actual_model_id, api_key, display_name)
-    available_models: RwLock<Vec<(String, ProviderId, String, String, String)>>,
+    available_models: RwLock<Vec<AvailableModelRecord>>,
 }
 
 impl KrustyAgent {
@@ -93,10 +95,8 @@ impl KrustyAgent {
     }
 
     /// Detect all available models from configured providers
-    /// Returns: Vec<(model_id, provider, actual_model_id, api_key, display_name)>
-    pub async fn detect_available_models(
-        &self,
-    ) -> Vec<(String, ProviderId, String, String, String)> {
+    /// Returns a list of `(model_id, provider, actual_model_id, api_key, display_name)`.
+    pub async fn detect_available_models(&self) -> Vec<AvailableModelRecord> {
         let mut models = Vec::new();
 
         // Load credential store
