@@ -20,13 +20,16 @@ pub fn load_skills_from_dir(dir: &Path, source: SkillSource) -> Vec<Skill> {
     };
 
     for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
             continue;
         }
 
+        let path = entry.path();
         let skill_file = path.join("SKILL.md");
-        if !skill_file.exists() {
+        if !skill_file.is_file() {
             continue;
         }
 
@@ -125,10 +128,7 @@ version: 0.1.0
 "#,
         name,
         description,
-        name.split('-')
-            .map(capitalize_first)
-            .collect::<Vec<_>>()
-            .join(" ")
+        humanize_skill_name(name)
     );
 
     fs::write(skill_dir.join("SKILL.md"), skill_content)?;
@@ -142,6 +142,17 @@ fn capitalize_first(s: &str) -> String {
         Some(c) => c.to_uppercase().chain(chars).collect(),
         None => String::new(),
     }
+}
+
+fn humanize_skill_name(name: &str) -> String {
+    let mut humanized = String::with_capacity(name.len());
+    for part in name.split('-').filter(|part| !part.is_empty()) {
+        if !humanized.is_empty() {
+            humanized.push(' ');
+        }
+        humanized.push_str(&capitalize_first(part));
+    }
+    humanized
 }
 
 #[cfg(test)]

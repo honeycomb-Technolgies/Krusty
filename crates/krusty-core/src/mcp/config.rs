@@ -175,19 +175,10 @@ impl McpConfig {
 async fn expand_env_var(s: &str) -> String {
     let mut result = s.to_string();
 
-    // Map common API key env vars to credential store keys
-    let env_to_cred: HashMap<&str, &str> = [
-        ("ANTHROPIC_API_KEY", "anthropic"),
-        ("MINIMAX_API_KEY", "minimax"),
-        ("OPENROUTER_API_KEY", "openrouter"),
-        ("OPENAI_API_KEY", "openai"),
-    ]
-    .into_iter()
-    .collect();
-
     while let Some(start) = result.find("${") {
-        if let Some(end) = result[start..].find('}') {
-            let var_name = &result[start + 2..start + end];
+        if let Some(end_offset) = result[start..].find('}') {
+            let end = start + end_offset;
+            let var_name = &result[start + 2..end];
             tracing::debug!("Expanding env var: {}", var_name);
 
             // Try environment variable first
@@ -198,7 +189,7 @@ async fn expand_env_var(s: &str) -> String {
                 }
                 Err(_) => {
                     // Fall back to credentials store
-                    if let Some(cred_key) = env_to_cred.get(var_name) {
+                    if let Some(cred_key) = credential_key_for_env(var_name) {
                         tracing::debug!(
                             "Looking up {} in credential store as '{}'",
                             var_name,
@@ -225,18 +216,23 @@ async fn expand_env_var(s: &str) -> String {
                 }
             };
 
-            result = format!(
-                "{}{}{}",
-                &result[..start],
-                value,
-                &result[start + end + 1..]
-            );
+            result.replace_range(start..end + 1, &value);
         } else {
             break;
         }
     }
 
     result
+}
+
+fn credential_key_for_env(env_name: &str) -> Option<&'static str> {
+    match env_name {
+        "ANTHROPIC_API_KEY" => Some("anthropic"),
+        "MINIMAX_API_KEY" => Some("minimax"),
+        "OPENROUTER_API_KEY" => Some("openrouter"),
+        "OPENAI_API_KEY" => Some("openai"),
+        _ => None,
+    }
 }
 
 /// Get a credential from the credentials store (async to avoid blocking)

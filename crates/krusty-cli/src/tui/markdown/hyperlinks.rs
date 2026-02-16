@@ -53,7 +53,11 @@ pub fn apply_hyperlinks(
         let y = area.y + visible_line as u16;
 
         // Collect characters and their positions from the link range
-        let mut chars: Vec<(u16, char)> = Vec::new();
+        let max_link_width = link
+            .end_col
+            .saturating_sub(link.start_col)
+            .min(area.width as usize);
+        let mut chars: Vec<(u16, char)> = Vec::with_capacity(max_link_width);
         for col in link.start_col..link.end_col {
             if col >= area.width as usize {
                 break;
@@ -80,15 +84,18 @@ pub fn apply_hyperlinks(
         let mut i = 0;
         while i < chars.len() {
             let (x, c1) = chars[i];
-            let text: String = if i + 1 < chars.len() {
+            let mut text = String::with_capacity(2);
+            text.push(c1);
+            if i + 1 < chars.len() {
                 // Combine two characters
-                [c1, chars[i + 1].1].iter().collect()
-            } else {
-                // Last character (odd count)
-                c1.to_string()
-            };
+                text.push(chars[i + 1].1);
+            }
 
-            let hyperlink = format!("{}{}{}", osc_start, text, OSC8_END);
+            let mut hyperlink =
+                String::with_capacity(osc_start.len() + text.len() + OSC8_END.len());
+            hyperlink.push_str(&osc_start);
+            hyperlink.push_str(&text);
+            hyperlink.push_str(OSC8_END);
             if let Some(cell) = buf.cell_mut((x, y)) {
                 cell.set_symbol(&hyperlink);
             }

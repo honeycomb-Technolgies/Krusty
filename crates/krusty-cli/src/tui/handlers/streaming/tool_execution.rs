@@ -3,6 +3,7 @@
 //! Handles the execution of AI tool calls and processing of results.
 
 use std::{
+    borrow::Cow,
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
     time::Duration,
@@ -1228,8 +1229,8 @@ impl App {
                         .unwrap_or(0) as usize;
                     block.set_content(content.to_string(), total_lines, lines_returned);
                 } else {
-                    let lines: Vec<&str> = output_str.lines().collect();
-                    block.set_content(output_str.to_string(), lines.len(), lines.len());
+                    let line_count = output_str.lines().count();
+                    block.set_content(output_str.to_string(), line_count, line_count);
                 }
                 break;
             }
@@ -1309,15 +1310,15 @@ impl App {
             }
 
             let output_str = match output {
-                serde_json::Value::String(s) => s.clone(),
-                other => other.to_string(),
+                serde_json::Value::String(s) => Cow::Borrowed(s.as_str()),
+                other => Cow::Owned(other.to_string()),
             };
 
             let Some((tool_name, args_hash)) = self.find_tool_use_metadata(tool_use_id) else {
                 continue;
             };
 
-            let (error_code, error_fingerprint) = extract_error_signature(&output_str);
+            let (error_code, error_fingerprint) = extract_error_signature(output_str.as_ref());
             let signature = format!(
                 "{}|{}|{}|{}",
                 tool_name, error_code, error_fingerprint, args_hash
@@ -1411,8 +1412,9 @@ fn truncate_tool_output(output: &str) -> String {
         return output.to_string();
     }
 
-    let truncated = &output[..MAX_TOOL_OUTPUT_CHARS];
-    let break_point = truncated.rfind('\n').unwrap_or(MAX_TOOL_OUTPUT_CHARS);
+    let truncated_len = floor_char_boundary(output, MAX_TOOL_OUTPUT_CHARS);
+    let truncated = &output[..truncated_len];
+    let break_point = truncated.rfind('\n').unwrap_or(truncated_len);
     let clean = &output[..break_point];
     format!(
         "{}\n\n[Output truncated: {} chars, showing first {}]",
@@ -1420,6 +1422,14 @@ fn truncate_tool_output(output: &str) -> String {
         output.len(),
         clean.len()
     )
+}
+
+fn floor_char_boundary(text: &str, index: usize) -> usize {
+    let mut boundary = index.min(text.len());
+    while boundary > 0 && !text.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    boundary
 }
 
 fn extract_error_signature(output_str: &str) -> (String, String) {
@@ -1435,13 +1445,13 @@ fn extract_error_signature(output_str: &str) -> (String, String) {
                     .and_then(|v| v.as_str())
                     .map(|c| c.to_ascii_lowercase())
                     .filter(|c| !c.is_empty())
-                    .unwrap_or_else(|| classify_error_code(message));
+                    .unwrap_or_else(|| classify_error_code(message).to_string());
                 return (code, normalize_error_fingerprint(message));
             }
 
             if let Some(message) = error.as_str() {
                 return (
-                    classify_error_code(message),
+                    classify_error_code(message).to_string(),
                     normalize_error_fingerprint(message),
                 );
             }
@@ -1449,43 +1459,54 @@ fn extract_error_signature(output_str: &str) -> (String, String) {
     }
 
     (
-        classify_error_code(output_str),
+        classify_error_code(output_str).to_string(),
         normalize_error_fingerprint(output_str),
     )
 }
 
-fn classify_error_code(message: &str) -> String {
+fn classify_error_code(message: &str) -> &'static str {
     let lower = message.to_ascii_lowercase();
     if lower.contains("invalid parameters")
         || lower.contains("missing field")
         || lower.contains("unknown field")
     {
-        "invalid_parameters".to_string()
+        "invalid_parameters"
     } else if lower.contains("unknown tool") {
-        "unknown_tool".to_string()
+        "unknown_tool"
     } else if lower.contains("access denied") || lower.contains("outside workspace") {
-        "access_denied".to_string()
+        "access_denied"
     } else if lower.contains("timed out") || lower.contains("timeout") {
-        "timeout".to_string()
+        "timeout"
     } else if lower.contains("denied") {
-        "permission_denied".to_string()
+        "permission_denied"
     } else {
-        "tool_error".to_string()
+        "tool_error"
     }
 }
 
 fn normalize_error_fingerprint(message: &str) -> String {
-    let compact = message.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut compact = String::new();
+    for part in message.split_whitespace() {
+        if !compact.is_empty() {
+            compact.push(' ');
+        }
+        compact.push_str(part);
+    }
+
     if compact.is_empty() {
         return "unknown".to_string();
     }
 
-    compact.to_ascii_lowercase().chars().take(160).collect()
+    compact.make_ascii_lowercase();
+    compact.chars().take(160).collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_error_code, extract_error_signature, normalize_error_fingerprint};
+    use super::{
+        classify_error_code, extract_error_signature, normalize_error_fingerprint,
+        truncate_tool_output, MAX_TOOL_OUTPUT_CHARS,
+    };
 
     #[test]
     fn extract_error_signature_supports_structured_error_object() {
@@ -1520,5 +1541,14 @@ mod tests {
     fn normalize_error_fingerprint_collapses_whitespace() {
         let normalized = normalize_error_fingerprint("  A   spaced\n error\tmessage  ");
         assert_eq!(normalized, "a spaced error message");
+    }
+
+    #[test]
+    fn truncate_tool_output_handles_utf8_boundaries() {
+        let prefix = "a".repeat(MAX_TOOL_OUTPUT_CHARS - 1);
+        let output = format!("{prefix}🙂tail");
+        let truncated = truncate_tool_output(&output);
+        assert!(truncated.starts_with(&prefix));
+        assert!(truncated.contains("Output truncated"));
     }
 }

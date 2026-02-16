@@ -1608,8 +1608,9 @@ fn build_assistant_message(
     thinking_blocks: &[ThinkingBlock],
     tool_calls: &[AiToolCall],
 ) -> ModelMessage {
-    let mut content =
-        Vec::with_capacity(thinking_blocks.len() + tool_calls.len() + usize::from(!text.is_empty()));
+    let mut content = Vec::with_capacity(
+        thinking_blocks.len() + tool_calls.len() + usize::from(!text.is_empty()),
+    );
 
     for block in thinking_blocks {
         content.push(Content::Thinking {
