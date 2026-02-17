@@ -385,19 +385,35 @@
 			{/if}
 		</div>
 
-		<!-- Git info + Token count (right) -->
+		<!-- Git branch dropdown + diff + Context (right) -->
 		<div class="flex items-center gap-2 shrink-0">
-			{#if $gitStore.status?.in_repo && $gitStore.status.branch}
-				<span class="text-xs text-muted-foreground truncate max-w-[100px]" title={$gitStore.status.branch}>
-					{$gitStore.status.branch}
-				</span>
+			<!-- Git branch dropdown -->
+			{#if $gitStore.status?.in_repo && $gitStore.branches.length > 0}
+				<select
+					class="max-w-[100px] rounded border border-input bg-background px-1 py-0.5 text-xs truncate"
+					title="Switch git branch"
+					value={$gitStore.status.branch ?? ''}
+					onchange={handleBranchChange}
+					disabled={isSwitchingBranch || $sessionStore.isStreaming}
+				>
+					{#each $gitStore.branches.filter(b => !b.is_remote).slice(0, 5) as branch (branch.name)}
+						<option value={branch.name}>{branch.is_current ? '• ' : ''}{branch.name}</option>
+					{/each}
+					{#if $gitStore.branches.filter(b => !b.is_remote).length > 5}
+						<option value="...">More...</option>
+					{/if}
+				</select>
 			{/if}
+			
+			<!-- Diff summary -->
 			{#if shouldShowGitSummary()}
-				<span class="hidden sm:inline-flex items-center gap-1 text-xs">
+				<span class="inline-flex items-center gap-1 text-xs">
 					<span class="text-green-500">+{$gitStore.status?.branch_additions}</span>
 					<span class="text-red-500">-{$gitStore.status?.branch_deletions}</span>
 				</span>
 			{/if}
+			
+			<!-- Context % -->
 			{#if $sessionStore.tokenCount > 0}
 				{@const status = getContextStatus($sessionStore.tokenCount)}
 				<span class="text-xs {status.color}" title="Context usage">
