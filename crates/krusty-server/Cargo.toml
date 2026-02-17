@@ -1,6 +1,6 @@
 [package]
 name = "krusty-server"
-version = "0.1.0"
+version = "0.5.0"
 edition = "2021"
 description = "Self-hosted Krusty API server library"
 
@@ -28,6 +28,13 @@ regex = "1.10"
 uuid = { version = "1.11", features = ["v4"] }
 rust-embed = { version = "8", features = ["mime-guess"] }
 mime_guess = "2"
+portable-pty = "0.8"
+
+# Web Push notifications (pure Rust, no OpenSSL — matches rustls stack)
+web-push-native = "0.4"
+base64ct = { version = "1", features = ["alloc"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["rustls-tls-webpki-roots", "connect"] }
 
 [lints]
 workspace = true

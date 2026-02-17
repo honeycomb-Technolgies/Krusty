@@ -1,10 +1,13 @@
-use crate::tui::themes::{base::ThemeBuilder, Theme};
+use crate::tui::themes::{
+    base::{CoreColors, ThemeBuilder},
+    Theme,
+};
 use ratatui::style::Color;
 
 /// High Contrast theme
 pub fn high_contrast() -> Theme {
     ThemeBuilder::new("high-contrast", "High Contrast")
-        .core_colors(
+        .core_colors(CoreColors::new(
             Color::Rgb(30, 30, 32),
             Color::Rgb(255, 255, 255),
             Color::Rgb(255, 255, 255),
@@ -12,7 +15,7 @@ pub fn high_contrast() -> Theme {
             Color::Rgb(255, 255, 255),
             Color::Rgb(0, 255, 0),
             Color::Rgb(150, 150, 150),
-        )
+        ))
         .mode_colors(
             Color::Rgb(0, 255, 0),
             Color::Rgb(255, 255, 0),

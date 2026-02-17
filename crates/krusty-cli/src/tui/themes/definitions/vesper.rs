@@ -1,10 +1,13 @@
-use crate::tui::themes::{base::ThemeBuilder, Theme};
+use crate::tui::themes::{
+    base::{CoreColors, ThemeBuilder},
+    Theme,
+};
 use ratatui::style::Color;
 
 /// Vesper theme
 pub fn vesper() -> Theme {
     ThemeBuilder::new("vesper", "Vesper")
-        .core_colors(
+        .core_colors(CoreColors::new(
             Color::Rgb(26, 26, 28),
             Color::Rgb(40, 40, 40),
             Color::Rgb(255, 199, 153),
@@ -12,7 +15,7 @@ pub fn vesper() -> Theme {
             Color::Rgb(200, 200, 200),
             Color::Rgb(153, 255, 228),
             Color::Rgb(160, 160, 160),
-        )
+        ))
         .mode_colors(
             Color::Rgb(153, 255, 228),
             Color::Rgb(255, 199, 153),

@@ -26,7 +26,7 @@ mod tests {
 
         // Database should initialize with schema_version table
         let version = db.get_schema_version();
-        assert_eq!(version, 12, "Expected current schema version to be 12");
+        assert_eq!(version, 15, "Expected current schema version to be 15");
     }
 
     #[test]
@@ -64,6 +64,7 @@ mod tests {
         assert!(columns.contains(&"updated_at".to_string()));
         assert!(columns.contains(&"user_id".to_string()));
         assert!(columns.contains(&"working_dir".to_string()));
+        assert!(columns.contains(&"work_mode".to_string()));
     }
 
     #[test]
@@ -144,8 +145,8 @@ mod tests {
         let db = Database::new(&db_path).expect("Failed to create database");
         let version = db.get_schema_version();
 
-        // After all migrations, version should be 12
-        assert_eq!(version, 12, "Expected final schema version");
+        // After all migrations, version should be current
+        assert_eq!(version, 15, "Expected final schema version");
     }
 
     #[test]
@@ -207,9 +208,7 @@ mod tests {
 
         // Verify block_ui_state table exists (migration 10)
         let mut stmt = conn
-            .prepare(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='block_ui_state'",
-            )
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='block_ui_state'")
             .expect("Failed to prepare query");
 
         let tables: Vec<String> = stmt
@@ -297,5 +296,39 @@ mod tests {
             .collect();
 
         assert!(columns.contains(&"token_count".to_string()));
+    }
+
+    #[test]
+    fn test_push_delivery_tables_migration() {
+        let (db, _temp) = create_test_db();
+        let conn = db.conn();
+
+        // Push delivery attempts table should exist
+        let mut stmt = conn
+            .prepare(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='push_delivery_attempts'",
+            )
+            .expect("Failed to prepare query");
+        let tables: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
+            .expect("Failed to query tables")
+            .filter_map(Result::ok)
+            .collect();
+        assert!(tables.contains(&"push_delivery_attempts".to_string()));
+
+        // Push subscriptions should include health columns
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(push_subscriptions)")
+            .expect("Failed to prepare PRAGMA");
+        let columns: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .expect("Failed to get columns")
+            .filter_map(Result::ok)
+            .collect();
+
+        assert!(columns.contains(&"last_success_at".to_string()));
+        assert!(columns.contains(&"last_failure_at".to_string()));
+        assert!(columns.contains(&"last_failure_reason".to_string()));
+        assert!(columns.contains(&"failure_count".to_string()));
     }
 }

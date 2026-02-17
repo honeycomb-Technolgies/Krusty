@@ -1,8 +1,9 @@
 //! Markdown Cache
 //!
 //! Caches rendered markdown lines to avoid re-rendering on every frame.
+//! Bounded to a maximum number of entries with oldest-first eviction.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use ratatui::text::Line;
@@ -13,16 +14,19 @@ use crate::tui::themes::Theme;
 /// Cache key: (content_hash, wrap_width)
 type CacheKey = (u64, usize);
 
+/// Maximum number of entries per cache map
+const MAX_CACHE_ENTRIES: usize = 500;
+
 /// Cached markdown with link tracking
 pub struct MarkdownCache {
     /// The cache: (message_content_hash, width) -> rendered markdown with links
     cache: HashMap<CacheKey, Arc<RenderedMarkdown>>,
+    /// Insertion order for the main cache (oldest at front)
+    cache_order: VecDeque<CacheKey>,
     /// Legacy cache for backward compatibility (no link tracking)
     legacy_cache: HashMap<CacheKey, Arc<Vec<Line<'static>>>>,
     /// Last render width to track changes
     last_width: usize,
-    /// Max cache entries to prevent unbounded growth
-    max_entries: usize,
 }
 
 impl Default for MarkdownCache {
@@ -36,31 +40,19 @@ impl MarkdownCache {
     pub fn new() -> Self {
         Self {
             cache: HashMap::new(),
+            cache_order: VecDeque::new(),
             legacy_cache: HashMap::new(),
             last_width: 0,
-            max_entries: 1000, // Reasonable limit for typical usage
         }
     }
 
-    /// Evict entries if cache exceeds max_entries
-    fn evict_if_full(&mut self) {
-        if self.cache.len() >= self.max_entries {
-            let remove_count = self.max_entries / 5;
-            let keys_to_remove: Vec<_> = self.cache.keys().take(remove_count).cloned().collect();
-            for k in keys_to_remove {
-                self.cache.remove(&k);
-            }
-        }
-        if self.legacy_cache.len() >= self.max_entries {
-            let remove_count = self.max_entries / 5;
-            let keys_to_remove: Vec<_> = self
-                .legacy_cache
-                .keys()
-                .take(remove_count)
-                .cloned()
-                .collect();
-            for k in keys_to_remove {
-                self.legacy_cache.remove(&k);
+    /// Evict oldest entries from the main cache if it exceeds the limit
+    fn evict_cache_if_full(&mut self) {
+        while self.cache.len() >= MAX_CACHE_ENTRIES {
+            if let Some(oldest) = self.cache_order.pop_front() {
+                self.cache.remove(&oldest);
+            } else {
+                break;
             }
         }
     }
@@ -92,10 +84,11 @@ impl MarkdownCache {
         if let Some(cached) = self.cache.get(&key) {
             Arc::clone(cached)
         } else {
-            self.evict_if_full();
+            self.evict_cache_if_full();
             let rendered = super::render_with_links(content, width, theme);
             let arc = Arc::new(rendered);
             self.cache.insert(key, Arc::clone(&arc));
+            self.cache_order.push_back(key);
             arc
         }
     }

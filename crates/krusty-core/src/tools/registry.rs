@@ -43,8 +43,8 @@ pub enum PermissionMode {
 pub fn tool_category(name: &str) -> ToolCategory {
     match name {
         "read" | "glob" | "grep" | "web_search" | "web_fetch" | "explore" => ToolCategory::ReadOnly,
-        "AskUserQuestion" | "PlanConfirm" | "enter_plan_mode" | "task_start" | "task_complete"
-        | "add_subtask" | "set_dependency" => ToolCategory::Interactive,
+        "AskUserQuestion" | "PlanConfirm" | "enter_plan_mode" | "set_work_mode" | "task_start"
+        | "task_complete" | "add_subtask" | "set_dependency" => ToolCategory::Interactive,
         _ => ToolCategory::Write,
     }
 }
@@ -68,10 +68,37 @@ impl ToolResult {
         }
     }
 
+    /// Create a structured error with explicit code.
+    pub fn error_with_code(code: &str, msg: impl std::fmt::Display) -> Self {
+        Self {
+            output: serde_json::json!({
+                "error": {
+                    "code": code,
+                    "message": msg.to_string()
+                }
+            })
+            .to_string(),
+            is_error: true,
+        }
+    }
+
+    /// Create an invalid-parameters error.
+    pub fn invalid_parameters(msg: impl std::fmt::Display) -> Self {
+        Self::error_with_code("invalid_parameters", msg)
+    }
+
     /// Create an error result with JSON-formatted error message
     pub fn error(msg: impl std::fmt::Display) -> Self {
+        let message = msg.to_string();
+        let code = classify_error_code(&message);
         Self {
-            output: serde_json::json!({"error": msg.to_string()}).to_string(),
+            output: serde_json::json!({
+                "error": {
+                    "code": code,
+                    "message": message
+                }
+            })
+            .to_string(),
             is_error: true,
         }
     }
@@ -80,7 +107,27 @@ impl ToolResult {
 /// Parse tool parameters, returning a ToolResult error on failure
 pub fn parse_params<T: serde::de::DeserializeOwned>(params: Value) -> Result<T, ToolResult> {
     serde_json::from_value(params)
-        .map_err(|e| ToolResult::error(format!("Invalid parameters: {}", e)))
+        .map_err(|e| ToolResult::invalid_parameters(format!("Invalid parameters: {}", e)))
+}
+
+fn classify_error_code(message: &str) -> &'static str {
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("invalid parameters")
+        || lower.contains("missing field")
+        || lower.contains("unknown field")
+    {
+        "invalid_parameters"
+    } else if lower.contains("access denied") || lower.contains("outside workspace") {
+        "access_denied"
+    } else if lower.contains("timed out") || lower.contains("timeout") {
+        "timeout"
+    } else if lower.contains("denied") {
+        "permission_denied"
+    } else if lower.contains("unknown tool") {
+        "unknown_tool"
+    } else {
+        "tool_error"
+    }
 }
 
 /// Output chunk from a streaming tool (like bash)
@@ -532,6 +579,9 @@ mod tests {
         assert!(result.is_error);
         assert!(result.output.contains("error"));
         assert!(result.output.contains("Test error"));
+        let parsed: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        assert_eq!(parsed["error"]["message"], "Test error");
+        assert_eq!(parsed["error"]["code"], "tool_error");
     }
 
     #[tokio::test]
@@ -555,7 +605,8 @@ mod tests {
     async fn test_parse_params_invalid_json() {
         #[derive(serde::Deserialize, Debug)]
         struct TestParams {
-            name: String,
+            #[serde(rename = "name")]
+            _name: String,
         }
 
         let params = json!({"name": 123}); // Wrong type
@@ -565,6 +616,8 @@ mod tests {
         let err = result.unwrap_err();
         assert!(err.is_error);
         assert!(err.output.contains("Invalid parameters"));
+        let parsed: serde_json::Value = serde_json::from_str(&err.output).unwrap();
+        assert_eq!(parsed["error"]["code"], "invalid_parameters");
     }
 
     #[test]

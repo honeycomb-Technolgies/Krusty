@@ -42,6 +42,30 @@ impl FileActivity {
     }
 }
 
+fn build_activity_reasons(
+    read_count: i64,
+    write_count: i64,
+    edit_count: i64,
+    user_referenced: bool,
+) -> Vec<String> {
+    let mut reasons = Vec::with_capacity(4);
+
+    if write_count > 0 {
+        reasons.push(format!("written {} time(s)", write_count));
+    }
+    if edit_count > 0 {
+        reasons.push(format!("edited {} time(s)", edit_count));
+    }
+    if read_count > 0 {
+        reasons.push(format!("read {} time(s)", read_count));
+    }
+    if user_referenced {
+        reasons.push("referenced by user".to_string());
+    }
+
+    reasons
+}
+
 /// A file ranked by importance with reasons
 #[derive(Debug, Clone)]
 pub struct RankedFile {
@@ -53,25 +77,15 @@ pub struct RankedFile {
 impl RankedFile {
     /// Create from file activity
     pub fn from_activity(activity: &FileActivity, now: DateTime<Utc>) -> Self {
-        let mut reasons = Vec::new();
-
-        if activity.write_count > 0 {
-            reasons.push(format!("written {} time(s)", activity.write_count));
-        }
-        if activity.edit_count > 0 {
-            reasons.push(format!("edited {} time(s)", activity.edit_count));
-        }
-        if activity.read_count > 0 {
-            reasons.push(format!("read {} time(s)", activity.read_count));
-        }
-        if activity.user_referenced {
-            reasons.push("referenced by user".to_string());
-        }
-
         Self {
             path: activity.file_path.clone(),
             score: activity.importance_score(now),
-            reasons,
+            reasons: build_activity_reasons(
+                activity.read_count as i64,
+                activity.write_count as i64,
+                activity.edit_count as i64,
+                activity.user_referenced,
+            ),
         }
     }
 }
@@ -155,26 +169,18 @@ impl<'a> FileActivityTracker<'a> {
             let read_count: i64 = row.get(1)?;
             let write_count: i64 = row.get(2)?;
             let edit_count: i64 = row.get(3)?;
+            let user_referenced = row.get::<_, i64>(5)? != 0;
             let score: f64 = row.get(6)?;
-
-            let mut reasons = Vec::new();
-            if write_count > 0 {
-                reasons.push(format!("written {} time(s)", write_count));
-            }
-            if edit_count > 0 {
-                reasons.push(format!("edited {} time(s)", edit_count));
-            }
-            if read_count > 0 {
-                reasons.push(format!("read {} time(s)", read_count));
-            }
-            if row.get::<_, i64>(5)? != 0 {
-                reasons.push("referenced by user".to_string());
-            }
 
             Ok(RankedFile {
                 path: file_path,
                 score,
-                reasons,
+                reasons: build_activity_reasons(
+                    read_count,
+                    write_count,
+                    edit_count,
+                    user_referenced,
+                ),
             })
         })?;
 

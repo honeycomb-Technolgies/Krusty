@@ -9,7 +9,7 @@ use std::os::unix::io::AsRawFd;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use parking_lot::Mutex;
 use ratatui::{buffer::Buffer, layout::Rect};
-use std::ffi::{c_char, CString};
+use std::ffi::{c_char, CString, OsStr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -215,8 +215,11 @@ extern "C" fn video_refresh(data: *const std::ffi::c_void, width: u32, height: u
             return;
         }
 
+        let width_usize = width as usize;
+        let height_usize = height as usize;
+
         // Calculate total size and use scratch buffer to avoid allocation
-        let rgba_size = (width as usize) * (height as usize) * 4;
+        let rgba_size = width_usize * height_usize * 4;
         state.scratch_buffer.clear();
         state.scratch_buffer.resize(rgba_size, 0);
 
@@ -224,20 +227,17 @@ extern "C" fn video_refresh(data: *const std::ffi::c_void, width: u32, height: u
         // SAFETY: The data pointer comes from the libretro core's video_refresh callback.
         // The pitch and height are provided by the core and validated (non-zero, < 4096).
         // The libretro API guarantees the buffer is valid for pitch * height bytes.
-        let src = unsafe { std::slice::from_raw_parts(data as *const u8, pitch * height as usize) };
+        let src = unsafe { std::slice::from_raw_parts(data as *const u8, pitch * height_usize) };
 
-        for y in 0..height as usize {
+        for y in 0..height_usize {
             let row_start = y * pitch;
-            let dst_row_start = y * (width as usize) * 4;
+            let dst_row_start = y * width_usize * 4;
+            let available_bytes = src.len().saturating_sub(row_start);
+            let pixels_in_row = (available_bytes / bytes_per_pixel).min(width_usize);
 
-            for x in 0..width as usize {
+            for x in 0..pixels_in_row {
                 let pixel_offset = row_start + x * bytes_per_pixel;
                 let dst_offset = dst_row_start + x * 4;
-
-                // Bounds check
-                if pixel_offset + bytes_per_pixel > src.len() {
-                    continue;
-                }
 
                 let (r, g, b) = match state.pixel_format {
                     PixelFormat::XRGB8888 => {
@@ -442,6 +442,8 @@ pub struct RetroArchPlugin {
     cores: Vec<PathBuf>,
     /// Available ROMs in current directory
     roms: Vec<PathBuf>,
+    /// Cached directory entries in current ROM list (avoids per-frame metadata checks)
+    rom_dirs: std::collections::HashSet<PathBuf>,
     /// Current directory for ROM browsing
     current_rom_dir: PathBuf,
     /// Selected core for ROM loading
@@ -452,6 +454,15 @@ pub struct RetroArchPlugin {
     scroll_offset: usize,
     /// Selected pause menu option
     pause_index: usize,
+}
+
+#[derive(Clone, Copy)]
+struct FileListRenderParams<'a> {
+    area: Rect,
+    ctx: &'a PluginContext<'a>,
+    start_y: u16,
+    visible_height: usize,
+    show_full_name: bool,
 }
 
 /// Krusty RetroArch directories
@@ -485,6 +496,11 @@ impl KrustyDirs {
 }
 
 static KRUSTY_DIRS: std::sync::LazyLock<KrustyDirs> = std::sync::LazyLock::new(KrustyDirs::new);
+const PARENT_DIR_ENTRY: &str = "..";
+
+fn is_parent_dir_entry(path: &Path) -> bool {
+    path.as_os_str() == OsStr::new(PARENT_DIR_ENTRY)
+}
 
 impl RetroArchPlugin {
     pub fn new() -> Self {
@@ -503,6 +519,7 @@ impl RetroArchPlugin {
             // Menu state
             cores: Vec::new(),
             roms: Vec::new(),
+            rom_dirs: std::collections::HashSet::new(),
             current_rom_dir: KRUSTY_DIRS.roms.clone(),
             selected_core: None,
             menu_index: 0,
@@ -684,10 +701,11 @@ impl RetroArchPlugin {
     /// Scan for ROMs in current directory
     fn scan_roms(&mut self) {
         self.roms.clear();
+        self.rom_dirs.clear();
 
         // Add parent directory entry
         if self.current_rom_dir.parent().is_some() {
-            self.roms.push(PathBuf::from(".."));
+            self.roms.push(PathBuf::from(PARENT_DIR_ENTRY));
         }
 
         if let Ok(entries) = std::fs::read_dir(&self.current_rom_dir) {
@@ -696,14 +714,18 @@ impl RetroArchPlugin {
 
             for entry in entries.flatten() {
                 let path = entry.path();
-                let name = path.file_name().map(|n| n.to_string_lossy().to_string());
 
                 // Skip hidden files
-                if name.as_ref().map(|n| n.starts_with('.')).unwrap_or(false) {
+                if path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with('.'))
+                {
                     continue;
                 }
 
                 if path.is_dir() {
+                    self.rom_dirs.insert(path.clone());
                     dirs.push(path);
                 } else if Self::is_rom_file(&path, self.selected_core.as_deref()) {
                     files.push(path);
@@ -722,7 +744,7 @@ impl RetroArchPlugin {
     fn is_rom_file(path: &Path, selected_core: Option<&Path>) -> bool {
         let ext = path
             .extension()
-            .map(|e| e.to_string_lossy().to_lowercase())
+            .and_then(|e| e.to_str())
             .unwrap_or_default();
 
         // Get core-specific extensions if we know the core
@@ -748,28 +770,23 @@ impl RetroArchPlugin {
                 ],
             };
 
-            return extensions.contains(&ext.as_str());
+            return extensions
+                .iter()
+                .any(|candidate| ext.eq_ignore_ascii_case(candidate));
         }
 
         // Default: accept common ROM extensions
-        matches!(
-            ext.as_str(),
-            "gb" | "gbc"
-                | "gba"
-                | "nes"
-                | "sfc"
-                | "smc"
-                | "md"
-                | "gen"
-                | "smd"
-                | "n64"
-                | "z64"
-                | "nds"
-                | "iso"
-                | "cso"
-                | "bin"
-                | "cue"
-        )
+        [
+            "gb", "gbc", "gba", "nes", "sfc", "smc", "md", "gen", "smd", "n64", "z64", "nds",
+            "iso", "cso", "bin", "cue",
+        ]
+        .iter()
+        .any(|candidate| ext.eq_ignore_ascii_case(candidate))
+    }
+
+    fn reset_menu_cursor(&mut self) {
+        self.menu_index = 0;
+        self.scroll_offset = 0;
     }
 
     /// Exit current ROM and return to menu
@@ -780,8 +797,7 @@ impl RetroArchPlugin {
         }
         self.unload();
         self.plugin_state = RetroArchState::Menu(MenuState::Main);
-        self.menu_index = 0;
-        self.scroll_offset = 0;
+        self.reset_menu_cursor();
     }
 
     // =========================================================================
@@ -956,8 +972,7 @@ impl RetroArchPlugin {
                         // Load Game - go to core browser
                         self.plugin_state = RetroArchState::Menu(MenuState::CoreBrowser);
                         self.scan_cores();
-                        self.menu_index = 0;
-                        self.scroll_offset = 0;
+                        self.reset_menu_cursor();
                     }
                     1 => {
                         // Settings - not implemented yet
@@ -970,26 +985,23 @@ impl RetroArchPlugin {
                     self.selected_core = Some(core);
                     self.plugin_state = RetroArchState::Menu(MenuState::RomBrowser);
                     self.scan_roms();
-                    self.menu_index = 0;
-                    self.scroll_offset = 0;
+                    self.reset_menu_cursor();
                 }
             }
             RetroArchState::Menu(MenuState::RomBrowser) => {
                 if let Some(path) = self.roms.get(self.menu_index).cloned() {
-                    if path.as_os_str() == ".." {
+                    if is_parent_dir_entry(&path) {
                         // Go up a directory
                         if let Some(parent) = self.current_rom_dir.parent() {
                             self.current_rom_dir = parent.to_path_buf();
                             self.scan_roms();
-                            self.menu_index = 0;
-                            self.scroll_offset = 0;
+                            self.reset_menu_cursor();
                         }
-                    } else if path.is_dir() {
+                    } else if self.rom_dirs.contains(&path) {
                         // Enter directory
                         self.current_rom_dir = path;
                         self.scan_roms();
-                        self.menu_index = 0;
-                        self.scroll_offset = 0;
+                        self.reset_menu_cursor();
                     } else if let Some(core_path) = &self.selected_core.clone() {
                         // ROM selected - load game
                         if let Err(e) = self.load_core(core_path) {
@@ -1056,14 +1068,12 @@ impl RetroArchPlugin {
             RetroArchState::Menu(MenuState::Main) => false, // Can't go back from main
             RetroArchState::Menu(MenuState::CoreBrowser) => {
                 self.plugin_state = RetroArchState::Menu(MenuState::Main);
-                self.menu_index = 0;
-                self.scroll_offset = 0;
+                self.reset_menu_cursor();
                 true
             }
             RetroArchState::Menu(MenuState::RomBrowser) => {
                 self.plugin_state = RetroArchState::Menu(MenuState::CoreBrowser);
-                self.menu_index = 0;
-                self.scroll_offset = 0;
+                self.reset_menu_cursor();
                 true
             }
             RetroArchState::Paused => {
@@ -1156,7 +1166,17 @@ impl RetroArchPlugin {
                 }
             }
             MenuState::CoreBrowser => {
-                self.render_file_list(&self.cores, area, buf, ctx, content_y, visible_height, true);
+                self.render_file_list(
+                    &self.cores,
+                    buf,
+                    FileListRenderParams {
+                        area,
+                        ctx,
+                        start_y: content_y,
+                        visible_height,
+                        show_full_name: true,
+                    },
+                );
             }
             MenuState::RomBrowser => {
                 // Show current directory
@@ -1172,12 +1192,14 @@ impl RetroArchPlugin {
 
                 self.render_file_list(
                     &self.roms,
-                    area,
                     buf,
-                    ctx,
-                    content_y + 2,
-                    visible_height.saturating_sub(2),
-                    false,
+                    FileListRenderParams {
+                        area,
+                        ctx,
+                        start_y: content_y + 2,
+                        visible_height: visible_height.saturating_sub(2),
+                        show_full_name: false,
+                    },
                 );
             }
         }
@@ -1203,13 +1225,17 @@ impl RetroArchPlugin {
     fn render_file_list(
         &self,
         items: &[PathBuf],
-        area: Rect,
         buf: &mut Buffer,
-        ctx: &PluginContext,
-        start_y: u16,
-        visible_height: usize,
-        show_full_name: bool,
+        params: FileListRenderParams<'_>,
     ) {
+        let FileListRenderParams {
+            area,
+            ctx,
+            start_y,
+            visible_height,
+            show_full_name,
+        } = params;
+
         if items.is_empty() {
             let msg = "No items found";
             let x = area.x + (area.width.saturating_sub(msg.len() as u16)) / 2;
@@ -1252,8 +1278,14 @@ impl RetroArchPlugin {
             let selected = idx == self.menu_index;
             let prefix = if selected { "▶ " } else { "  " };
 
-            let name = if *item == Path::new("..") {
-                "..".to_string()
+            let is_directory = if show_full_name {
+                item.is_dir()
+            } else {
+                is_parent_dir_entry(item) || self.rom_dirs.contains(item)
+            };
+
+            let name = if is_parent_dir_entry(item) {
+                PARENT_DIR_ENTRY.to_string()
             } else if show_full_name {
                 item.file_name()
                     .map(|n| n.to_string_lossy().to_string())
@@ -1263,7 +1295,7 @@ impl RetroArchPlugin {
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default();
-                if item.is_dir() {
+                if is_directory {
                     format!("{}/", base)
                 } else {
                     base
@@ -1279,7 +1311,7 @@ impl RetroArchPlugin {
                     cell.set_char(ch);
                     let color = if selected {
                         ctx.theme.accent_color
-                    } else if item.is_dir() || *item == Path::new("..") {
+                    } else if is_directory {
                         ctx.theme.text_color
                     } else {
                         ctx.theme.success_color

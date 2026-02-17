@@ -13,6 +13,7 @@ mod tool_execution;
 use tokio::sync::mpsc;
 
 use crate::agent::{AgentEvent, InterruptReason};
+use crate::ai::client::config::AnthropicAdaptiveEffort;
 use crate::ai::client::{CallOptions, CodexReasoningEffort};
 use crate::ai::streaming::StreamPart;
 use crate::ai::types::{
@@ -41,6 +42,9 @@ impl App {
             self.handle_slash_command(&text);
             return;
         }
+
+        // New user input starts a fresh failure-tracking window.
+        self.runtime.tool_failure_signatures.clear();
 
         if self.ui.view == View::StartMenu {
             self.ui.view = View::Chat;
@@ -350,6 +354,17 @@ impl App {
             None
         };
 
+        let anthropic_adaptive_effort = if self.is_anthropic_opus_thinking_mode() {
+            match self.runtime.thinking_level {
+                ThinkingLevel::Off => None,
+                ThinkingLevel::Low => Some(AnthropicAdaptiveEffort::Low),
+                ThinkingLevel::Medium => Some(AnthropicAdaptiveEffort::Medium),
+                ThinkingLevel::High | ThinkingLevel::XHigh => Some(AnthropicAdaptiveEffort::High),
+            }
+        } else {
+            None
+        };
+
         let context_management = match (can_use_thinking, !tools.is_empty()) {
             (true, _) => Some(ContextManagement::default_for_thinking_and_tools()),
             (false, true) => Some(ContextManagement::default_tools_only()),
@@ -366,6 +381,7 @@ impl App {
             session_id: self.runtime.current_session_id.clone(),
             codex_reasoning_effort,
             codex_parallel_tool_calls: true,
+            anthropic_adaptive_effort,
             ..Default::default()
         };
 

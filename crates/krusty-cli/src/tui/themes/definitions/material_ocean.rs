@@ -1,18 +1,21 @@
-use crate::tui::themes::{base::ThemeBuilder, Theme};
+use crate::tui::themes::{
+    base::{CoreColors, ThemeBuilder},
+    Theme,
+};
 use ratatui::style::Color;
 
 /// Material Ocean theme
 pub fn material_ocean() -> Theme {
     ThemeBuilder::new("material-ocean", "Material Ocean")
-        .core_colors(
-            Color::Rgb(30, 34, 47),
-            Color::Rgb(65, 72, 104),
+        .core_colors(CoreColors::new(
+            Color::Rgb(38, 50, 56),
+            Color::Rgb(84, 110, 122),
             Color::Rgb(130, 170, 255),
             Color::Rgb(199, 146, 234),
-            Color::Rgb(169, 177, 214),
+            Color::Rgb(176, 190, 197),
             Color::Rgb(195, 232, 141),
-            Color::Rgb(103, 110, 149),
-        )
+            Color::Rgb(84, 110, 122),
+        ))
         .mode_colors(
             Color::Rgb(195, 232, 141),
             Color::Rgb(247, 140, 108),
@@ -23,7 +26,7 @@ pub fn material_ocean() -> Theme {
         .special_colors(
             Color::Rgb(255, 203, 107),
             Color::Rgb(240, 113, 120),
-            Color::Rgb(20, 24, 35),
+            Color::Rgb(32, 43, 48),
         )
         .ui_colors(
             Color::Rgb(199, 146, 234),

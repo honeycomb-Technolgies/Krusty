@@ -8,11 +8,12 @@ use axum::{
 };
 use serde::Deserialize;
 
-use krusty_core::agent::pinch_context::PinchContext;
+use krusty_core::agent::pinch_context::{PinchContext, PinchContextInput};
 use krusty_core::agent::summarizer::{generate_summary, SummarizationResult};
 use krusty_core::ai::types::{Content, ModelMessage, Role};
 use krusty_core::{storage::Database, SessionManager};
 
+use crate::auth::CurrentUser;
 use crate::error::AppError;
 use crate::types::{
     CreateSessionRequest, MessageResponse, PinchRequest, PinchResponse, SessionResponse,
@@ -25,6 +26,15 @@ use crate::AppState;
 pub struct ListSessionsQuery {
     /// Filter sessions by working directory
     pub working_dir: Option<String>,
+}
+
+/// Query params for retrieving a session with messages (pagination)
+#[derive(Debug, Deserialize)]
+pub struct GetSessionQuery {
+    /// Maximum number of messages to return
+    pub limit: Option<usize>,
+    /// Number of messages to skip (from the beginning)
+    pub offset: Option<usize>,
 }
 
 /// Build the sessions router
@@ -45,23 +55,29 @@ pub fn router() -> Router<AppState> {
 /// List all sessions, optionally filtered by working directory
 async fn list_sessions(
     State(state): State<AppState>,
+    user: Option<CurrentUser>,
     Query(query): Query<ListSessionsQuery>,
 ) -> Result<Json<Vec<SessionResponse>>, AppError> {
     let db = Database::new(&state.db_path)?;
     let session_manager = SessionManager::new(db);
 
-    let sessions = session_manager.list_sessions(query.working_dir.as_deref())?;
+    let user_id = user.as_ref().and_then(|u| u.0.user_id.as_deref());
+    let sessions = session_manager.list_sessions_for_user(query.working_dir.as_deref(), user_id)?;
     let response: Vec<SessionResponse> = sessions.into_iter().map(Into::into).collect();
 
     Ok(Json(response))
 }
 
 /// List all directories that have sessions
-async fn list_directories(State(state): State<AppState>) -> Result<Json<Vec<String>>, AppError> {
+async fn list_directories(
+    State(state): State<AppState>,
+    user: Option<CurrentUser>,
+) -> Result<Json<Vec<String>>, AppError> {
     let db = Database::new(&state.db_path)?;
     let session_manager = SessionManager::new(db);
 
-    let directories = session_manager.list_session_directories()?;
+    let user_id = user.as_ref().and_then(|u| u.0.user_id.as_deref());
+    let directories = session_manager.list_session_directories_for_user(user_id)?;
 
     Ok(Json(directories))
 }
@@ -85,10 +101,11 @@ async fn create_session(
     Ok((StatusCode::CREATED, Json(session.into())))
 }
 
-/// Get a session with its messages
+/// Get a session with its messages, with optional pagination
 async fn get_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(query): Query<GetSessionQuery>,
 ) -> Result<Json<SessionWithMessagesResponse>, AppError> {
     let db = Database::new(&state.db_path)?;
     let session_manager = SessionManager::new(db);
@@ -98,8 +115,17 @@ async fn get_session(
         .ok_or_else(|| AppError::NotFound(format!("Session {} not found", id)))?;
 
     let raw_messages = session_manager.load_session_messages(&id)?;
+    let offset = query.offset.unwrap_or(0);
+    const MAX_MESSAGE_LIMIT: usize = 10_000;
+    let limit = query
+        .limit
+        .unwrap_or(MAX_MESSAGE_LIMIT)
+        .min(MAX_MESSAGE_LIMIT);
+
     let messages: Vec<MessageResponse> = raw_messages
         .into_iter()
+        .skip(offset)
+        .take(limit)
         .filter_map(
             |(role, content_json)| match serde_json::from_str(&content_json) {
                 Ok(content) => Some(MessageResponse { role, content }),
@@ -120,6 +146,7 @@ async fn get_session(
 /// Update a session's title
 async fn update_session(
     State(state): State<AppState>,
+    user: Option<CurrentUser>,
     Path(id): Path<String>,
     Json(req): Json<UpdateSessionRequest>,
 ) -> Result<Json<SessionResponse>, AppError> {
@@ -127,13 +154,19 @@ async fn update_session(
     let session_manager = SessionManager::new(db);
 
     // Verify session exists
-    session_manager
+    let _session = session_manager
         .get_session(&id)?
         .ok_or_else(|| AppError::NotFound(format!("Session {} not found", id)))?;
 
-    if req.title.is_none() && req.working_dir.is_none() {
+    // Verify ownership in multi-tenant mode
+    let user_id = user.as_ref().and_then(|u| u.0.user_id.as_deref());
+    if !session_manager.verify_session_ownership(&id, user_id)? {
+        return Err(AppError::NotFound(format!("Session {} not found", id)));
+    }
+
+    if req.title.is_none() && req.working_dir.is_none() && req.mode.is_none() {
         return Err(AppError::BadRequest(
-            "At least one of title or working_dir must be provided".to_string(),
+            "At least one of title, working_dir, or mode must be provided".to_string(),
         ));
     }
 
@@ -151,6 +184,10 @@ async fn update_session(
         session_manager.update_session_working_dir(&id, normalized)?;
     }
 
+    if let Some(mode) = req.mode {
+        session_manager.update_session_work_mode(&id, mode)?;
+    }
+
     let session = session_manager
         .get_session(&id)?
         .ok_or_else(|| AppError::Internal("Failed to fetch updated session".to_string()))?;
@@ -161,17 +198,27 @@ async fn update_session(
 /// Delete a session
 async fn delete_session(
     State(state): State<AppState>,
+    user: Option<CurrentUser>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     let db = Database::new(&state.db_path)?;
     let session_manager = SessionManager::new(db);
 
     // Verify session exists
-    session_manager
+    let _session = session_manager
         .get_session(&id)?
         .ok_or_else(|| AppError::NotFound(format!("Session {} not found", id)))?;
 
+    // Verify ownership in multi-tenant mode
+    let user_id = user.as_ref().and_then(|u| u.0.user_id.as_deref());
+    if !session_manager.verify_session_ownership(&id, user_id)? {
+        return Err(AppError::NotFound(format!("Session {} not found", id)));
+    }
+
     session_manager.delete_session(&id)?;
+
+    let mut locks = state.session_locks.write().await;
+    locks.remove(&id);
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -182,15 +229,22 @@ async fn delete_session(
 /// Used by frontend to determine if session has active processing.
 async fn get_session_state(
     State(state): State<AppState>,
+    user: Option<CurrentUser>,
     Path(id): Path<String>,
 ) -> Result<Json<SessionStateResponse>, AppError> {
     let db = Database::new(&state.db_path)?;
     let session_manager = SessionManager::new(db);
 
     // Verify session exists
-    session_manager
+    let session = session_manager
         .get_session(&id)?
         .ok_or_else(|| AppError::NotFound(format!("Session {} not found", id)))?;
+
+    // Verify ownership in multi-tenant mode
+    let user_id = user.as_ref().and_then(|u| u.0.user_id.as_deref());
+    if !session_manager.verify_session_ownership(&id, user_id)? {
+        return Err(AppError::NotFound(format!("Session {} not found", id)));
+    }
 
     // Get agent state
     let agent_state =
@@ -207,6 +261,7 @@ async fn get_session_state(
         agent_state: agent_state.state,
         started_at: agent_state.started_at,
         last_event_at: agent_state.last_event_at,
+        mode: session.work_mode,
     }))
 }
 
@@ -266,17 +321,17 @@ async fn pinch_session(
     };
 
     // Create pinch context
-    let pinch_ctx = PinchContext::new(
-        id.clone(),
-        source_session.title.clone(),
-        summary_result.clone(),
-        vec![], // No ranked files for now
-        req.preservation_hints,
-        req.direction,
-        None,   // No project context for now
-        vec![], // No key file contents for now
-        None,   // No active plan for now
-    );
+    let pinch_ctx = PinchContext::from_input(PinchContextInput {
+        source_session_id: id.clone(),
+        source_session_title: source_session.title.clone(),
+        summary: summary_result.clone(),
+        ranked_files: vec![], // No ranked files for now
+        preservation_hints: req.preservation_hints,
+        direction: req.direction,
+        project_context: None,     // No project context for now
+        key_file_contents: vec![], // No key file contents for now
+        active_plan: None,         // No active plan for now
+    });
 
     // Create the child session
     let new_title = format!("{} (continued)", source_session.title);

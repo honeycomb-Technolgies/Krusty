@@ -7,8 +7,9 @@
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build --bundles deb,rpm",
+    "build:linux": "tauri build --bundles deb,rpm",
     "build:all": "tauri build",
-    "build:appimage": "tauri build --bundles appimage"
+    "build:appimage": "bash -lc 'command -v linuxdeploy >/dev/null 2>&1 || { echo \"linuxdeploy is required for AppImage builds.\"; exit 1; }; tauri build --bundles appimage'"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.2.5"

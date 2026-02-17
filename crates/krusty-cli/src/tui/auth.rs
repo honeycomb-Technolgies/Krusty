@@ -19,6 +19,12 @@ pub fn create_client_config(
     credential_store: &CredentialStore,
     _model_registry: &SharedModelRegistry,
 ) -> AiClientConfig {
+    // Anthropic requires special handling to detect OAuth vs API key
+    // and set the correct auth header (Bearer for OAuth, x-api-key for API key)
+    if provider == ProviderId::Anthropic {
+        return AiClientConfig::for_anthropic_with_auth_detection(model, credential_store);
+    }
+
     // OpenAI requires special handling to detect OAuth vs API key
     // and route to the correct endpoint (ChatGPT Responses API vs OpenAI Chat Completions)
     if provider == ProviderId::OpenAI {
@@ -29,7 +35,18 @@ pub fn create_client_config(
         Some(config) => config,
         None => {
             tracing::warn!("Provider {:?} not found, falling back to MiniMax", provider);
-            get_provider(ProviderId::MiniMax).expect("MiniMax provider must be available")
+            match get_provider(ProviderId::MiniMax) {
+                Some(config) => config,
+                None => {
+                    tracing::error!(
+                        "MiniMax fallback provider not available, using default config"
+                    );
+                    return AiClientConfig {
+                        model: model.to_string(),
+                        ..AiClientConfig::default()
+                    };
+                }
+            }
         }
     };
 

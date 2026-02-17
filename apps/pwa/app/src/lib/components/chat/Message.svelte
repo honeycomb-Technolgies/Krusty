@@ -28,10 +28,20 @@
 		breaks: true
 	});
 
+	function escapeHtml(str: string): string {
+		return str
+			.replace(/&/g, '&amp;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;')
+			.replace(/"/g, '&quot;')
+			.replace(/'/g, '&#039;');
+	}
+
 	// Custom renderer for code blocks
 	const renderer = new marked.Renderer();
 	renderer.code = ({ text, lang }) => {
-		const language = lang || 'text';
+		const language = escapeHtml(lang || 'text');
+		const escapedText = escapeHtml(text);
 		return `<div class="code-block" data-lang="${language}">
 			<div class="code-header">
 				<span class="code-lang">${language}</span>
@@ -39,7 +49,7 @@
 					<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
 				</button>
 			</div>
-			<pre><code class="language-${language}">${text}</code></pre>
+			<pre><code class="language-${language}">${escapedText}</code></pre>
 		</div>`;
 	};
 

@@ -3,6 +3,7 @@
 //! Read-only tools for explorers, read-write tools for builders.
 
 use serde_json::{json, Value};
+use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -12,6 +13,43 @@ use crate::agent::cache::SharedExploreCache;
 use crate::ai::types::AiTool;
 use crate::tools::implementations::{BashTool, EditTool, GlobTool, GrepTool, ReadTool, WriteTool};
 use crate::tools::registry::{Tool, ToolContext, ToolResult};
+
+fn format_paths(paths: &[PathBuf]) -> String {
+    let mut output = String::new();
+    for (idx, path) in paths.iter().enumerate() {
+        if idx > 0 {
+            output.push('\n');
+        }
+        let _ = write!(&mut output, "{}", path.display());
+    }
+    output
+}
+
+fn format_read_output(content: &str) -> String {
+    let mut output = String::new();
+    for (line_num, line) in content.lines().enumerate() {
+        if line_num > 0 {
+            output.push('\n');
+        }
+        let _ = write!(&mut output, "{:>6}→{}", line_num + 1, line);
+    }
+    output
+}
+
+fn strip_read_output_line_numbers(output: &str) -> String {
+    let mut raw = String::new();
+    for (idx, line) in output.lines().enumerate() {
+        if idx > 0 {
+            raw.push('\n');
+        }
+        if let Some(pos) = line.find('→') {
+            raw.push_str(&line[pos + '→'.len_utf8()..]);
+        } else {
+            raw.push_str(line);
+        }
+    }
+    raw
+}
 
 /// RAII guard for builder file locks
 ///
@@ -145,11 +183,7 @@ impl SubAgentTools {
 
                 if let Some(cached_paths) = self.cache.get_glob(&pattern, &base_dir) {
                     // Return cached result formatted as the tool would
-                    let output = cached_paths
-                        .iter()
-                        .map(|p| p.display().to_string())
-                        .collect::<Vec<_>>()
-                        .join("\n");
+                    let output = format_paths(&cached_paths);
                     return Some(ToolResult {
                         output: if output.is_empty() {
                             "No matches found".to_string()
@@ -194,13 +228,7 @@ impl SubAgentTools {
                     if !has_offset && !has_limit {
                         if let Some(cached) = self.cache.get_file(&path) {
                             // Format like the read tool does (with line numbers)
-                            let output = cached
-                                .content
-                                .lines()
-                                .enumerate()
-                                .map(|(i, line)| format!("{:>6}→{}", i + 1, line))
-                                .collect::<Vec<_>>()
-                                .join("\n");
+                            let output = format_read_output(&cached.content);
                             return Some(ToolResult {
                                 output,
                                 is_error: false,
@@ -212,19 +240,7 @@ impl SubAgentTools {
                     let result = self.read.execute(params, ctx).await;
                     if !result.is_error && !has_offset && !has_limit {
                         // Extract raw content (strip line numbers)
-                        let raw_content: String = result
-                            .output
-                            .lines()
-                            .map(|line| {
-                                // Line format: "    123→content" - find the → and take after it
-                                if let Some(pos) = line.find('→') {
-                                    &line[pos + '→'.len_utf8()..]
-                                } else {
-                                    line
-                                }
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n");
+                        let raw_content = strip_read_output_line_numbers(&result.output);
                         self.cache.put_file(path, raw_content);
                     }
                     Some(result)

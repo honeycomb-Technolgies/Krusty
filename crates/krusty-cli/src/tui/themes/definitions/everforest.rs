@@ -1,18 +1,21 @@
-use crate::tui::themes::{base::ThemeBuilder, Theme};
+use crate::tui::themes::{
+    base::{CoreColors, ThemeBuilder},
+    Theme,
+};
 use ratatui::style::Color;
 
 /// Everforest theme
 pub fn everforest() -> Theme {
     ThemeBuilder::new("everforest", "Everforest")
-        .core_colors(
-            Color::Rgb(62, 73, 80),
-            Color::Rgb(133, 146, 137),
-            Color::Rgb(167, 192, 128),
+        .core_colors(CoreColors::new(
+            Color::Rgb(45, 53, 59),
+            Color::Rgb(53, 64, 70),
+            Color::Rgb(127, 187, 179),
             Color::Rgb(214, 153, 182),
             Color::Rgb(211, 198, 170),
             Color::Rgb(167, 192, 128),
-            Color::Rgb(122, 132, 120),
-        )
+            Color::Rgb(133, 146, 137),
+        ))
         .mode_colors(
             Color::Rgb(167, 192, 128),
             Color::Rgb(214, 153, 182),
@@ -23,7 +26,7 @@ pub fn everforest() -> Theme {
         .special_colors(
             Color::Rgb(230, 152, 117),
             Color::Rgb(230, 126, 128),
-            Color::Rgb(52, 63, 68),
+            Color::Rgb(35, 42, 46),
         )
         .ui_colors(
             Color::Rgb(214, 153, 182),

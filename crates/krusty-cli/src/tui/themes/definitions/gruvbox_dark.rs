@@ -1,18 +1,21 @@
-use crate::tui::themes::{base::ThemeBuilder, Theme};
+use crate::tui::themes::{
+    base::{CoreColors, ThemeBuilder},
+    Theme,
+};
 use ratatui::style::Color;
 
 /// Gruvbox Dark theme
 pub fn gruvbox_dark() -> Theme {
     ThemeBuilder::new("gruvbox-dark", "Gruvbox Dark")
-        .core_colors(
-            Color::Rgb(50, 50, 50),
+        .core_colors(CoreColors::new(
+            Color::Rgb(40, 40, 40),
             Color::Rgb(80, 73, 69),
             Color::Rgb(142, 192, 124),
             Color::Rgb(211, 134, 155),
             Color::Rgb(235, 219, 178),
             Color::Rgb(184, 187, 38),
             Color::Rgb(146, 131, 116),
-        )
+        ))
         .mode_colors(
             Color::Rgb(184, 187, 38),
             Color::Rgb(211, 134, 155),
@@ -23,7 +26,7 @@ pub fn gruvbox_dark() -> Theme {
         .special_colors(
             Color::Rgb(254, 128, 25),
             Color::Rgb(251, 73, 52),
-            Color::Rgb(50, 48, 47),
+            Color::Rgb(29, 32, 33),
         )
         .ui_colors(
             Color::Rgb(211, 134, 155),

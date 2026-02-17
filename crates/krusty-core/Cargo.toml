@@ -1,6 +1,6 @@
 [package]
 name = "krusty-core"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2021"
 description = "Core library for Krusty - AI, storage, tools, and extensions"
 
@@ -56,6 +56,7 @@ sha2 = "0.10"
 hmac = "0.12"
 base64 = "0.22"
 rand = "0.8"
+ed25519-dalek = "2.1"
 
 # Configuration
 dirs = "6.0"
@@ -64,6 +65,7 @@ dirs = "6.0"
 url = "2.5"
 tiny_http = "0.12"
 httpdate = "1.0"
+netstat2 = "0.11"
 
 # Utilities
 which = "7.0"

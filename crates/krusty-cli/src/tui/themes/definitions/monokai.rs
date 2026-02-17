@@ -1,24 +1,27 @@
-use crate::tui::themes::{base::ThemeBuilder, Theme};
+use crate::tui::themes::{
+    base::{CoreColors, ThemeBuilder},
+    Theme,
+};
 use ratatui::style::Color;
 
 /// Monokai theme
 pub fn monokai() -> Theme {
     ThemeBuilder::new("monokai", "Monokai")
-        .core_colors(
-            Color::Rgb(72, 71, 62),
-            Color::Rgb(62, 61, 50),
+        .core_colors(CoreColors::new(
+            Color::Rgb(39, 40, 34),
+            Color::Rgb(73, 72, 62),
             Color::Rgb(102, 217, 239),
-            Color::Rgb(166, 226, 46),
+            Color::Rgb(249, 38, 114),
             Color::Rgb(248, 248, 242),
             Color::Rgb(166, 226, 46),
             Color::Rgb(117, 113, 94),
-        )
+        ))
         .mode_colors(
             Color::Rgb(166, 226, 46),
-            Color::Rgb(166, 226, 46),
-            Color::Rgb(166, 226, 46),
+            Color::Rgb(249, 38, 114),
+            Color::Rgb(249, 38, 114),
             Color::Rgb(230, 219, 116),
-            Color::Rgb(166, 226, 46),
+            Color::Rgb(249, 38, 114),
         )
         .special_colors(
             Color::Rgb(230, 219, 116),

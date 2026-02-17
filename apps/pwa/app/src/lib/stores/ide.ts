@@ -36,9 +36,11 @@ const initialState: IDEState = {
 export const ideStore = writable<IDEState>(initialState);
 
 // Subscribe to workspace changes - sync file tree when directory changes
+let workspaceUnsubscribe: (() => void) | null = null;
+
 if (browser) {
 	let lastDir: string | null = null;
-	workspaceStore.subscribe((ws) => {
+	workspaceUnsubscribe = workspaceStore.subscribe((ws) => {
 		if (ws.initialized && ws.directory !== lastDir) {
 			lastDir = ws.directory;
 			if (ws.directory) {
@@ -231,4 +233,9 @@ export function syncTerminalToDirectory() {
 // Get current working directory from workspace store
 export function getWorkingDir(): string | null {
 	return workspaceStore.getState().directory;
+}
+
+export function cleanupIde() {
+	workspaceUnsubscribe?.();
+	workspaceUnsubscribe = null;
 }

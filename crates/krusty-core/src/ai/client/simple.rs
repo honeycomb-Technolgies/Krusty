@@ -8,6 +8,24 @@ use tracing::debug;
 
 use super::core::AiClient;
 
+fn trim_or_empty(text: Option<&str>) -> String {
+    text.unwrap_or("").trim().to_string()
+}
+
+fn collect_anthropic_text(blocks: &[Value]) -> String {
+    let mut text = String::new();
+    for block in blocks {
+        // MiniMax and other providers may return thinking blocks before text blocks.
+        if block.get("type").and_then(|t| t.as_str()) != Some("text") {
+            continue;
+        }
+        if let Some(chunk) = block.get("text").and_then(|t| t.as_str()) {
+            text.push_str(chunk);
+        }
+    }
+    text
+}
+
 impl AiClient {
     /// Make a simple non-streaming API call
     ///
@@ -69,30 +87,13 @@ impl AiClient {
 
         let json: Value = response.json().await?;
 
-        // Extract text from Anthropic response
-        // MiniMax and other providers may return thinking blocks before text blocks,
-        // so we need to iterate through all blocks to find text content
         let text = json
             .get("content")
             .and_then(|c| c.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|block| {
-                        // Only extract from text blocks, skip thinking blocks
-                        if block.get("type").and_then(|t| t.as_str()) == Some("text") {
-                            block.get("text").and_then(|t| t.as_str())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join("")
-            })
-            .unwrap_or_default()
-            .trim()
-            .to_string();
+            .map(|arr| collect_anthropic_text(arr))
+            .unwrap_or_default();
 
-        Ok(text)
+        Ok(trim_or_empty(Some(&text)))
     }
 
     /// Simple non-streaming call using OpenAI format
@@ -119,18 +120,14 @@ impl AiClient {
         let json: Value = response.json().await?;
 
         // Extract text from OpenAI response format
-        let text = json
-            .get("choices")
-            .and_then(|c| c.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|choice| choice.get("message"))
-            .and_then(|msg| msg.get("content"))
-            .and_then(|t| t.as_str())
-            .unwrap_or("")
-            .trim()
-            .to_string();
-
-        Ok(text)
+        Ok(trim_or_empty(
+            json.get("choices")
+                .and_then(|c| c.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|choice| choice.get("message"))
+                .and_then(|msg| msg.get("content"))
+                .and_then(|t| t.as_str()),
+        ))
     }
 
     /// Simple non-streaming call using Google format
@@ -163,21 +160,17 @@ impl AiClient {
         let json: Value = response.json().await?;
 
         // Extract text from Google response format
-        let text = json
-            .get("candidates")
-            .and_then(|c| c.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|candidate| candidate.get("content"))
-            .and_then(|content| content.get("parts"))
-            .and_then(|parts| parts.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|part| part.get("text"))
-            .and_then(|t| t.as_str())
-            .unwrap_or("")
-            .trim()
-            .to_string();
-
-        Ok(text)
+        Ok(trim_or_empty(
+            json.get("candidates")
+                .and_then(|c| c.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|candidate| candidate.get("content"))
+                .and_then(|content| content.get("parts"))
+                .and_then(|parts| parts.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|part| part.get("text"))
+                .and_then(|t| t.as_str()),
+        ))
     }
 
     /// Simple call using ChatGPT Codex (Responses API) format
@@ -241,6 +234,6 @@ impl AiClient {
             }
         }
 
-        Ok(collected_text.trim().to_string())
+        Ok(trim_or_empty(Some(&collected_text)))
     }
 }

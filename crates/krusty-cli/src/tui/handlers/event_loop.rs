@@ -30,7 +30,7 @@ impl App {
             &mut self.runtime.channels,
             &mut self.runtime.blocks.build,
             &mut self.runtime.active_plan,
-            &self.services.plan_manager,
+            self.services.plan_manager.as_ref(),
         )
     }
 
@@ -62,6 +62,21 @@ impl App {
                     self.ui.needs_redraw = true;
                 }
             }
+        }
+    }
+
+    /// Poll plugin catalog on an interval for install/update/enable state changes.
+    pub(crate) fn poll_plugin_catalog(&mut self) {
+        const PLUGIN_POLL_INTERVAL: Duration = Duration::from_secs(2);
+
+        let now = Instant::now();
+        if now.duration_since(self.runtime.last_plugin_catalog_poll) < PLUGIN_POLL_INTERVAL {
+            return;
+        }
+        self.runtime.last_plugin_catalog_poll = now;
+
+        if self.refresh_plugin_catalog(true) {
+            self.ui.needs_redraw = true;
         }
     }
 

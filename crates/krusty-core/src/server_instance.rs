@@ -90,7 +90,11 @@ pub async fn detect_running_server() -> Option<ServerInstance> {
 
 #[cfg(unix)]
 fn is_process_alive(pid: u32) -> bool {
-    // kill(pid, 0) checks existence without sending a signal
+    if pid > i32::MAX as u32 {
+        return false;
+    }
+    // SAFETY: kill(pid, 0) with signal 0 only checks process existence
+    // without sending a signal. The pid is guarded to fit in i32.
     unsafe { libc::kill(pid as i32, 0) == 0 }
 }
 

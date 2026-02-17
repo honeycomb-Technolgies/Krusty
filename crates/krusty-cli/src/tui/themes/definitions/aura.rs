@@ -1,10 +1,13 @@
-use crate::tui::themes::{base::ThemeBuilder, Theme};
+use crate::tui::themes::{
+    base::{CoreColors, ThemeBuilder},
+    Theme,
+};
 use ratatui::style::Color;
 
 /// Aura theme
 pub fn aura() -> Theme {
     ThemeBuilder::new("aura", "Aura")
-        .core_colors(
+        .core_colors(CoreColors::new(
             Color::Rgb(31, 30, 39),
             Color::Rgb(45, 45, 45),
             Color::Rgb(162, 119, 255),
@@ -12,7 +15,7 @@ pub fn aura() -> Theme {
             Color::Rgb(237, 236, 238),
             Color::Rgb(97, 255, 202),
             Color::Rgb(109, 109, 109),
-        )
+        ))
         .mode_colors(
             Color::Rgb(97, 255, 202),
             Color::Rgb(162, 119, 255),

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { ArrowLeft, Check, X, Eye, EyeOff, Loader2 } from 'lucide-svelte';
-	import { apiClient } from '$lib/api/client';
+	import { apiClient, type ProviderStatus } from '$lib/api/client';
 
 	interface Props {
 		onBack: () => void;
@@ -9,14 +9,7 @@
 
 	let { onBack }: Props = $props();
 
-	interface Provider {
-		id: string;
-		name: string;
-		configured: boolean;
-		has_oauth: boolean;
-	}
-
-	let providers = $state<Provider[]>([]);
+	let providers = $state<ProviderStatus[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 
@@ -25,6 +18,7 @@
 	let apiKeyInput = $state('');
 	let showApiKey = $state(false);
 	let saving = $state(false);
+	let apiKeyInputEl = $state<HTMLInputElement>(undefined!);
 
 	onMount(() => {
 		loadProviders();
@@ -34,9 +28,7 @@
 		loading = true;
 		error = null;
 		try {
-			const res = await fetch('/api/credentials');
-			if (!res.ok) throw new Error('Failed to load providers');
-			providers = await res.json();
+			providers = await apiClient.getCredentials();
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load providers';
 		} finally {
@@ -49,15 +41,8 @@
 
 		saving = true;
 		try {
-			const res = await fetch(`/api/credentials/${providerId}`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ api_key: apiKeyInput })
-			});
+			await apiClient.setCredential(providerId, apiKeyInput);
 
-			if (!res.ok) throw new Error('Failed to save API key');
-
-			// Update local state
 			providers = providers.map((p) =>
 				p.id === providerId ? { ...p, configured: true } : p
 			);
@@ -73,11 +58,7 @@
 
 	async function removeApiKey(providerId: string) {
 		try {
-			const res = await fetch(`/api/credentials/${providerId}`, {
-				method: 'DELETE'
-			});
-
-			if (!res.ok) throw new Error('Failed to remove API key');
+			await apiClient.deleteCredential(providerId);
 
 			providers = providers.map((p) =>
 				p.id === providerId ? { ...p, configured: false } : p
@@ -91,6 +72,7 @@
 		editingProvider = providerId;
 		apiKeyInput = '';
 		showApiKey = false;
+		setTimeout(() => apiKeyInputEl?.focus(), 0);
 	}
 
 	function cancelEditing() {
@@ -176,6 +158,7 @@
 							<div class="mt-4 space-y-3">
 								<div class="relative">
 									<input
+										bind:this={apiKeyInputEl}
 										type={showApiKey ? 'text' : 'password'}
 										bind:value={apiKeyInput}
 										placeholder="Enter API key..."

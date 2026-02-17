@@ -1,10 +1,13 @@
-use crate::tui::themes::{base::ThemeBuilder, Theme};
+use crate::tui::themes::{
+    base::{CoreColors, ThemeBuilder},
+    Theme,
+};
 use ratatui::style::Color;
 
 /// Synthwave '84 theme
 pub fn synthwave_84() -> Theme {
     ThemeBuilder::new("synthwave-84", "Synthwave '84")
-        .core_colors(
+        .core_colors(CoreColors::new(
             Color::Rgb(52, 43, 69),
             Color::Rgb(73, 84, 149),
             Color::Rgb(54, 249, 246),
@@ -12,7 +15,7 @@ pub fn synthwave_84() -> Theme {
             Color::Rgb(255, 255, 255),
             Color::Rgb(114, 241, 184),
             Color::Rgb(132, 139, 189),
-        )
+        ))
         .mode_colors(
             Color::Rgb(114, 241, 184),
             Color::Rgb(176, 132, 235),

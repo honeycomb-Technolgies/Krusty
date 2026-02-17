@@ -37,6 +37,61 @@ static RE_ACKNOWLEDGED: Lazy<Regex> = Lazy::new(|| {
 });
 
 impl App {
+    fn append_streaming_assistant_delta(&mut self, delta: String) {
+        // Use cached streaming assistant index (O(1)) instead of O(n) scan per delta.
+        let append_idx = if let Some(idx) = self.runtime.chat.streaming_assistant_idx {
+            if idx < self.runtime.chat.messages.len()
+                && self
+                    .runtime
+                    .chat
+                    .messages
+                    .get(idx)
+                    .map(|(role, _)| role == "assistant")
+                    .unwrap_or(false)
+            {
+                Some(idx)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if let Some(idx) = append_idx {
+            self.runtime.chat.streaming_assistant_idx = Some(idx);
+            if let Some((_, content)) = self.runtime.chat.messages.get_mut(idx) {
+                content.push_str(&delta);
+            }
+        } else {
+            // Create new assistant message at end and cache its index
+            let new_idx = self.runtime.chat.messages.len();
+            self.runtime
+                .chat
+                .messages
+                .push(("assistant".to_string(), delta));
+            self.runtime.chat.streaming_assistant_idx = Some(new_idx);
+        }
+    }
+
+    fn process_plan_completion_checks(&mut self, check_text: &str) {
+        if check_text.is_empty() {
+            return;
+        }
+
+        tracing::info!(
+            "Plan active, checking {} chars (text + thinking) for completions",
+            check_text.len()
+        );
+        let preview: String = check_text.chars().take(200).collect();
+        tracing::debug!("Check text preview: {}...", preview);
+
+        if self.try_detect_plan_abandonment(check_text) {
+            // Plan was abandoned, skip completion check
+        } else {
+            self.try_update_task_completions(check_text);
+        }
+    }
+
     /// Process all pending stream events from the StreamingManager
     ///
     /// This is the main streaming event loop that handles all StreamEvent variants.
@@ -168,43 +223,9 @@ impl App {
         let should_check_completion = self.runtime.active_plan.is_some()
             && COMPLETION_KEYWORDS.iter().any(|kw| delta.contains(kw));
 
-        // Use cached streaming assistant index (O(1)) instead of O(n) scan per delta.
         // Cache is cleared at the start of each new streaming session (start_streaming),
-        // so a None cache means this is the first text delta of a new turn — create a
-        // fresh message block instead of appending to a previous turn's message.
-        let append_idx = if let Some(idx) = self.runtime.chat.streaming_assistant_idx {
-            if idx < self.runtime.chat.messages.len()
-                && self
-                    .runtime
-                    .chat
-                    .messages
-                    .get(idx)
-                    .map(|(role, _)| role == "assistant")
-                    .unwrap_or(false)
-            {
-                Some(idx)
-            } else {
-                None
-            }
-        } else {
-            // Cache empty — new turn, will create a new assistant message block below
-            None
-        };
-
-        if let Some(idx) = append_idx {
-            self.runtime.chat.streaming_assistant_idx = Some(idx);
-            if let Some((_, content)) = self.runtime.chat.messages.get_mut(idx) {
-                content.push_str(&delta);
-            }
-        } else {
-            // Create new assistant message at end and cache its index
-            let new_idx = self.runtime.chat.messages.len();
-            self.runtime
-                .chat
-                .messages
-                .push(("assistant".to_string(), delta));
-            self.runtime.chat.streaming_assistant_idx = Some(new_idx);
-        }
+        // so a None cache means this is the first text delta of a new turn.
+        self.append_streaming_assistant_delta(delta);
 
         // Real-time task completion detection
         if should_check_completion {
@@ -241,39 +262,7 @@ impl App {
         delta: String,
         citations: Vec<crate::ai::types::Citation>,
     ) {
-        // Use cached streaming assistant index (O(1)) instead of O(n) scan per delta.
-        let append_idx = if let Some(idx) = self.runtime.chat.streaming_assistant_idx {
-            if idx < self.runtime.chat.messages.len()
-                && self
-                    .runtime
-                    .chat
-                    .messages
-                    .get(idx)
-                    .map(|(role, _)| role == "assistant")
-                    .unwrap_or(false)
-            {
-                Some(idx)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        if let Some(idx) = append_idx {
-            self.runtime.chat.streaming_assistant_idx = Some(idx);
-            if let Some((_, content)) = self.runtime.chat.messages.get_mut(idx) {
-                content.push_str(&delta);
-            }
-        } else {
-            // Create new assistant message at end and cache its index
-            let new_idx = self.runtime.chat.messages.len();
-            self.runtime
-                .chat
-                .messages
-                .push(("assistant".to_string(), delta));
-            self.runtime.chat.streaming_assistant_idx = Some(new_idx);
-        }
+        self.append_streaming_assistant_delta(delta);
 
         if !citations.is_empty() {
             tracing::info!("Received {} citations", citations.len());
@@ -295,6 +284,10 @@ impl App {
     fn handle_tool_start(&mut self, name: String) {
         // Mark all streaming blocks complete when tool starts
         self.complete_streaming_blocks();
+
+        // Invalidate streaming assistant index cache since tool blocks will insert
+        // new messages, making the cached index stale
+        self.runtime.chat.streaming_assistant_idx = None;
 
         // Create pending blocks for edit/write tools
         if name == "edit" {
@@ -352,7 +345,8 @@ impl App {
                 | "task_complete"      // Silent - updates plan sidebar
                 | "add_subtask"        // Silent - updates plan sidebar
                 | "set_dependency"     // Silent - updates plan sidebar
-                | "enter_plan_mode" // Silent - updates status bar
+                | "enter_plan_mode"    // Silent - updates status bar
+                | "set_work_mode" // Silent - updates status bar
         ) {
             self.runtime
                 .chat
@@ -398,11 +392,12 @@ impl App {
 
     /// Handle thinking complete event
     fn handle_thinking_complete(&mut self, signature: String) {
+        let signature_len = signature.len();
         if let Some(block) = self.runtime.blocks.thinking.last_mut() {
-            block.set_signature(signature.clone());
+            block.set_signature(signature);
             block.complete();
         }
-        tracing::info!("ThinkingComplete - signature_len={}", signature.len());
+        tracing::info!("ThinkingComplete - signature_len={}", signature_len);
     }
 
     // =========================================================================
@@ -469,29 +464,19 @@ impl App {
         // Check for task completion mentions (works in both modes if plan is active)
         // Include thinking block content since models often mention completions there
         if self.runtime.active_plan.is_some() {
-            let mut check_text = final_text.clone();
             if let Some(thinking_text) = self.runtime.streaming.thinking_text() {
                 tracing::debug!(
                     "Appending {} chars of thinking content for completion check",
                     thinking_text.len()
                 );
+                let mut check_text =
+                    String::with_capacity(final_text.len() + thinking_text.len() + 1);
+                check_text.push_str(&final_text);
                 check_text.push('\n');
                 check_text.push_str(&thinking_text);
-            }
-
-            if !check_text.is_empty() {
-                tracing::info!(
-                    "Plan active, checking {} chars (text + thinking) for completions",
-                    check_text.len()
-                );
-                let preview: String = check_text.chars().take(200).collect();
-                tracing::debug!("Check text preview: {}...", preview);
-
-                if self.try_detect_plan_abandonment(&check_text) {
-                    // Plan was abandoned, skip completion check
-                } else {
-                    self.try_update_task_completions(&check_text);
-                }
+                self.process_plan_completion_checks(&check_text);
+            } else {
+                self.process_plan_completion_checks(&final_text);
             }
         } else {
             tracing::debug!("No active plan, skipping task completion check");
@@ -507,8 +492,10 @@ impl App {
                     "SAVING assistant message with {} content blocks (no tools)",
                     assistant_msg.content.len()
                 );
-                self.runtime.chat.conversation.push(assistant_msg.clone());
-                self.save_model_message(&assistant_msg);
+                self.runtime.chat.conversation.push(assistant_msg);
+                if let Some(saved_msg) = self.runtime.chat.conversation.last() {
+                    self.save_model_message(saved_msg);
+                }
             } else {
                 // Check if we need a filler message after tool_result
                 self.maybe_add_filler_message();
@@ -547,15 +534,17 @@ impl App {
             );
 
             // Save the updated plan
-            if let Err(e) = self.services.plan_manager.save_plan(active_plan) {
-                tracing::warn!("Failed to save merged plan: {}", e);
-            } else {
-                tracing::info!(
-                    "Plan saved: {} ({}/{})",
-                    active_plan.title,
-                    active_plan.completed_tasks(),
-                    active_plan.total_tasks()
-                );
+            if let Some(ref pm) = self.services.plan_manager {
+                if let Err(e) = pm.save_plan(active_plan) {
+                    tracing::warn!("Failed to save merged plan: {}", e);
+                } else {
+                    tracing::info!(
+                        "Plan saved: {} ({}/{})",
+                        active_plan.title,
+                        active_plan.completed_tasks(),
+                        active_plan.total_tasks()
+                    );
+                }
             }
         } else {
             // Create new plan - requires a session
@@ -564,38 +553,36 @@ impl App {
                 return;
             };
 
-            match self.services.plan_manager.create_plan(
-                &parsed_plan.title,
-                &session_id,
-                Some(&working_dir),
-            ) {
-                Ok(mut new_plan) => {
-                    // Copy phases from parsed plan
-                    new_plan.phases = parsed_plan.phases;
-                    new_plan.notes = parsed_plan.notes;
+            if let Some(ref pm) = self.services.plan_manager {
+                match pm.create_plan(&parsed_plan.title, &session_id, Some(&working_dir)) {
+                    Ok(mut new_plan) => {
+                        // Copy phases from parsed plan
+                        new_plan.phases = parsed_plan.phases;
+                        new_plan.notes = parsed_plan.notes;
 
-                    // Save with the full content
-                    if let Err(e) = self.services.plan_manager.save_plan(&new_plan) {
-                        tracing::warn!("Failed to save new plan: {}", e);
-                    } else {
-                        tracing::info!("Created new plan: '{}'", new_plan.title);
-                        let plan_title = new_plan.title.clone();
-                        let task_count = new_plan.total_tasks();
+                        // Save with the full content
+                        if let Err(e) = pm.save_plan(&new_plan) {
+                            tracing::warn!("Failed to save new plan: {}", e);
+                        } else {
+                            tracing::info!("Created new plan: '{}'", new_plan.title);
+                            let plan_title = new_plan.title.clone();
+                            let task_count = new_plan.total_tasks();
 
-                        self.set_plan(new_plan);
-                        self.ui.work_mode = WorkMode::Plan;
-                        if !self.ui.plan_sidebar.visible {
-                            self.ui.plan_sidebar.toggle();
+                            self.set_plan(new_plan);
+                            self.ui.work_mode = WorkMode::Plan;
+                            if !self.ui.plan_sidebar.visible {
+                                self.ui.plan_sidebar.toggle();
+                            }
+
+                            // Show decision prompt for plan confirmation
+                            self.ui
+                                .decision_prompt
+                                .show_plan_confirm(&plan_title, task_count);
                         }
-
-                        // Show decision prompt for plan confirmation
-                        self.ui
-                            .decision_prompt
-                            .show_plan_confirm(&plan_title, task_count);
                     }
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to create plan: {}", e);
+                    Err(e) => {
+                        tracing::warn!("Failed to create plan: {}", e);
+                    }
                 }
             }
         }
@@ -648,38 +635,40 @@ impl App {
             }
 
             // Save the updated plan
-            if let Err(e) = self.services.plan_manager.save_plan(active_plan) {
-                tracing::warn!("Failed to save plan after task updates: {}", e);
-            } else {
-                tracing::info!(
-                    "Plan progress updated: {}/{} tasks complete",
-                    completed,
-                    total
-                );
-
-                // Show visible feedback to user
-                let task_list = updated_tasks.join(", ");
-                self.runtime.chat.messages.push((
-                    "system".to_string(),
-                    format!("✓ Task {} complete ({}/{})", task_list, completed, total),
-                ));
-
-                // If plan is complete, disengage elegantly with animated collapse
-                if plan_complete {
+            if let Some(ref pm) = self.services.plan_manager {
+                if let Err(e) = pm.save_plan(active_plan) {
+                    tracing::warn!("Failed to save plan after task updates: {}", e);
+                } else {
                     tracing::info!(
-                        "Plan '{}' completed - starting graceful disengage",
-                        plan_title
+                        "Plan progress updated: {}/{} tasks complete",
+                        completed,
+                        total
                     );
+
+                    // Show visible feedback to user
+                    let task_list = updated_tasks.join(", ");
                     self.runtime.chat.messages.push((
                         "system".to_string(),
-                        format!(
-                            "🎉 Plan '{}' complete! All {} tasks finished.",
-                            plan_title, total
-                        ),
+                        format!("✓ Task {} complete ({}/{})", task_list, completed, total),
                     ));
 
-                    // Start graceful collapse - plan clears when animation completes
-                    self.ui.plan_sidebar.start_collapse();
+                    // If plan is complete, disengage elegantly with animated collapse
+                    if plan_complete {
+                        tracing::info!(
+                            "Plan '{}' completed - starting graceful disengage",
+                            plan_title
+                        );
+                        self.runtime.chat.messages.push((
+                            "system".to_string(),
+                            format!(
+                                "🎉 Plan '{}' complete! All {} tasks finished.",
+                                plan_title, total
+                            ),
+                        ));
+
+                        // Start graceful collapse - plan clears when animation completes
+                        self.ui.plan_sidebar.start_collapse();
+                    }
                 }
             }
         }
@@ -724,8 +713,10 @@ impl App {
             }
 
             // Save immediately for real-time persistence
-            if let Err(e) = self.services.plan_manager.save_plan(active_plan) {
-                tracing::warn!("Failed to save plan after real-time task update: {}", e);
+            if let Some(ref pm) = self.services.plan_manager {
+                if let Err(e) = pm.save_plan(active_plan) {
+                    tracing::warn!("Failed to save plan after real-time task update: {}", e);
+                }
             }
 
             // Show inline feedback
@@ -767,8 +758,10 @@ impl App {
                     .map(|p| p.display().to_string())
                     .unwrap_or_default();
 
-                if let Err(e) = self.services.plan_manager.save_plan(plan) {
-                    tracing::warn!("Failed to save abandoned plan: {}", e);
+                if let Some(ref pm) = self.services.plan_manager {
+                    if let Err(e) = pm.save_plan(plan) {
+                        tracing::warn!("Failed to save abandoned plan: {}", e);
+                    }
                 }
 
                 tracing::info!("Plan '{}' abandoned via natural language", title);
@@ -824,8 +817,10 @@ impl App {
                     text: format!("[Error: {}]", error),
                 }],
             };
-            self.runtime.chat.conversation.push(assistant_msg.clone());
-            self.save_model_message(&assistant_msg);
+            self.runtime.chat.conversation.push(assistant_msg);
+            if let Some(saved_msg) = self.runtime.chat.conversation.last() {
+                self.save_model_message(saved_msg);
+            }
         }
 
         self.runtime.streaming.reset();
@@ -1018,8 +1013,10 @@ impl App {
                     "SAVING assistant message with {} content blocks BEFORE tool execution",
                     assistant_msg.content.len()
                 );
-                self.runtime.chat.conversation.push(assistant_msg.clone());
-                self.save_model_message(&assistant_msg);
+                self.runtime.chat.conversation.push(assistant_msg);
+                if let Some(saved_msg) = self.runtime.chat.conversation.last() {
+                    self.save_model_message(saved_msg);
+                }
             }
 
             // Take tool calls from StreamingManager (transitions to Complete state)

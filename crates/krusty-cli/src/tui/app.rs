@@ -16,6 +16,7 @@ use crossterm::{
 use futures::StreamExt;
 use ratatui::{backend::CrosstermBackend, style::Color, Terminal};
 use std::{
+    collections::HashMap,
     io,
     path::PathBuf,
     sync::Arc,
@@ -30,6 +31,7 @@ use crate::ai::providers::ProviderId;
 use crate::ai::types::{AiTool, AiToolCall, Content};
 use crate::extensions::WasmHost;
 use crate::plan::{PlanFile, PlanManager};
+use crate::plugins::PluginManager;
 use crate::process::ProcessRegistry;
 use crate::storage::{CredentialStore, Preferences, SessionManager};
 use crate::tools::registry::PermissionMode;
@@ -65,6 +67,7 @@ pub enum Popup {
     SessionList,
     McpBrowser,
     ProcessList,
+    PluginsBrowser,
     Pinch,
     FilePreview,
     SkillsBrowser,
@@ -112,6 +115,16 @@ impl ThinkingLevel {
         }
     }
 
+    /// Cycle for Anthropic Opus: Off -> Low -> Medium -> High -> Off (no XHigh)
+    pub fn cycle_anthropic(self) -> Self {
+        match self {
+            Self::Off => Self::Low,
+            Self::Low => Self::Medium,
+            Self::Medium => Self::High,
+            Self::High | Self::XHigh => Self::Off,
+        }
+    }
+
     pub fn toggle_basic(self) -> Self {
         if self.is_enabled() {
             Self::Off
@@ -134,7 +147,7 @@ impl ThinkingLevel {
 /// Application services and external systems
 pub struct AppServices {
     // Plan/session storage
-    pub plan_manager: PlanManager,
+    pub plan_manager: Option<PlanManager>,
     pub session_manager: Option<SessionManager>,
     pub preferences: Option<Preferences>,
 
@@ -150,6 +163,7 @@ pub struct AppServices {
     // Extensions (not yet wired into tool dispatch)
     #[allow(dead_code)]
     pub wasm_host: Option<Arc<WasmHost>>,
+    pub plugin_manager: Option<Arc<PluginManager>>,
 
     // Skills/MCP
     pub skills_manager: Arc<RwLock<SkillsManager>>,
@@ -260,6 +274,8 @@ pub struct AppRuntime {
     pub git_status: Option<krusty_core::git::GitStatusSummary>,
     /// Last git status poll timestamp
     pub last_git_status_poll: Instant,
+    /// Last installed-plugin catalog poll timestamp
+    pub last_plugin_catalog_poll: Instant,
     /// Working directory
     pub working_dir: PathBuf,
     /// Current session ID
@@ -300,14 +316,20 @@ pub struct AppRuntime {
     pub attached_files: std::collections::HashMap<String, PathBuf>,
     /// Permission mode (supervised/autonomous)
     pub permission_mode: PermissionMode,
+    /// When a tool approval prompt was shown (for timeout)
+    pub approval_requested_at: Option<Instant>,
     /// Exploration budget tracking
     pub exploration_budget_count: usize,
+    /// Counts of repeated tool failure signatures for fail-fast loop protection
+    pub tool_failure_signatures: std::collections::HashMap<String, usize>,
     /// Just updated flag
     pub just_updated: bool,
     /// Update status
     pub update_status: Option<krusty_core::updater::UpdateStatus>,
     /// Should quit flag
     pub should_quit: bool,
+    /// Snapshot of installed plugin versions for update detection
+    pub plugin_versions: HashMap<String, String>,
 }
 
 impl AppRuntime {
@@ -332,6 +354,7 @@ impl AppRuntime {
             running_process_elapsed: None,
             git_status: None,
             last_git_status_poll: Instant::now() - Duration::from_secs(60),
+            last_plugin_catalog_poll: Instant::now() - Duration::from_secs(60),
             working_dir,
             current_session_id: None,
             session_title: None,
@@ -352,10 +375,13 @@ impl AppRuntime {
             tool_results: ToolResultCache::new(),
             attached_files: std::collections::HashMap::new(),
             permission_mode: PermissionMode::Supervised,
+            approval_requested_at: None,
             exploration_budget_count: 0,
+            tool_failure_signatures: std::collections::HashMap::new(),
             just_updated: false,
             update_status: None,
             should_quit: false,
+            plugin_versions: HashMap::new(),
         }
     }
 }
@@ -400,11 +426,15 @@ impl App {
             ..runtime
         };
 
-        Self {
+        let mut app = Self {
             ui,
             runtime,
             services,
-        }
+        };
+
+        // Prime installable plugin catalog before first render.
+        app.refresh_plugin_catalog(false);
+        app
     }
 
     /// Get max context window size for current model
@@ -444,16 +474,30 @@ impl App {
                 .contains("codex")
     }
 
+    /// Whether Tab should cycle Anthropic Opus 4.6 thinking levels.
+    pub fn is_anthropic_opus_thinking_mode(&self) -> bool {
+        self.runtime.active_provider == ProviderId::Anthropic
+            && (self.runtime.current_model.contains("opus-4-6")
+                || self.runtime.current_model.contains("opus-4.6"))
+    }
+
+    /// Whether this model supports multi-level thinking cycling.
+    pub fn has_multi_level_thinking(&self) -> bool {
+        self.is_codex_thinking_mode() || self.is_anthropic_opus_thinking_mode()
+    }
+
     /// Handle Tab thinking toggle/cycle.
     pub fn cycle_thinking_level(&mut self) {
         self.runtime.thinking_level = if self.is_codex_thinking_mode() {
             self.runtime.thinking_level.cycle_codex()
+        } else if self.is_anthropic_opus_thinking_mode() {
+            self.runtime.thinking_level.cycle_anthropic()
         } else {
             self.runtime.thinking_level.toggle_basic()
         };
         tracing::info!(
             model = %self.runtime.current_model,
-            codex_mode = self.is_codex_thinking_mode(),
+            multi_level = self.has_multi_level_thinking(),
             thinking_level = self.runtime.thinking_level.label(),
             "Updated thinking level"
         );
@@ -795,6 +839,7 @@ impl App {
 
             // Refresh git status for status bar (throttled inside handler).
             self.poll_git_status();
+            self.poll_plugin_catalog();
 
             // Keep process popup updated while open (non-blocking)
             if self.ui.popup == Popup::ProcessList {
@@ -812,6 +857,9 @@ impl App {
 
             // Execute tools when ready
             self.check_and_execute_tools();
+
+            // Check for timed-out tool approvals
+            self.check_approval_timeout();
 
             // Check for completed tool execution
             if let Some(ref mut rx) = self.runtime.channels.tool_results {

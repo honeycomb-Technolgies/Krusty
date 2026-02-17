@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::{
     body::Body,
@@ -24,7 +25,7 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-use krusty_core::agent::UserHookManager;
+use krusty_core::agent::{LoggingHook, PlanModeHook, SafetyHook, UserHookManager};
 use krusty_core::ai::client::{AiClient, AiClientConfig};
 use krusty_core::ai::models::{create_model_registry, ModelMetadata, SharedModelRegistry};
 use krusty_core::ai::providers::{builtin_providers, get_provider, ProviderId};
@@ -38,10 +39,17 @@ use krusty_core::storage::Database;
 use krusty_core::tools::implementations::register_all_tools;
 use krusty_core::tools::registry::ToolRegistry;
 
+type SessionGuard = Arc<Mutex<()>>;
+type SessionLockMap = HashMap<String, (SessionGuard, Instant)>;
+type PendingApprovalMap = HashMap<String, tokio::sync::oneshot::Sender<bool>>;
+
 pub mod auth;
 pub mod error;
+pub mod push;
 pub mod routes;
 pub mod types;
+pub mod utils;
+pub mod ws;
 
 /// Embedded PWA frontend assets.
 ///
@@ -74,6 +82,7 @@ impl Default for ServerConfig {
 /// Shared application state.
 #[derive(Clone)]
 pub struct AppState {
+    pub server_port: u16,
     pub db_path: Arc<PathBuf>,
     pub working_dir: Arc<PathBuf>,
     pub ai_client: Option<Arc<AiClient>>,
@@ -85,20 +94,11 @@ pub struct AppState {
     pub hook_manager: Arc<RwLock<UserHookManager>>,
     pub skills_manager: Arc<RwLock<SkillsManager>>,
     /// Per-session locks to prevent concurrent agentic loops on the same session.
-    pub session_locks: Arc<RwLock<HashMap<String, Arc<Mutex<()>>>>>,
+    pub session_locks: Arc<RwLock<SessionLockMap>>,
     /// Pending tool approval channels for supervised permission mode.
-    pub pending_approvals: Arc<RwLock<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
-}
-
-/// Parse provider from environment value.
-fn parse_provider(s: &str) -> Option<ProviderId> {
-    match s.to_ascii_lowercase().as_str() {
-        "minimax" => Some(ProviderId::MiniMax),
-        "openrouter" => Some(ProviderId::OpenRouter),
-        "z_ai" | "zai" => Some(ProviderId::ZAi),
-        "openai" => Some(ProviderId::OpenAI),
-        _ => None,
-    }
+    pub pending_approvals: Arc<RwLock<PendingApprovalMap>>,
+    /// Web Push notification service (None if VAPID init failed).
+    pub push_service: Option<Arc<push::PushService>>,
 }
 
 /// Build an AI client from configured credentials and env overrides.
@@ -106,7 +106,7 @@ pub fn create_ai_client(credentials: &CredentialStore) -> Option<AiClient> {
     let provider = std::env::var("KRUSTY_PROVIDER")
         .ok()
         .as_deref()
-        .and_then(parse_provider)
+        .and_then(utils::providers::parse_provider)
         .unwrap_or(ProviderId::MiniMax);
 
     let provider_cfg = get_provider(provider)?;
@@ -118,6 +118,7 @@ pub fn create_ai_client(credentials: &CredentialStore) -> Option<AiClient> {
             ProviderId::MiniMax => "MINIMAX_API_KEY",
             ProviderId::OpenRouter => "OPENROUTER_API_KEY",
             ProviderId::ZAi => "Z_AI_API_KEY",
+            ProviderId::Anthropic => "ANTHROPIC_API_KEY",
             ProviderId::OpenAI => "OPENAI_API_KEY",
         };
         std::env::var(env_key).ok()
@@ -212,7 +213,11 @@ pub async fn build_router(config: &ServerConfig) -> anyhow::Result<(Router, AppS
     let ai_client = create_ai_client(&credential_store_inner).map(Arc::new);
 
     let process_registry = Arc::new(ProcessRegistry::new());
-    let tool_registry = Arc::new(ToolRegistry::new());
+    let mut tool_registry_inner = ToolRegistry::new();
+    tool_registry_inner.add_pre_hook(Arc::new(SafetyHook::new()));
+    tool_registry_inner.add_pre_hook(Arc::new(PlanModeHook::new()));
+    tool_registry_inner.add_post_hook(Arc::new(LoggingHook::new()));
+    let tool_registry = Arc::new(tool_registry_inner);
     register_all_tools(&tool_registry).await;
 
     let model_registry = create_model_registry();
@@ -225,6 +230,18 @@ pub async fn build_router(config: &ServerConfig) -> anyhow::Result<(Router, AppS
         tracing::warn!("Failed to connect MCP servers: {}", e);
     }
 
+    let push_service =
+        match push::PushService::init(&paths::vapid_key_path(), Arc::new(db_path.clone())) {
+            Ok(svc) => {
+                tracing::info!("Web Push service initialized");
+                Some(Arc::new(svc))
+            }
+            Err(e) => {
+                tracing::warn!("Push notifications unavailable: {}", e);
+                None
+            }
+        };
+
     let mut hook_manager_inner = UserHookManager::new();
     if let Ok(db) = Database::new(&db_path) {
         if let Err(e) = hook_manager_inner.load(&db) {
@@ -233,6 +250,7 @@ pub async fn build_router(config: &ServerConfig) -> anyhow::Result<(Router, AppS
     }
 
     let state = AppState {
+        server_port: config.port,
         db_path: Arc::new(db_path),
         working_dir: Arc::new(config.working_dir.clone()),
         ai_client,
@@ -247,6 +265,7 @@ pub async fn build_router(config: &ServerConfig) -> anyhow::Result<(Router, AppS
         ))),
         session_locks: Arc::new(RwLock::new(HashMap::new())),
         pending_approvals: Arc::new(RwLock::new(HashMap::new())),
+        push_service,
     };
 
     let cors = CorsLayer::new()
@@ -262,6 +281,7 @@ pub async fn build_router(config: &ServerConfig) -> anyhow::Result<(Router, AppS
 
     let app = Router::new()
         .route("/health", get(health))
+        .route("/ws/terminal", get(ws::terminal::handler))
         .nest(
             "/api",
             routes::api_router().layer(middleware::from_fn_with_state(
@@ -306,7 +326,7 @@ async fn serve_pwa(uri: Uri) -> impl IntoResponse {
             .header(header::CONTENT_TYPE, mime.as_ref())
             .header(header::CACHE_CONTROL, cache_control(path))
             .body(Body::from(file.data.to_vec()))
-            .unwrap();
+            .expect("static response builder");
     }
 
     // SPA fallback: serve index.html for all non-file routes
@@ -316,14 +336,14 @@ async fn serve_pwa(uri: Uri) -> impl IntoResponse {
             .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
             .header(header::CACHE_CONTROL, "no-cache")
             .body(Body::from(index.data.to_vec()))
-            .unwrap(),
+            .expect("static response builder"),
         None => Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "text/plain")
             .body(Body::from(
                 "Krusty API server running. PWA frontend not embedded in this build.",
             ))
-            .unwrap(),
+            .expect("static response builder"),
     }
 }
 

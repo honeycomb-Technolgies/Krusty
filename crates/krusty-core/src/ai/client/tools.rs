@@ -16,6 +16,28 @@ use crate::ai::format::response::{
     extract_text_from_content, normalize_google_response, normalize_openai_response,
 };
 
+const OPENAI_WS_API_VERSION: &str = "responses_websockets=2026-02-06";
+
+fn collect_text_content_with_separator(content_arr: &[Value], separator: &str) -> String {
+    let mut text_content = String::new();
+
+    for item in content_arr {
+        if item.get("type").and_then(|t| t.as_str()) != Some("text") {
+            continue;
+        }
+        let Some(text) = item.get("text").and_then(|t| t.as_str()) else {
+            continue;
+        };
+
+        if !text_content.is_empty() {
+            text_content.push_str(separator);
+        }
+        text_content.push_str(text);
+    }
+
+    text_content
+}
+
 impl AiClient {
     /// Call the API with tools (non-streaming, for sub-agents)
     ///
@@ -355,19 +377,7 @@ impl AiClient {
 
                     if has_tool_use {
                         // Add text content first if any
-                        let text_content: String = content_arr
-                            .iter()
-                            .filter_map(|item| {
-                                if item.get("type").and_then(|t| t.as_str()) == Some("text") {
-                                    item.get("text")
-                                        .and_then(|t| t.as_str())
-                                        .map(|s| s.to_string())
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n");
+                        let text_content = collect_text_content_with_separator(content_arr, "\n");
 
                         if !text_content.is_empty() {
                             codex_input.push(serde_json::json!({
@@ -488,15 +498,17 @@ impl AiClient {
         }
 
         if codex_tools.is_empty() {
-            body.as_object_mut().unwrap().remove("tools");
-            body.as_object_mut().unwrap().remove("tool_choice");
+            if let Some(obj) = body.as_object_mut() {
+                obj.remove("tools");
+                obj.remove("tool_choice");
+            }
         }
 
         let ws_url = Self::resolve_codex_ws_url_for_tools(&self.config().api_url())?;
         let request = self.build_websocket_request(
             ws_url.as_str(),
             &[
-                ("OpenAI-Beta", "responses_websockets=2026-02-06"),
+                ("OpenAI-Beta", OPENAI_WS_API_VERSION),
                 ("originator", "krusty"),
             ],
         )?;
@@ -547,7 +559,7 @@ impl AiClient {
         let mut pending_tools: HashMap<String, (String, String)> = HashMap::new();
         let mut item_to_call_id: HashMap<String, String> = HashMap::new();
         let mut saw_completion = false;
-        let mut finish_reason = "end_turn".to_string();
+        let mut finish_reason = "end_turn";
 
         while let Some(msg) = stream.next().await {
             let payload = match msg? {
@@ -687,7 +699,7 @@ impl AiClient {
                                 .and_then(|r| r.as_str())
                                 .unwrap_or("incomplete");
                             if matches!(reason, "max_output_tokens" | "max_tokens" | "length") {
-                                finish_reason = "max_tokens".to_string();
+                                finish_reason = "max_tokens";
                             }
                         }
                     }
@@ -740,7 +752,7 @@ impl AiClient {
         }
 
         if has_tool_calls {
-            finish_reason = "tool_use".to_string();
+            finish_reason = "tool_use";
         }
 
         if !saw_completion {

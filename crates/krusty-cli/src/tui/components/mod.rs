@@ -14,6 +14,6 @@ pub use decision_prompt::{DecisionPrompt, PromptAnswer, PromptOption, PromptQues
 pub use plan_sidebar::{render_plan_sidebar, PlanSidebarState, MIN_TERMINAL_WIDTH};
 pub use plugin_window::{render_plugin_window, PluginWindowState};
 pub use scrollbars::{render_input_scrollbar, render_messages_scrollbar};
-pub use status_bar::render_status_bar;
+pub use status_bar::{render_status_bar, StatusBarProps};
 pub use toast::{render_toasts, Toast, ToastQueue};
-pub use toolbar::{render_toolbar, PlanInfo};
+pub use toolbar::{render_toolbar, PlanInfo, ToolbarProps};

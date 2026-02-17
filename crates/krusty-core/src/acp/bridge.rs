@@ -4,13 +4,15 @@
 //! allowing the Agent to send session notifications without direct access
 //! to the connection.
 
+use std::time::Duration;
+
 use agent_client_protocol::{
     Client, Error as AcpError, PermissionOptionId, RequestPermissionOutcome,
     RequestPermissionRequest, RequestPermissionResponse, Result as AcpResult,
     SelectedPermissionOutcome, SessionNotification,
 };
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::{info, warn};
 
 /// Bridge that implements Client trait using channels
 ///
@@ -71,10 +73,27 @@ impl Client for NotificationBridge {
     }
 
     async fn session_notification(&self, notification: SessionNotification) -> AcpResult<()> {
-        self.tx
-            .send(notification)
-            .await
-            .map_err(|e| AcpError::new(-32603, format!("Channel send error: {}", e)))
+        // Try non-blocking send first to avoid stalling the processor
+        match self.tx.try_send(notification) {
+            Ok(()) => Ok(()),
+            Err(mpsc::error::TrySendError::Full(notification)) => {
+                // Channel full - wait with timeout rather than blocking forever.
+                // On slow clients (phones), the forwarder may not drain fast enough.
+                match tokio::time::timeout(Duration::from_secs(10), self.tx.send(notification))
+                    .await
+                {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(e)) => Err(AcpError::new(-32603, format!("Channel closed: {}", e))),
+                    Err(_) => {
+                        warn!("Notification channel full for 10s, dropping notification");
+                        Ok(())
+                    }
+                }
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                Err(AcpError::new(-32603, "Notification channel closed"))
+            }
+        }
     }
 }
 

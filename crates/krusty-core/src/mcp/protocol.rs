@@ -203,10 +203,12 @@ impl From<ToolCallResult> for McpToolResult {
 
 /// Format MCP tool result for display
 pub fn format_mcp_result(result: &McpToolResult) -> String {
-    result
-        .content
-        .iter()
-        .map(|c| c.to_string())
-        .collect::<Vec<_>>()
-        .join("\n")
+    let mut formatted = String::new();
+    for (idx, content) in result.content.iter().enumerate() {
+        if idx > 0 {
+            formatted.push('\n');
+        }
+        formatted.push_str(&content.to_string());
+    }
+    formatted
 }

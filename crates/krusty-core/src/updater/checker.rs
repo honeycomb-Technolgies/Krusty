@@ -140,7 +140,7 @@ async fn check_for_updates_release() -> Result<Option<UpdateInfo>> {
 }
 
 /// Check for updates via git (dev mode)
-fn check_for_updates_dev(repo_path: &PathBuf) -> Result<Option<UpdateInfo>> {
+fn check_for_updates_dev(repo_path: &Path) -> Result<Option<UpdateInfo>> {
     debug!("Fetching from origin...");
 
     let fetch_status = Command::new("git")
@@ -154,17 +154,8 @@ fn check_for_updates_dev(repo_path: &PathBuf) -> Result<Option<UpdateInfo>> {
         return Err(anyhow!("Failed to fetch from origin"));
     }
 
-    let current = Command::new("git")
-        .args(["rev-parse", "--short", "HEAD"])
-        .current_dir(repo_path)
-        .output()?;
-    let current_commit = String::from_utf8_lossy(&current.stdout).trim().to_string();
-
-    let remote = Command::new("git")
-        .args(["rev-parse", "--short", "origin/main"])
-        .current_dir(repo_path)
-        .output()?;
-    let new_commit = String::from_utf8_lossy(&remote.stdout).trim().to_string();
+    let current_commit = git_stdout(repo_path, &["rev-parse", "--short", "HEAD"])?;
+    let new_commit = git_stdout(repo_path, &["rev-parse", "--short", "origin/main"])?;
 
     debug!("Current: {}, Remote: {}", current_commit, new_commit);
 
@@ -172,11 +163,7 @@ fn check_for_updates_dev(repo_path: &PathBuf) -> Result<Option<UpdateInfo>> {
         return Ok(None);
     }
 
-    let msg = Command::new("git")
-        .args(["log", "-1", "--format=%s", "origin/main"])
-        .current_dir(repo_path)
-        .output()?;
-    let commit_message = String::from_utf8_lossy(&msg.stdout).trim().to_string();
+    let commit_message = git_stdout(repo_path, &["log", "-1", "--format=%s", "origin/main"])?;
 
     Ok(Some(UpdateInfo {
         current_version: current_commit,
@@ -193,7 +180,7 @@ pub async fn download_update(
 ) -> Result<()> {
     if info.is_dev_mode {
         let repo_path = detect_repo_path().ok_or_else(|| anyhow!("No repo path for dev mode"))?;
-        download_update_dev(repo_path, &info.new_version, progress_tx).await
+        download_update_dev(&repo_path, &info.new_version, progress_tx).await
     } else {
         download_update_release(&info.new_version, progress_tx).await
     }
@@ -274,7 +261,7 @@ async fn download_update_release(
 
 /// Build update from git (dev mode)
 async fn download_update_dev(
-    repo_path: PathBuf,
+    repo_path: &Path,
     version: &str,
     progress_tx: mpsc::UnboundedSender<UpdateStatus>,
 ) -> Result<()> {
@@ -284,7 +271,7 @@ async fn download_update_dev(
 
     let pull = tokio::process::Command::new("git")
         .args(["pull", "origin", "main"])
-        .current_dir(&repo_path)
+        .current_dir(repo_path)
         .output()
         .await?;
 
@@ -299,7 +286,7 @@ async fn download_update_dev(
 
     let build = tokio::process::Command::new("cargo")
         .args(["build", "--release", "-p", "krusty"])
-        .current_dir(&repo_path)
+        .current_dir(repo_path)
         .output()
         .await?;
 
@@ -474,11 +461,11 @@ fn detect_platform() -> Result<&'static str> {
 /// Compare semver versions (returns true if new > current)
 fn is_newer_version(new: &str, current: &str) -> bool {
     let parse = |s: &str| -> (u32, u32, u32) {
-        let parts: Vec<u32> = s.split('.').filter_map(|p| p.parse().ok()).collect();
+        let mut parts = s.split('.');
         (
-            parts.first().copied().unwrap_or(0),
-            parts.get(1).copied().unwrap_or(0),
-            parts.get(2).copied().unwrap_or(0),
+            parts.next().and_then(|p| p.parse().ok()).unwrap_or(0),
+            parts.next().and_then(|p| p.parse().ok()).unwrap_or(0),
+            parts.next().and_then(|p| p.parse().ok()).unwrap_or(0),
         )
     };
 
@@ -486,6 +473,24 @@ fn is_newer_version(new: &str, current: &str) -> bool {
     let curr_v = parse(current);
 
     new_v > curr_v
+}
+
+fn git_stdout(repo_path: &Path, args: &[&str]) -> Result<String> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(repo_path)
+        .output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let detail = if stderr.is_empty() {
+            "unknown error".to_string()
+        } else {
+            stderr
+        };
+        return Err(anyhow!("git {} failed: {}", args.join(" "), detail));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 /// Extract tar.gz archive properly
@@ -496,15 +501,19 @@ fn extract_tar_gz(archive: &Path, dest: &Path) -> Result<()> {
     let extract_dir = std::env::temp_dir().join("krusty-extract");
     let _ = std::fs::remove_dir_all(&extract_dir);
     std::fs::create_dir_all(&extract_dir)?;
+    let archive_str = archive
+        .to_str()
+        .ok_or_else(|| anyhow!("Archive path is not valid UTF-8: {}", archive.display()))?;
+    let extract_dir_str = extract_dir.to_str().ok_or_else(|| {
+        anyhow!(
+            "Extraction path is not valid UTF-8: {}",
+            extract_dir.display()
+        )
+    })?;
 
     // Extract archive to temp directory
     let output = Command::new("tar")
-        .args([
-            "xzf",
-            archive.to_str().unwrap(),
-            "-C",
-            extract_dir.to_str().unwrap(),
-        ])
+        .args(["xzf", archive_str, "-C", extract_dir_str])
         .output()?;
 
     if !output.status.success() {
@@ -516,13 +525,14 @@ fn extract_tar_gz(archive: &Path, dest: &Path) -> Result<()> {
     let extracted_binary = extract_dir.join("krusty");
     if !extracted_binary.exists() {
         // Maybe it's in a subdirectory?
-        let entries: Vec<_> = std::fs::read_dir(&extract_dir)?
-            .filter_map(|e| e.ok())
-            .collect();
-        debug!(
-            "Extracted contents: {:?}",
-            entries.iter().map(|e| e.path()).collect::<Vec<_>>()
-        );
+        let mut extracted_entries = String::new();
+        for entry in std::fs::read_dir(&extract_dir)?.flatten() {
+            if !extracted_entries.is_empty() {
+                extracted_entries.push_str(", ");
+            }
+            extracted_entries.push_str(&entry.path().display().to_string());
+        }
+        debug!("Extracted contents: [{}]", extracted_entries);
         return Err(anyhow!("Binary 'krusty' not found in archive"));
     }
 
@@ -578,4 +588,24 @@ fn extract_zip(archive: &PathBuf, dest: &PathBuf) -> Result<()> {
 #[cfg(not(windows))]
 fn extract_zip(_archive: &PathBuf, _dest: &PathBuf) -> Result<()> {
     Err(anyhow!("Zip extraction not supported on this platform"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_newer_version;
+
+    #[test]
+    fn semver_comparison_prefers_higher_components() {
+        assert!(is_newer_version("0.4.2", "0.4.1"));
+        assert!(is_newer_version("1.0.0", "0.999.999"));
+        assert!(!is_newer_version("0.4.1", "0.4.1"));
+        assert!(!is_newer_version("0.4.0", "0.4.1"));
+    }
+
+    #[test]
+    fn semver_comparison_handles_missing_parts_as_zero() {
+        assert!(is_newer_version("0.5", "0.4.9"));
+        assert!(is_newer_version("2", "1.99.99"));
+        assert!(!is_newer_version("0.4", "0.4.1"));
+    }
 }

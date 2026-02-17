@@ -55,7 +55,7 @@ pub fn poll_build_progress(
     channels: &mut AsyncChannels,
     build_blocks: &mut [BuildBlock],
     active_plan: &mut Option<PlanFile>,
-    plan_manager: &PlanManager,
+    plan_manager: Option<&PlanManager>,
 ) -> PollResult {
     let mut result = PollResult::new();
 
@@ -80,8 +80,13 @@ pub fn poll_build_progress(
                     if let Some(ref mut plan) = active_plan {
                         if plan.check_task(task_id) {
                             tracing::debug!(task_id = %task_id, "Kraken auto-completed plan task");
-                            if let Err(e) = plan_manager.save_plan(plan) {
-                                tracing::warn!("Failed to save plan after task completion: {}", e);
+                            if let Some(pm) = plan_manager {
+                                if let Err(e) = pm.save_plan(plan) {
+                                    tracing::warn!(
+                                        "Failed to save plan after task completion: {}",
+                                        e
+                                    );
+                                }
                             }
                         }
                     }
@@ -176,12 +181,18 @@ pub fn poll_init_exploration(
                             .and_then(|content| {
                                 content.find("## Notes for AI").map(|pos| {
                                     let notes_section = &content[pos..];
-                                    notes_section
+                                    let mut notes = String::new();
+                                    for line in notes_section
                                         .lines()
                                         .skip(1)
                                         .skip_while(|l| l.starts_with("<!--") || l.is_empty())
-                                        .collect::<Vec<_>>()
-                                        .join("\n")
+                                    {
+                                        if !notes.is_empty() {
+                                            notes.push('\n');
+                                        }
+                                        notes.push_str(line);
+                                    }
+                                    notes
                                 })
                             })
                             .filter(|s| !s.trim().is_empty())

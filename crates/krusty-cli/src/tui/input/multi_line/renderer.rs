@@ -1,7 +1,6 @@
 //! Rendering logic for multi-line input
 
 use ratatui::{
-    layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Paragraph},
@@ -9,20 +8,31 @@ use ratatui::{
 
 use super::MultiLineInput;
 
+pub struct StyledInputRenderOptions {
+    pub bg_color: Color,
+    pub border_color: Color,
+    pub text_color: Color,
+    pub selection: Option<((usize, usize), (usize, usize))>,
+    pub selection_bg: Color,
+    pub selection_fg: Color,
+    pub link_color: Option<Color>,
+    pub hover_range: Option<(usize, usize)>,
+}
+
 impl MultiLineInput {
     /// Render with optional file reference styling
-    pub fn render_styled_with_file_refs(
-        &self,
-        _area: Rect,
-        bg_color: Color,
-        border_color: Color,
-        accent_color: Color,
-        selection: Option<((usize, usize), (usize, usize))>,
-        sel_bg: Color,
-        sel_fg: Color,
-        link_color: Option<Color>,
-        hover_range: Option<(usize, usize)>,
-    ) -> Paragraph<'_> {
+    pub fn render_styled_with_file_refs(&self, options: StyledInputRenderOptions) -> Paragraph<'_> {
+        let StyledInputRenderOptions {
+            bg_color,
+            border_color,
+            text_color: accent_color,
+            selection,
+            selection_bg: sel_bg,
+            selection_fg: sel_fg,
+            link_color,
+            hover_range,
+        } = options;
+
         let lines = self.get_wrapped_lines();
         let file_ref_ranges = if link_color.is_some() {
             self.get_file_ref_ranges()

@@ -5,7 +5,7 @@
 use crate::tui::popups::{
     auth::AuthPopup, file_preview::FilePreviewPopup, help::HelpPopup, hooks::HooksPopup,
     mcp_browser::McpBrowserPopup, model_select::ModelSelectPopup, pinch::PinchPopup,
-    process_list::ProcessListPopup, session_list::SessionListPopup,
+    plugins::PluginsBrowserPopup, process_list::ProcessListPopup, session_list::SessionListPopup,
     skills_browser::SkillsBrowserPopup, theme_select::ThemeSelectPopup,
 };
 
@@ -18,6 +18,7 @@ pub struct PopupState {
     pub auth: AuthPopup,
     pub mcp: McpBrowserPopup,
     pub process: ProcessListPopup,
+    pub plugins: PluginsBrowserPopup,
     pub pinch: PinchPopup,
     pub file_preview: FilePreviewPopup,
     pub skills: SkillsBrowserPopup,
@@ -37,6 +38,7 @@ impl PopupState {
             auth: AuthPopup::new(),
             mcp: McpBrowserPopup::new(),
             process: ProcessListPopup::new(),
+            plugins: PluginsBrowserPopup::new(),
             pinch: PinchPopup::new(),
             file_preview,
             skills: SkillsBrowserPopup::new(),

@@ -2,6 +2,13 @@
 //!
 //! Handles the execution of AI tool calls and processing of results.
 
+use std::{
+    borrow::Cow,
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+    time::Duration,
+};
+
 use tokio::sync::{mpsc, oneshot};
 
 use crate::agent::subagent::AgentProgress;
@@ -10,21 +17,65 @@ use crate::tools::{ToolContext, ToolOutputChunk};
 use crate::tui::app::App;
 use crate::tui::components::{PromptOption, PromptQuestion};
 
+const MAX_ITERATIONS: usize = 50;
+const MAX_TOOL_OUTPUT_CHARS: usize = 30_000;
+const APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
+const REPEATED_TOOL_FAILURE_THRESHOLD: usize = 2;
+
 impl App {
-    /// Handle enter_plan_mode tool calls to switch modes
-    pub(super) fn handle_enter_plan_mode_tools(&mut self, tool_calls: Vec<AiToolCall>) {
+    /// Handle mode-switch tools (`set_work_mode` and legacy `enter_plan_mode`)
+    pub(super) fn handle_mode_switch_tools(&mut self, tool_calls: Vec<AiToolCall>) {
         use crate::tui::app::WorkMode;
 
         let mut results = Vec::new();
 
         for tool_call in tool_calls {
-            tracing::info!("Handling enter_plan_mode tool call: {}", tool_call.id);
+            tracing::info!(
+                "Handling mode switch tool call: {} ({})",
+                tool_call.id,
+                tool_call.name
+            );
 
+            let target_mode = if tool_call.name == "enter_plan_mode" {
+                WorkMode::Plan
+            } else {
+                match tool_call.arguments.get("mode").and_then(|v| v.as_str()) {
+                    Some("plan") => WorkMode::Plan,
+                    Some("build") => WorkMode::Build,
+                    Some(other) => {
+                        results.push(Content::ToolResult {
+                            tool_use_id: tool_call.id.clone(),
+                            output: serde_json::Value::String(format!(
+                                "Error: invalid mode '{}'. Use 'build' or 'plan'.",
+                                other
+                            )),
+                            is_error: Some(true),
+                        });
+                        continue;
+                    }
+                    None => {
+                        results.push(Content::ToolResult {
+                            tool_use_id: tool_call.id.clone(),
+                            output: serde_json::Value::String(
+                                "Error: mode parameter is required (build|plan)".to_string(),
+                            ),
+                            is_error: Some(true),
+                        });
+                        continue;
+                    }
+                }
+            };
+
+            let default_reason = if target_mode == WorkMode::Plan {
+                "Starting planning phase"
+            } else {
+                "Starting implementation phase"
+            };
             let reason = tool_call
                 .arguments
                 .get("reason")
                 .and_then(|v| v.as_str())
-                .unwrap_or("Starting planning phase")
+                .unwrap_or(default_reason)
                 .to_string();
 
             let clear_existing = tool_call
@@ -33,19 +84,27 @@ impl App {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
-            if clear_existing {
+            if clear_existing && target_mode == WorkMode::Plan {
                 self.clear_plan();
                 tracing::info!("Cleared existing plan");
             }
-            self.ui.work_mode = WorkMode::Plan;
-            tracing::info!("Switched to Plan mode: {}", reason);
+            self.ui.work_mode = target_mode;
+            tracing::info!("Switched to {:?} mode: {}", target_mode, reason);
 
-            results.push(Content::ToolResult {
-                tool_use_id: tool_call.id.clone(),
-                output: serde_json::Value::String(format!(
+            let output = if target_mode == WorkMode::Plan {
+                format!(
                     "Now in Plan mode. {}. Create a plan using the standard format (# Plan: Title, ## Phase N: Name, - [ ] Task). The user will review and approve before implementation.",
                     reason
-                )),
+                )
+            } else {
+                format!(
+                    "Now in Build mode. {}. Proceed with implementation and keep plan task status updated.",
+                    reason
+                )
+            };
+            results.push(Content::ToolResult {
+                tool_use_id: tool_call.id.clone(),
+                output: serde_json::Value::String(output),
                 is_error: None,
             });
         }
@@ -188,8 +247,10 @@ impl App {
                 continue;
             }
 
-            if let Err(e) = self.services.plan_manager.save_plan(plan) {
-                tracing::error!("Failed to save plan after task completion: {}", e);
+            if let Some(ref pm) = self.services.plan_manager {
+                if let Err(e) = pm.save_plan(plan) {
+                    tracing::error!("Failed to save plan after task completion: {}", e);
+                }
             }
 
             let (completed, total) = plan.progress();
@@ -256,8 +317,10 @@ impl App {
 
             match plan.start_task(task_id) {
                 Ok(()) => {
-                    if let Err(e) = self.services.plan_manager.save_plan(plan) {
-                        tracing::error!("Failed to save plan after task start: {}", e);
+                    if let Some(ref pm) = self.services.plan_manager {
+                        if let Err(e) = pm.save_plan(plan) {
+                            tracing::error!("Failed to save plan after task start: {}", e);
+                        }
                     }
                     results.push(Content::ToolResult {
                         tool_use_id: tool_call.id.clone(),
@@ -324,8 +387,10 @@ impl App {
 
             match plan.add_subtask(parent_id, description, context) {
                 Ok(subtask_id) => {
-                    if let Err(e) = self.services.plan_manager.save_plan(plan) {
-                        tracing::error!("Failed to save plan after adding subtask: {}", e);
+                    if let Some(ref pm) = self.services.plan_manager {
+                        if let Err(e) = pm.save_plan(plan) {
+                            tracing::error!("Failed to save plan after adding subtask: {}", e);
+                        }
                     }
                     results.push(Content::ToolResult {
                         tool_use_id: tool_call.id.clone(),
@@ -388,8 +453,10 @@ impl App {
 
             match plan.add_dependency(task_id, blocked_by) {
                 Ok(()) => {
-                    if let Err(e) = self.services.plan_manager.save_plan(plan) {
-                        tracing::error!("Failed to save plan after adding dependency: {}", e);
+                    if let Some(ref pm) = self.services.plan_manager {
+                        if let Err(e) = pm.save_plan(plan) {
+                            tracing::error!("Failed to save plan after adding dependency: {}", e);
+                        }
                     }
                     results.push(Content::ToolResult {
                         tool_use_id: tool_call.id.clone(),
@@ -560,14 +627,14 @@ impl App {
             self.handle_set_dependency_tools(set_dependency_tools);
         }
 
-        // Intercept enter_plan_mode tool
+        // Intercept set_work_mode and legacy enter_plan_mode tools
         let (plan_mode_tools, tool_calls): (Vec<_>, Vec<_>) = tool_calls
             .into_iter()
-            .partition(|t| t.name == "enter_plan_mode");
+            .partition(|t| t.name == "set_work_mode" || t.name == "enter_plan_mode");
 
         let has_plan_mode = !plan_mode_tools.is_empty();
         if has_plan_mode {
-            self.handle_enter_plan_mode_tools(plan_mode_tools);
+            self.handle_mode_switch_tools(plan_mode_tools);
         }
 
         let has_plan_tools = has_task_complete
@@ -594,8 +661,9 @@ impl App {
                 // Store the full tool_calls for later execution after approval
                 self.runtime.queued_tools.extend(tool_calls);
 
-                // Show approval prompt
+                // Show approval prompt and track when it was requested
                 self.ui.decision_prompt.show_tool_approval(names, ids);
+                self.runtime.approval_requested_at = Some(std::time::Instant::now());
                 return;
             }
         }
@@ -647,13 +715,32 @@ impl App {
         }
 
         // Create streaming output channel for bash
-        let (output_tx, output_rx) = mpsc::unbounded_channel::<ToolOutputChunk>();
-        self.runtime.channels.bash_output = Some(output_rx);
+        // Unbounded sender for krusty-core API compat, bounded receiver for backpressure
+        let (output_tx, unbounded_output_rx) = mpsc::unbounded_channel::<ToolOutputChunk>();
+        let (bounded_output_tx, bounded_output_rx) = mpsc::channel::<ToolOutputChunk>(1024);
+        self.runtime.channels.bash_output = Some(bounded_output_rx);
+        tokio::spawn(async move {
+            let mut rx = unbounded_output_rx;
+            while let Some(chunk) = rx.recv().await {
+                if bounded_output_tx.send(chunk).await.is_err() {
+                    break;
+                }
+            }
+        });
 
         // Create explore progress channel if any explore tools
         let explore_progress_tx = if has_explore {
-            let (tx, rx) = mpsc::unbounded_channel::<AgentProgress>();
-            self.runtime.channels.explore_progress = Some(rx);
+            let (tx, unbounded_rx) = mpsc::unbounded_channel::<AgentProgress>();
+            let (bounded_tx, bounded_rx) = mpsc::channel::<AgentProgress>(1024);
+            self.runtime.channels.explore_progress = Some(bounded_rx);
+            tokio::spawn(async move {
+                let mut rx = unbounded_rx;
+                while let Some(progress) = rx.recv().await {
+                    if bounded_tx.send(progress).await.is_err() {
+                        break;
+                    }
+                }
+            });
             Some(tx)
         } else {
             None
@@ -661,8 +748,17 @@ impl App {
 
         // Create build progress channel if any build tools
         let build_progress_tx = if has_build {
-            let (tx, rx) = mpsc::unbounded_channel::<AgentProgress>();
-            self.runtime.channels.build_progress = Some(rx);
+            let (tx, unbounded_rx) = mpsc::unbounded_channel::<AgentProgress>();
+            let (bounded_tx, bounded_rx) = mpsc::channel::<AgentProgress>(1024);
+            self.runtime.channels.build_progress = Some(bounded_rx);
+            tokio::spawn(async move {
+                let mut rx = unbounded_rx;
+                while let Some(progress) = rx.recv().await {
+                    if bounded_tx.send(progress).await.is_err() {
+                        break;
+                    }
+                }
+            });
             Some(tx)
         } else {
             None
@@ -740,9 +836,10 @@ impl App {
                 };
 
                 if let Some(result) = result {
+                    let output = truncate_tool_output(&result.output);
                     tool_results.push(Content::ToolResult {
                         tool_use_id: tool_call.id.clone(),
-                        output: serde_json::Value::String(result.output),
+                        output: serde_json::Value::String(output),
                         is_error: if result.is_error { Some(true) } else { None },
                     });
                 } else {
@@ -944,6 +1041,7 @@ impl App {
     ) {
         use crate::tui::components::PromptAnswer;
 
+        self.runtime.approval_requested_at = None;
         let approved = matches!(answers.first(), Some(PromptAnswer::Selected(0)));
         let queued = std::mem::take(&mut self.runtime.queued_tools);
 
@@ -1025,6 +1123,8 @@ impl App {
                 "handle_tool_results: processing {} queued tools",
                 queued.len()
             );
+            // Clear executing state so UI shows idle while queued tools wait to run
+            self.runtime.chat.is_executing_tools = false;
             self.spawn_tool_execution(queued);
             // Store results for later
             self.runtime.pending_tool_results = all_results;
@@ -1068,6 +1168,36 @@ impl App {
         self.runtime.chat.conversation.push(tool_result_msg.clone());
         self.save_model_message(&tool_result_msg);
 
+        if let Some(diagnostic) = self.detect_repeated_tool_failures(&tool_result_msg.content) {
+            tracing::warn!(
+                threshold = REPEATED_TOOL_FAILURE_THRESHOLD,
+                diagnostic = %diagnostic,
+                "Fail-fast: stopping repeated tool failure loop"
+            );
+            self.runtime
+                .chat
+                .messages
+                .push(("system".to_string(), diagnostic));
+            self.stop_streaming();
+            return;
+        }
+
+        // Enforce agentic loop iteration limit
+        if self.runtime.agent_state.current_turn >= MAX_ITERATIONS {
+            tracing::warn!(
+                "Agentic loop hit iteration limit ({}), stopping",
+                MAX_ITERATIONS
+            );
+            self.runtime.chat.messages.push((
+                "system".to_string(),
+                format!(
+                    "Reached maximum agentic loop iterations ({}). Stopping.",
+                    MAX_ITERATIONS
+                ),
+            ));
+            return;
+        }
+
         // Continue conversation with AI
         self.send_to_ai();
     }
@@ -1099,8 +1229,8 @@ impl App {
                         .unwrap_or(0) as usize;
                     block.set_content(content.to_string(), total_lines, lines_returned);
                 } else {
-                    let lines: Vec<&str> = output_str.lines().collect();
-                    block.set_content(output_str.to_string(), lines.len(), lines.len());
+                    let line_count = output_str.lines().count();
+                    block.set_content(output_str.to_string(), line_count, line_count);
                 }
                 break;
             }
@@ -1159,5 +1289,266 @@ impl App {
                 break;
             }
         }
+    }
+
+    fn detect_repeated_tool_failures(&mut self, tool_results: &[Content]) -> Option<String> {
+        let mut saw_success = false;
+
+        for result in tool_results {
+            let Content::ToolResult {
+                tool_use_id,
+                output,
+                is_error,
+            } = result
+            else {
+                continue;
+            };
+
+            if !is_error.unwrap_or(false) {
+                saw_success = true;
+                continue;
+            }
+
+            let output_str = match output {
+                serde_json::Value::String(s) => Cow::Borrowed(s.as_str()),
+                other => Cow::Owned(other.to_string()),
+            };
+
+            let Some((tool_name, args_hash)) = self.find_tool_use_metadata(tool_use_id) else {
+                continue;
+            };
+
+            let (error_code, error_fingerprint) = extract_error_signature(output_str.as_ref());
+            let signature = format!(
+                "{}|{}|{}|{}",
+                tool_name, error_code, error_fingerprint, args_hash
+            );
+            let count = self
+                .runtime
+                .tool_failure_signatures
+                .entry(signature)
+                .and_modify(|c| *c += 1)
+                .or_insert(1);
+
+            if *count >= REPEATED_TOOL_FAILURE_THRESHOLD {
+                return Some(format!(
+                    "Stopping tool loop: '{}' failed {} times with the same '{}' error. I need a different tool strategy.",
+                    tool_name, *count, error_code
+                ));
+            }
+        }
+
+        if saw_success {
+            self.runtime.tool_failure_signatures.clear();
+        }
+
+        None
+    }
+
+    fn find_tool_use_metadata(&self, tool_use_id: &str) -> Option<(String, u64)> {
+        for message in self.runtime.chat.conversation.iter().rev() {
+            for content in &message.content {
+                let Content::ToolUse { id, name, input } = content else {
+                    continue;
+                };
+                if id != tool_use_id {
+                    continue;
+                }
+
+                let mut hasher = DefaultHasher::new();
+                input.to_string().hash(&mut hasher);
+                return Some((name.clone(), hasher.finish()));
+            }
+        }
+
+        None
+    }
+
+    /// Check if a tool approval prompt has timed out and auto-reject if so
+    pub fn check_approval_timeout(&mut self) {
+        if self.ui.decision_prompt.prompt_type != crate::tui::components::PromptType::ToolApproval
+            || !self.ui.decision_prompt.visible
+        {
+            return;
+        }
+
+        let Some(requested_at) = self.runtime.approval_requested_at else {
+            return;
+        };
+
+        if requested_at.elapsed() >= APPROVAL_TIMEOUT {
+            tracing::warn!("Tool approval timed out after {:?}", APPROVAL_TIMEOUT);
+            self.runtime.approval_requested_at = None;
+            self.ui.decision_prompt.hide();
+            self.runtime.chat.messages.push((
+                "system".to_string(),
+                "Tool approval timed out (5 min). Automatically denied.".to_string(),
+            ));
+
+            // Auto-reject all queued tools
+            let queued = std::mem::take(&mut self.runtime.queued_tools);
+            let mut results: Vec<Content> = Vec::new();
+            for tool in &queued {
+                results.push(Content::ToolResult {
+                    tool_use_id: tool.id.clone(),
+                    output: serde_json::Value::String(
+                        "Tool approval timed out after 5 minutes".to_string(),
+                    ),
+                    is_error: Some(true),
+                });
+            }
+            let pending = std::mem::take(&mut self.runtime.pending_tool_results);
+            results.extend(pending);
+            if !results.is_empty() {
+                self.stop_streaming();
+                self.handle_tool_results(results);
+            }
+        }
+    }
+}
+
+fn truncate_tool_output(output: &str) -> String {
+    if output.len() <= MAX_TOOL_OUTPUT_CHARS {
+        return output.to_string();
+    }
+
+    let truncated_len = floor_char_boundary(output, MAX_TOOL_OUTPUT_CHARS);
+    let truncated = &output[..truncated_len];
+    let break_point = truncated.rfind('\n').unwrap_or(truncated_len);
+    let clean = &output[..break_point];
+    format!(
+        "{}\n\n[Output truncated: {} chars, showing first {}]",
+        clean,
+        output.len(),
+        clean.len()
+    )
+}
+
+fn floor_char_boundary(text: &str, index: usize) -> usize {
+    let mut boundary = index.min(text.len());
+    while boundary > 0 && !text.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    boundary
+}
+
+fn extract_error_signature(output_str: &str) -> (String, String) {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(output_str) {
+        if let Some(error) = value.get("error") {
+            if let Some(error_obj) = error.as_object() {
+                let message = error_obj
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let code = error_obj
+                    .get("code")
+                    .and_then(|v| v.as_str())
+                    .map(|c| c.to_ascii_lowercase())
+                    .filter(|c| !c.is_empty())
+                    .unwrap_or_else(|| classify_error_code(message).to_string());
+                return (code, normalize_error_fingerprint(message));
+            }
+
+            if let Some(message) = error.as_str() {
+                return (
+                    classify_error_code(message).to_string(),
+                    normalize_error_fingerprint(message),
+                );
+            }
+        }
+    }
+
+    (
+        classify_error_code(output_str).to_string(),
+        normalize_error_fingerprint(output_str),
+    )
+}
+
+fn classify_error_code(message: &str) -> &'static str {
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("invalid parameters")
+        || lower.contains("missing field")
+        || lower.contains("unknown field")
+    {
+        "invalid_parameters"
+    } else if lower.contains("unknown tool") {
+        "unknown_tool"
+    } else if lower.contains("access denied") || lower.contains("outside workspace") {
+        "access_denied"
+    } else if lower.contains("timed out") || lower.contains("timeout") {
+        "timeout"
+    } else if lower.contains("denied") {
+        "permission_denied"
+    } else {
+        "tool_error"
+    }
+}
+
+fn normalize_error_fingerprint(message: &str) -> String {
+    let mut compact = String::new();
+    for part in message.split_whitespace() {
+        if !compact.is_empty() {
+            compact.push(' ');
+        }
+        compact.push_str(part);
+    }
+
+    if compact.is_empty() {
+        return "unknown".to_string();
+    }
+
+    compact.make_ascii_lowercase();
+    compact.chars().take(160).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        classify_error_code, extract_error_signature, normalize_error_fingerprint,
+        truncate_tool_output, MAX_TOOL_OUTPUT_CHARS,
+    };
+
+    #[test]
+    fn extract_error_signature_supports_structured_error_object() {
+        let output = r#"{"error":{"code":"invalid_parameters","message":"Invalid parameters: missing field `prompt`"}}"#;
+        let (code, fingerprint) = extract_error_signature(output);
+        assert_eq!(code, "invalid_parameters");
+        assert!(fingerprint.contains("missing field"));
+    }
+
+    #[test]
+    fn extract_error_signature_supports_legacy_error_string() {
+        let output = r#"{"error":"Invalid parameters: missing field `pattern`"}"#;
+        let (code, fingerprint) = extract_error_signature(output);
+        assert_eq!(code, "invalid_parameters");
+        assert!(fingerprint.contains("missing field"));
+    }
+
+    #[test]
+    fn classify_error_code_covers_common_categories() {
+        assert_eq!(
+            classify_error_code("Invalid parameters: missing field `pattern`"),
+            "invalid_parameters"
+        );
+        assert_eq!(classify_error_code("Unknown tool: nope"), "unknown_tool");
+        assert_eq!(
+            classify_error_code("Access denied: path is outside workspace"),
+            "access_denied"
+        );
+    }
+
+    #[test]
+    fn normalize_error_fingerprint_collapses_whitespace() {
+        let normalized = normalize_error_fingerprint("  A   spaced\n error\tmessage  ");
+        assert_eq!(normalized, "a spaced error message");
+    }
+
+    #[test]
+    fn truncate_tool_output_handles_utf8_boundaries() {
+        let prefix = "a".repeat(MAX_TOOL_OUTPUT_CHARS - 1);
+        let output = format!("{prefix}🙂tail");
+        let truncated = truncate_tool_output(&output);
+        assert!(truncated.starts_with(&prefix));
+        assert!(truncated.contains("Output truncated"));
     }
 }

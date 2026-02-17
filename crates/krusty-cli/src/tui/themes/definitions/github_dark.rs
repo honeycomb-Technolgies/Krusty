@@ -1,18 +1,21 @@
-use crate::tui::themes::{base::ThemeBuilder, Theme};
+use crate::tui::themes::{
+    base::{CoreColors, ThemeBuilder},
+    Theme,
+};
 use ratatui::style::Color;
 
 /// GitHub Dark theme
 pub fn github_dark() -> Theme {
     ThemeBuilder::new("github-dark", "GitHub Dark")
-        .core_colors(
-            Color::Rgb(32, 37, 46),
+        .core_colors(CoreColors::new(
+            Color::Rgb(13, 17, 23),
             Color::Rgb(48, 54, 61),
             Color::Rgb(88, 166, 255),
             Color::Rgb(188, 140, 255),
             Color::Rgb(201, 209, 217),
             Color::Rgb(63, 185, 80),
             Color::Rgb(139, 148, 158),
-        )
+        ))
         .mode_colors(
             Color::Rgb(63, 185, 80),
             Color::Rgb(255, 123, 114),

@@ -59,7 +59,7 @@ async fn execute_tool(
     let ctx = ToolContext {
         working_dir,
         process_registry: Some(state.process_registry.clone()),
-        plan_mode: false,
+        plan_mode: req.mode == Some(krusty_core::storage::WorkMode::Plan),
         ..Default::default()
     };
 

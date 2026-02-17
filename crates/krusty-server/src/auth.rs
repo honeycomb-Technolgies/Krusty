@@ -77,7 +77,7 @@ pub async fn auth_middleware(
     }
 
     if !addr.ip().is_loopback() {
-        tracing::warn!(
+        tracing::debug!(
             "External request from {} accepted in self-host mode",
             addr.ip()
         );

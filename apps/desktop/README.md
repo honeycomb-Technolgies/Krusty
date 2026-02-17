@@ -23,3 +23,7 @@ Build:
 ```bash
 bun run build
 ```
+
+Linux packages are generated at:
+- `apps/desktop/shell/src-tauri/target/release/bundle/deb/*.deb`
+- `apps/desktop/shell/src-tauri/target/release/bundle/rpm/*.rpm`

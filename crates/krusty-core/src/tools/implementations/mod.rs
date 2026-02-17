@@ -16,6 +16,7 @@
 //! - task_start: Mark task as in-progress (handled by UI)
 //! - add_subtask: Create subtasks for task breakdown (handled by UI)
 //! - set_dependency: Create task dependencies (handled by UI)
+//! - set_work_mode: Switch between build and plan modes (handled by UI/server)
 //! - enter_plan_mode: Switch to plan mode (handled by UI)
 
 pub mod add_subtask;
@@ -30,6 +31,7 @@ pub mod plan_mode;
 pub mod processes;
 pub mod read;
 pub mod set_dependency;
+pub mod set_work_mode;
 pub mod skill;
 pub mod task_complete;
 pub mod task_start;
@@ -47,6 +49,7 @@ pub use plan_mode::EnterPlanModeTool;
 pub use processes::ProcessesTool;
 pub use read::ReadTool;
 pub use set_dependency::SetDependencyTool;
+pub use set_work_mode::SetWorkModeTool;
 pub use skill::SkillTool;
 pub use task_complete::TaskCompleteTool;
 pub use task_start::TaskStartTool;
@@ -73,6 +76,7 @@ pub async fn register_all_tools(registry: &ToolRegistry) {
     registry.register(Arc::new(TaskStartTool)).await;
     registry.register(Arc::new(AddSubtaskTool)).await;
     registry.register(Arc::new(SetDependencyTool)).await;
+    registry.register(Arc::new(SetWorkModeTool)).await;
     registry.register(Arc::new(EnterPlanModeTool)).await;
 }
 

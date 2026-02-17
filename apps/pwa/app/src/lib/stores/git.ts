@@ -31,7 +31,7 @@ export const gitStore = writable<GitState>(initialState);
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let lastDirectory: string | null = null;
 
-workspaceStore.subscribe((ws) => {
+const workspaceUnsubscribe = workspaceStore.subscribe((ws) => {
 	if (!ws.initialized) return;
 	if (ws.directory === lastDirectory) return;
 	lastDirectory = ws.directory;
@@ -122,4 +122,9 @@ export function stopGitPolling() {
 	if (!pollTimer) return;
 	clearInterval(pollTimer);
 	pollTimer = null;
+}
+
+export function cleanupGit() {
+	stopGitPolling();
+	workspaceUnsubscribe();
 }

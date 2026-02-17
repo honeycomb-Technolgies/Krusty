@@ -6,6 +6,8 @@ use serde_json::{json, Value};
 
 use crate::ai::providers::ReasoningFormat;
 
+pub const DEFAULT_THINKING_BUDGET: u32 = 32000;
+
 /// Centralized reasoning configuration builder
 pub struct ReasoningConfig;
 
@@ -30,7 +32,7 @@ impl ReasoningConfig {
                 // budget_tokens + optional effort for Opus
                 Some(json!({
                     "type": "enabled",
-                    "budget_tokens": budget_tokens.unwrap_or(32000)
+                    "budget_tokens": budget_tokens.unwrap_or(DEFAULT_THINKING_BUDGET)
                 }))
             }
             Some(ReasoningFormat::OpenAI) => {
@@ -103,7 +105,7 @@ mod tests {
         assert!(result.is_some());
         let val = result.unwrap();
         assert_eq!(val["type"], "enabled");
-        assert_eq!(val["budget_tokens"], 32000);
+        assert_eq!(val["budget_tokens"], DEFAULT_THINKING_BUDGET);
     }
 
     #[test]

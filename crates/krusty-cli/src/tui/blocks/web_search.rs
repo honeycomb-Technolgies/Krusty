@@ -54,6 +54,20 @@ pub struct WebSearchBlock {
     scroll_offset: u16,
 }
 
+fn format_results_content(results: &[WebSearchResult]) -> String {
+    let mut content = String::new();
+    for (idx, result) in results.iter().enumerate() {
+        if idx > 0 {
+            content.push('\n');
+        }
+        content.push_str(&result.title);
+        content.push('\n');
+        content.push_str("  ");
+        content.push_str(&result.url);
+    }
+    content
+}
+
 impl WebSearchBlock {
     pub fn new(tool_use_id: String, query: String) -> Self {
         let now = Instant::now();
@@ -619,13 +633,15 @@ impl StreamBlock for WebSearchBlock {
             return Some(header);
         }
 
-        let content: String = self
-            .results
-            .iter()
-            .map(|r| format!("{}\n  {}", r.title, r.url))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        Some(format!("{}\n{}", header, content).trim_end().to_string())
+        let content = format_results_content(&self.results);
+        if content.is_empty() {
+            Some(header)
+        } else {
+            let mut text = String::with_capacity(header.len() + 1 + content.len());
+            text.push_str(&header);
+            text.push('\n');
+            text.push_str(&content);
+            Some(text)
+        }
     }
 }

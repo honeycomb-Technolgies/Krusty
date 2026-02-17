@@ -1,10 +1,13 @@
-use crate::tui::themes::{base::ThemeBuilder, Theme};
+use crate::tui::themes::{
+    base::{CoreColors, ThemeBuilder},
+    Theme,
+};
 use ratatui::style::Color;
 
 /// Forest Night theme
 pub fn forest_night() -> Theme {
     ThemeBuilder::new("forest-night", "Forest Night")
-        .core_colors(
+        .core_colors(CoreColors::new(
             Color::Rgb(45, 60, 60),
             Color::Rgb(59, 85, 80),
             Color::Rgb(163, 230, 163),
@@ -12,7 +15,7 @@ pub fn forest_night() -> Theme {
             Color::Rgb(221, 237, 221),
             Color::Rgb(144, 238, 144),
             Color::Rgb(100, 130, 125),
-        )
+        ))
         .mode_colors(
             Color::Rgb(144, 238, 144),
             Color::Rgb(255, 182, 193),

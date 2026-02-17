@@ -1,24 +1,27 @@
-use crate::tui::themes::{base::ThemeBuilder, Theme};
+use crate::tui::themes::{
+    base::{CoreColors, ThemeBuilder},
+    Theme,
+};
 use ratatui::style::Color;
 
 /// Palenight theme
 pub fn palenight() -> Theme {
     ThemeBuilder::new("palenight", "Palenight")
-        .core_colors(
-            Color::Rgb(60, 64, 86),
-            Color::Rgb(50, 54, 74),
+        .core_colors(CoreColors::new(
+            Color::Rgb(41, 45, 62),
+            Color::Rgb(68, 71, 90),
             Color::Rgb(130, 170, 255),
-            Color::Rgb(137, 221, 255),
+            Color::Rgb(199, 146, 234),
             Color::Rgb(166, 172, 205),
             Color::Rgb(195, 232, 141),
             Color::Rgb(103, 110, 149),
-        )
+        ))
         .mode_colors(
             Color::Rgb(195, 232, 141),
-            Color::Rgb(137, 221, 255),
-            Color::Rgb(137, 221, 255),
+            Color::Rgb(199, 146, 234),
+            Color::Rgb(199, 146, 234),
             Color::Rgb(255, 203, 107),
-            Color::Rgb(137, 221, 255),
+            Color::Rgb(199, 146, 234),
         )
         .special_colors(
             Color::Rgb(255, 203, 107),
@@ -26,17 +29,17 @@ pub fn palenight() -> Theme {
             Color::Rgb(50, 54, 74),
         )
         .ui_colors(
-            Color::Rgb(137, 221, 255),
+            Color::Rgb(199, 146, 234),
             Color::Rgb(60, 64, 84),
             Color::Rgb(166, 172, 205),
         )
         .message_colors(
             Color::Rgb(195, 232, 141),
-            Color::Rgb(137, 221, 255),
+            Color::Rgb(199, 146, 234),
             Color::Rgb(255, 203, 107),
             Color::Rgb(130, 170, 255),
         )
-        .status_colors(Color::Rgb(130, 170, 255), Color::Rgb(137, 221, 255))
+        .status_colors(Color::Rgb(130, 170, 255), Color::Rgb(199, 146, 234))
         .extended_colors(|theme| {
             theme.input_bg_color = Color::Rgb(50, 54, 74);
             theme.input_placeholder_color = Color::Rgb(103, 110, 149);

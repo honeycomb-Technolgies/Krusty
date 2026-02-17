@@ -6,6 +6,8 @@ use tauri::Manager;
 const DEFAULT_PORT: u16 = 3000;
 
 fn main() {
+    apply_linux_webkit_workarounds();
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
@@ -41,7 +43,14 @@ async fn ensure_server_running() -> u16 {
     }
 
     // No server running — start one in the background
-    let port = DEFAULT_PORT;
+    let port = choose_server_port(DEFAULT_PORT);
+    if port != DEFAULT_PORT {
+        tracing::warn!(
+            "Default port {} is unavailable; starting embedded server on fallback port {}",
+            DEFAULT_PORT,
+            port
+        );
+    }
     tracing::info!("Starting embedded Krusty server on port {}", port);
 
     let config = krusty_server::ServerConfig {
@@ -72,4 +81,28 @@ async fn ensure_server_running() -> u16 {
 
     tracing::warn!("Server health check timed out, proceeding anyway");
     port
+}
+
+#[cfg(target_os = "linux")]
+fn apply_linux_webkit_workarounds() {
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn apply_linux_webkit_workarounds() {}
+
+fn choose_server_port(preferred: u16) -> u16 {
+    if std::net::TcpListener::bind(("127.0.0.1", preferred)).is_ok() {
+        return preferred;
+    }
+
+    match std::net::TcpListener::bind(("127.0.0.1", 0)) {
+        Ok(listener) => listener
+            .local_addr()
+            .map(|addr| addr.port())
+            .unwrap_or(preferred),
+        Err(_) => preferred,
+    }
 }

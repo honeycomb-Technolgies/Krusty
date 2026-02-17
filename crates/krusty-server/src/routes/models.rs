@@ -18,9 +18,7 @@ pub fn router() -> Router<AppState> {
 
 /// List all available models from configured providers
 async fn list_models(State(state): State<AppState>) -> Result<Json<ModelsListResponse>, AppError> {
-    let _store = state.credential_store.read().await;
     let configured_providers: Vec<ProviderId> = ProviderId::all().to_vec();
-    drop(_store);
 
     // Get organized models from registry
     let (recent_models, models_by_provider) = state
@@ -36,7 +34,7 @@ async fn list_models(State(state): State<AppState>) -> Result<Json<ModelsListRes
         models.push(ModelResponse {
             id: m.id.clone(),
             display_name: m.display_name.clone(),
-            provider: format!("{:?}", m.provider),
+            provider: m.provider.to_string(),
             context_window: m.context_window,
             max_output: m.max_output,
             supports_thinking: m.supports_thinking,
@@ -55,7 +53,7 @@ async fn list_models(State(state): State<AppState>) -> Result<Json<ModelsListRes
                 models.push(ModelResponse {
                     id: m.id.clone(),
                     display_name: m.display_name.clone(),
-                    provider: format!("{:?}", m.provider),
+                    provider: m.provider.to_string(),
                     context_window: m.context_window,
                     max_output: m.max_output,
                     supports_thinking: m.supports_thinking,
@@ -80,7 +78,7 @@ async fn get_model(
         return Ok(Json(ModelResponse {
             id: model.id.clone(),
             display_name: model.display_name.clone(),
-            provider: format!("{:?}", model.provider),
+            provider: model.provider.to_string(),
             context_window: model.context_window,
             max_output: model.max_output,
             supports_thinking: model.supports_thinking,

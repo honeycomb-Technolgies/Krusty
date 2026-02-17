@@ -12,8 +12,39 @@
 
 use crate::tools::registry::{ToolContext, ToolResult};
 use async_trait::async_trait;
+use once_cell::sync::Lazy;
+use regex::Regex;
 use serde_json::Value;
 use std::time::Duration;
+
+static SAFETY_PATTERNS: Lazy<Vec<(&'static str, Regex)>> = Lazy::new(|| {
+    vec![
+        ("rm -rf /", Regex::new(r"(?i)rm\s+-rf\s+/\s*$").unwrap()),
+        ("rm -rf /*", Regex::new(r"(?i)rm\s+-rf\s+/\*").unwrap()),
+        ("rm -rf ~", Regex::new(r"(?i)rm\s+-rf\s+~").unwrap()),
+        (
+            "rm -rf $HOME",
+            Regex::new(r"(?i)rm\s+-rf\s+\$HOME").unwrap(),
+        ),
+        ("sudo", Regex::new(r"(?i)\bsudo\s+").unwrap()),
+        ("chmod 777", Regex::new(r"(?i)\bchmod\s+777\b").unwrap()),
+        ("> /dev/sd", Regex::new(r">\s*/dev/sd").unwrap()),
+        ("dd if=", Regex::new(r"(?i)\bdd\s+if=").unwrap()),
+        ("mkfs", Regex::new(r"(?i)\bmkfs\b").unwrap()),
+        (
+            "fork bomb",
+            Regex::new(r":\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:").unwrap(),
+        ),
+        (
+            "curl | sh",
+            Regex::new(r"(?i)\bcurl\b.*\|\s*(sh|bash)\b").unwrap(),
+        ),
+        (
+            "wget | sh",
+            Regex::new(r"(?i)\bwget\b.*\|\s*(sh|bash)\b").unwrap(),
+        ),
+    ]
+});
 
 /// Result of a hook execution
 #[derive(Debug)]
@@ -56,51 +87,32 @@ pub trait PostToolHook: Send + Sync {
 // Built-in Hooks
 // ============================================================================
 
-/// Safety hook that blocks dangerous bash commands
+/// Safety hook that blocks dangerous bash commands using regex patterns
 ///
-/// Blocks commands containing:
-/// - `rm -rf /` or similar destructive patterns
+/// Blocks commands matching:
+/// - `rm -rf /` or similar destructive patterns (with whitespace evasion handling)
 /// - `sudo` (requires explicit approval)
 /// - `chmod 777` (overly permissive)
 /// - `> /dev/sda` or similar disk writes
-pub struct SafetyHook {
-    /// Patterns to block (checked against command string)
-    blocked_patterns: Vec<&'static str>,
-}
+/// - `dd if=`, `mkfs`, fork bombs, and piped curl/wget
+pub struct SafetyHook;
 
 impl Default for SafetyHook {
     fn default() -> Self {
-        Self {
-            blocked_patterns: vec![
-                "rm -rf /",
-                "rm -rf /*",
-                "rm -rf ~",
-                "sudo ",
-                "chmod 777",
-                "> /dev/sd",
-                "dd if=",
-                "mkfs.",
-                ":(){:|:&};:", // Fork bomb
-                "curl | sh",
-                "curl | bash",
-                "wget | sh",
-                "wget | bash",
-            ],
-        }
+        Self
     }
 }
 
 impl SafetyHook {
     pub fn new() -> Self {
-        Self::default()
+        Self
     }
 
     fn check_command(&self, command: &str) -> Option<&'static str> {
-        let cmd_lower = command.to_lowercase();
-        self.blocked_patterns
+        SAFETY_PATTERNS
             .iter()
-            .find(|pattern| cmd_lower.contains(&pattern.to_lowercase()))
-            .copied()
+            .find(|(_, regex)| regex.is_match(command))
+            .map(|(label, _)| *label)
     }
 }
 

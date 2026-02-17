@@ -12,6 +12,7 @@ mod wrapper;
 
 pub use editor::InputAction;
 pub(crate) use patterns::FILE_REF_PATTERN;
+pub use renderer::StyledInputRenderOptions;
 
 /// Multi-line input handler with proper text wrapping and cursor management
 pub struct MultiLineInput {

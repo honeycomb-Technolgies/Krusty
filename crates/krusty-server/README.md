@@ -57,3 +57,5 @@ For scoped mode, clients may send:
 - `/api/mcp`
 - `/api/processes`
 - `/api/hooks`
+- `/api/ports` (preview discovery + path proxy)
+- `/api/settings/preview` (preview forwarding policy/preferences)

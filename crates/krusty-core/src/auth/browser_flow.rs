@@ -187,6 +187,125 @@ impl BrowserOAuthFlow {
     }
 }
 
+/// Paste-code OAuth flow for providers without localhost redirect support (e.g., Anthropic)
+///
+/// Instead of starting a local server, this flow:
+/// 1. Builds the auth URL with PKCE challenge
+/// 2. Opens the browser to the auth URL
+/// 3. User completes auth and receives a code
+/// 4. User pastes the code back into the TUI
+/// 5. Code is exchanged for tokens
+pub struct PasteCodeOAuthFlow {
+    config: OAuthConfig,
+}
+
+impl PasteCodeOAuthFlow {
+    pub fn new(config: OAuthConfig) -> Self {
+        Self { config }
+    }
+
+    /// Get the redirect URI for paste-code flow (Anthropic's code callback)
+    fn redirect_uri(&self) -> &str {
+        "https://console.anthropic.com/oauth/code/callback"
+    }
+
+    /// Build the authorization URL with PKCE challenge
+    fn build_auth_url(&self, verifier: &PkceVerifier, state: &str) -> Result<Url> {
+        let challenge = verifier.challenge();
+
+        let mut url = Url::parse(&self.config.authorization_url)
+            .context("Failed to parse authorization URL")?;
+
+        {
+            let mut pairs = url.query_pairs_mut();
+            pairs
+                .append_pair("response_type", "code")
+                .append_pair("client_id", &self.config.client_id)
+                .append_pair("redirect_uri", self.redirect_uri())
+                .append_pair("scope", &self.config.scopes.join(" "))
+                .append_pair("state", state)
+                .append_pair("code_challenge", challenge.as_str())
+                .append_pair("code_challenge_method", challenge.method());
+
+            for (key, value) in &self.config.extra_auth_params {
+                pairs.append_pair(key, value);
+            }
+        }
+
+        Ok(url)
+    }
+
+    /// Get the authorization URL, verifier, and state for the paste-code flow
+    ///
+    /// The caller opens the browser and waits for the user to paste the code.
+    pub fn get_auth_url(&self) -> Result<(String, PkceVerifier, String)> {
+        let verifier = PkceVerifier::new();
+        let state = generate_state();
+        let url = self.build_auth_url(&verifier, &state)?;
+        Ok((url.to_string(), verifier, state))
+    }
+
+    /// Exchange the pasted authorization code for tokens
+    ///
+    /// Anthropic uses JSON body (not form-encoded) for token exchange,
+    /// and requires the `anthropic-beta` header.
+    pub async fn exchange_code(
+        &self,
+        code: &str,
+        verifier: &PkceVerifier,
+    ) -> Result<OAuthTokenData> {
+        let client = reqwest::Client::new();
+
+        let body = serde_json::json!({
+            "grant_type": "authorization_code",
+            "client_id": self.config.client_id,
+            "code": code,
+            "redirect_uri": self.redirect_uri(),
+            "code_verifier": verifier.as_str(),
+        });
+
+        let response = client
+            .post(&self.config.token_url)
+            .header("anthropic-beta", "oauth-2025-04-20")
+            .json(&body)
+            .send()
+            .await
+            .context("Failed to send Anthropic token request")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(anyhow!(
+                "Anthropic token exchange failed ({}): {}",
+                status,
+                body
+            ));
+        }
+
+        let token_response: TokenResponse = response
+            .json()
+            .await
+            .context("Failed to parse Anthropic token response")?;
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        Ok(OAuthTokenData {
+            access_token: token_response.access_token,
+            refresh_token: token_response.refresh_token,
+            id_token: token_response.id_token,
+            expires_at: token_response.expires_in.map(|secs| now + secs),
+            last_refresh: now,
+            account_id: None,
+        })
+    }
+}
+
 /// Token response from the OAuth server
 #[derive(Debug, serde::Deserialize)]
 struct TokenResponse {

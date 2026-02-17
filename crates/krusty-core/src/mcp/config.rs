@@ -84,29 +84,57 @@ impl McpServerConfig {
 }
 
 impl McpConfig {
-    /// Load config from .mcp.json in project root
+    /// Built-in MCP servers included by default.
+    /// User configs in `.mcp.json` override these by name.
+    fn builtin_servers() -> HashMap<String, McpServerConfigRaw> {
+        HashMap::from([(
+            "minimax".to_string(),
+            McpServerConfigRaw::Local {
+                command: "uvx".to_string(),
+                args: vec!["minimax-coding-plan-mcp".to_string(), "-y".to_string()],
+                env: HashMap::from([
+                    (
+                        "MINIMAX_API_KEY".to_string(),
+                        "${MINIMAX_API_KEY}".to_string(),
+                    ),
+                    (
+                        "MINIMAX_API_HOST".to_string(),
+                        "https://api.minimax.io".to_string(),
+                    ),
+                ]),
+            },
+        )])
+    }
+
+    /// Load config from .mcp.json in project root, merged with built-in defaults.
     pub async fn load(working_dir: &Path) -> Result<Self> {
+        let mut servers = Self::builtin_servers();
+
         let config_path = working_dir.join(".mcp.json");
 
-        if !config_path.exists() {
+        if config_path.exists() {
+            let content = tokio::fs::read_to_string(&config_path)
+                .await
+                .with_context(|| format!("Failed to read {:?}", config_path))?;
+
+            let user_config: McpConfig = serde_json::from_str(&content)
+                .with_context(|| format!("Failed to parse {:?}", config_path))?;
+
+            tracing::info!(
+                "Loaded MCP config with {} servers from {:?}",
+                user_config.mcp_servers.len(),
+                config_path
+            );
+
+            // User configs override built-ins
+            servers.extend(user_config.mcp_servers);
+        } else {
             tracing::debug!("No .mcp.json found at {:?}", config_path);
-            return Ok(Self::default());
         }
 
-        let content = tokio::fs::read_to_string(&config_path)
-            .await
-            .with_context(|| format!("Failed to read {:?}", config_path))?;
-
-        let config: McpConfig = serde_json::from_str(&content)
-            .with_context(|| format!("Failed to parse {:?}", config_path))?;
-
-        tracing::info!(
-            "Loaded MCP config with {} servers from {:?}",
-            config.mcp_servers.len(),
-            config_path
-        );
-
-        Ok(config)
+        Ok(Self {
+            mcp_servers: servers,
+        })
     }
 
     /// Get resolved server configurations
@@ -175,19 +203,10 @@ impl McpConfig {
 async fn expand_env_var(s: &str) -> String {
     let mut result = s.to_string();
 
-    // Map common API key env vars to credential store keys
-    let env_to_cred: HashMap<&str, &str> = [
-        ("ANTHROPIC_API_KEY", "anthropic"),
-        ("MINIMAX_API_KEY", "minimax"),
-        ("OPENROUTER_API_KEY", "openrouter"),
-        ("OPENAI_API_KEY", "openai"),
-    ]
-    .into_iter()
-    .collect();
-
     while let Some(start) = result.find("${") {
-        if let Some(end) = result[start..].find('}') {
-            let var_name = &result[start + 2..start + end];
+        if let Some(end_offset) = result[start..].find('}') {
+            let end = start + end_offset;
+            let var_name = &result[start + 2..end];
             tracing::debug!("Expanding env var: {}", var_name);
 
             // Try environment variable first
@@ -198,7 +217,7 @@ async fn expand_env_var(s: &str) -> String {
                 }
                 Err(_) => {
                     // Fall back to credentials store
-                    if let Some(cred_key) = env_to_cred.get(var_name) {
+                    if let Some(cred_key) = credential_key_for_env(var_name) {
                         tracing::debug!(
                             "Looking up {} in credential store as '{}'",
                             var_name,
@@ -225,18 +244,23 @@ async fn expand_env_var(s: &str) -> String {
                 }
             };
 
-            result = format!(
-                "{}{}{}",
-                &result[..start],
-                value,
-                &result[start + end + 1..]
-            );
+            result.replace_range(start..end + 1, &value);
         } else {
             break;
         }
     }
 
     result
+}
+
+fn credential_key_for_env(env_name: &str) -> Option<&'static str> {
+    match env_name {
+        "ANTHROPIC_API_KEY" => Some("anthropic"),
+        "MINIMAX_API_KEY" => Some("minimax"),
+        "OPENROUTER_API_KEY" => Some("openrouter"),
+        "OPENAI_API_KEY" => Some("openai"),
+        _ => None,
+    }
 }
 
 /// Get a credential from the credentials store (async to avoid blocking)
@@ -267,10 +291,17 @@ async fn get_credential(provider: &str) -> Option<String> {
     if result.is_some() {
         tracing::debug!("Found credential for '{}'", provider);
     } else {
+        let mut available = String::new();
+        for key in creds.keys() {
+            if !available.is_empty() {
+                available.push_str(", ");
+            }
+            available.push_str(key);
+        }
         tracing::warn!(
-            "No credential found for '{}' (available: {:?})",
+            "No credential found for '{}' (available: [{}])",
             provider,
-            creds.keys().collect::<Vec<_>>()
+            available
         );
     }
     result

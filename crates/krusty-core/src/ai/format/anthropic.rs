@@ -129,6 +129,11 @@ impl FormatHandler for AnthropicFormat {
             last_role = Some(role);
         }
 
+        // Safety net: strip orphaned tool_result blocks whose tool_use_id
+        // doesn't appear in the immediately preceding assistant message.
+        // This prevents API error 2013 from corrupted conversations.
+        sanitize_tool_results(&mut result);
+
         result
     }
 
@@ -301,5 +306,171 @@ fn convert_content(
                 None // Strip redacted thinking from other messages
             }
         }
+    }
+}
+
+/// Repair tool_use / tool_result pairing in the message array.
+///
+/// The Anthropic API requires:
+/// 1. Every tool_result must reference a tool_use_id from the preceding assistant message.
+/// 2. Every tool_use in an assistant message must have a corresponding tool_result in
+///    the immediately following user message.
+///
+/// Corrupted conversations (e.g., from interrupted sessions where AskUser was
+/// batched with other tools) can violate both rules, causing error 2013.
+///
+/// This function:
+/// - Strips orphaned tool_results (no matching tool_use)
+/// - Injects stub tool_results for missing tool_uses
+fn sanitize_tool_results(messages: &mut Vec<Value>) {
+    use std::collections::HashSet;
+
+    let mut i = 0;
+
+    while i < messages.len() {
+        let role = messages[i]["role"].as_str().unwrap_or("");
+
+        if role == "assistant" {
+            // Collect tool_use IDs from this assistant message (preserve order
+            // for deterministic stub insertion while keeping O(1) lookup).
+            let mut tool_use_ids: Vec<String> = Vec::new();
+            let mut tool_use_lookup: HashSet<String> = HashSet::new();
+            if let Some(content) = messages[i]["content"].as_array() {
+                for block in content {
+                    if block["type"].as_str() == Some("tool_use") {
+                        if let Some(id) = block["id"].as_str() {
+                            let id = id.to_string();
+                            if tool_use_lookup.insert(id.clone()) {
+                                tool_use_ids.push(id);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !tool_use_ids.is_empty() {
+                // Check the next message for matching tool_results
+                let next_is_user =
+                    i + 1 < messages.len() && messages[i + 1]["role"].as_str() == Some("user");
+
+                if next_is_user {
+                    let user_msg = &mut messages[i + 1];
+                    let content = user_msg["content"].as_array().cloned().unwrap_or_default();
+
+                    // Strip orphaned tool_results (no matching tool_use)
+                    let mut filtered: Vec<Value> =
+                        Vec::with_capacity(content.len() + tool_use_ids.len());
+                    let mut result_ids: HashSet<String> =
+                        HashSet::with_capacity(tool_use_ids.len());
+                    for block in content {
+                        if block["type"].as_str() == Some("tool_result") {
+                            let id = block["tool_use_id"].as_str().unwrap_or("");
+                            if tool_use_lookup.contains(id) {
+                                result_ids.insert(id.to_string());
+                                filtered.push(block);
+                            } else {
+                                debug!("Stripping orphaned tool_result for tool_use_id={}", id);
+                            }
+                        } else {
+                            filtered.push(block);
+                        }
+                    }
+
+                    // Inject stub results for missing tool_uses
+                    for id in &tool_use_ids {
+                        if !result_ids.contains(id) {
+                            debug!("Injecting stub tool_result for missing tool_use_id={}", id);
+                            filtered.push(stub_tool_result(id));
+                        }
+                    }
+
+                    user_msg["content"] = Value::Array(filtered);
+                } else {
+                    // No user message follows — inject one with stub results for all tool_uses
+                    debug!(
+                        "Injecting user message with {} stub tool_results (no user message followed assistant with tool_use)",
+                        tool_use_ids.len()
+                    );
+                    let stubs: Vec<Value> =
+                        tool_use_ids.iter().map(|id| stub_tool_result(id)).collect();
+                    messages.insert(
+                        i + 1,
+                        serde_json::json!({
+                            "role": "user",
+                            "content": stubs
+                        }),
+                    );
+                }
+            }
+        }
+
+        i += 1;
+    }
+}
+
+fn stub_tool_result(tool_use_id: &str) -> Value {
+    serde_json::json!({
+        "type": "tool_result",
+        "tool_use_id": tool_use_id,
+        "content": "Tool execution was interrupted",
+        "is_error": true
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::sanitize_tool_results;
+
+    #[test]
+    fn sanitize_removes_orphans_and_injects_missing_results() {
+        let mut messages = vec![
+            json!({
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "tool-a", "name": "read", "input": {}},
+                    {"type": "tool_use", "id": "tool-b", "name": "grep", "input": {}}
+                ]
+            }),
+            json!({
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "tool-a", "content": "ok", "is_error": false},
+                    {"type": "tool_result", "tool_use_id": "orphan", "content": "bad", "is_error": false}
+                ]
+            }),
+        ];
+
+        sanitize_tool_results(&mut messages);
+
+        let content = messages[1]["content"]
+            .as_array()
+            .expect("expected user content array");
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["tool_use_id"].as_str(), Some("tool-a"));
+        assert_eq!(content[1]["tool_use_id"].as_str(), Some("tool-b"));
+        assert_eq!(content[1]["is_error"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn sanitize_inserts_user_message_when_missing_after_tool_use() {
+        let mut messages = vec![json!({
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "tool-x", "name": "bash", "input": {}}
+            ]
+        })];
+
+        sanitize_tool_results(&mut messages);
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[1]["role"].as_str(), Some("user"));
+        let content = messages[1]["content"]
+            .as_array()
+            .expect("expected inserted user content array");
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0]["tool_use_id"].as_str(), Some("tool-x"));
+        assert_eq!(content[0]["is_error"].as_bool(), Some(true));
     }
 }

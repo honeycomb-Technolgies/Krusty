@@ -38,6 +38,7 @@
 	// Scroll optimization
 	let dirListContainer = $state<HTMLDivElement>(undefined!);
 	let dirScrollTimeout: ReturnType<typeof setTimeout>;
+	let pendingPrefetch: ReturnType<typeof setTimeout> | null = null;
 	let isSwitchingBranch = $state(false);
 	let isSwitchingWorktree = $state(false);
 
@@ -57,6 +58,12 @@
 		startGitPolling();
 		return () => {
 			stopGitPolling();
+			clearTimeout(dirScrollTimeout);
+			if (pendingPrefetch) {
+				clearTimeout(pendingPrefetch);
+				pendingPrefetch = null;
+			}
+			dirCache.clear();
 		};
 	});
 
@@ -140,6 +147,7 @@
 	}
 
 	async function openNewSessionModal() {
+		dirCache.clear();
 		selectedDirectory = getLastDirectory();
 		showNewSessionModal = true;
 		// Load initial directory
@@ -155,14 +163,16 @@
 
 	// Navigation = Selection: wherever you navigate becomes selected
 	function navigateTo(path: string) {
+		if (pendingPrefetch) clearTimeout(pendingPrefetch);
 		selectedDirectory = path;
 		loadDirectory(path);
 		// Pre-fetch visible subdirectories for instant next click
-		setTimeout(() => {
+		pendingPrefetch = setTimeout(() => {
 			const cached = dirCache.get(path);
 			if (cached) {
 				cached.directories.slice(0, 5).forEach(d => prefetchDirectory(d.path));
 			}
+			pendingPrefetch = null;
 		}, 50);
 	}
 
@@ -300,95 +310,165 @@
 
 <svelte:window on:keydown={showNewSessionModal ? handleModalKeyDown : undefined} />
 
-<header class="relative z-50 flex h-14 shrink-0 items-center justify-between border-b border-border/50 bg-card/60 backdrop-blur-sm px-4">
-	<!-- Left: History (mobile) + Model selector + Thinking toggle + Mode toggle -->
-	<div class="flex items-center gap-2">
-		{#if onHistoryClick}
-			<button
-				onclick={onHistoryClick}
-				class="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:hidden"
-				title="Session history"
-			>
-				<History class="h-5 w-5" />
-			</button>
-		{/if}
-
-		<button
-			onclick={onModelClick}
-			class="flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors hover:bg-muted"
-		>
-			<Cpu class="h-4 w-4 text-muted-foreground" />
-			<span>{getModelDisplayName(currentModel)}</span>
-		</button>
-
-		<button
-			onclick={toggleThinking}
-			class="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm transition-colors
-				{$sessionStore.thinkingEnabled
-					? 'bg-purple-500/20 text-purple-400 hover:bg-purple-500/30'
-					: 'text-muted-foreground hover:bg-muted'}"
-			title="Toggle extended thinking"
-		>
-			<Brain class="h-4 w-4" />
-			<span class="hidden sm:inline">{$sessionStore.thinkingEnabled ? 'On' : 'Off'}</span>
-		</button>
-
-		<button
-			onclick={toggleMode}
-			class="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm transition-colors
-				{$sessionStore.mode === 'build'
-					? 'bg-orange-500/20 text-orange-400 hover:bg-orange-500/30'
-					: 'bg-green-500/20 text-green-400 hover:bg-green-500/30'}"
-			title="Toggle mode (Build/Plan)"
-		>
-			{#if $sessionStore.mode === 'build'}
-				<Hammer class="h-4 w-4" />
-			{:else}
-				<FileText class="h-4 w-4" />
+<!--
+  Mobile (< md): Two rows
+    - Row 1: Action buttons (left + right)
+    - Row 2: Title + token count
+  Desktop (md+): Single row, original layout
+-->
+<header class="relative z-50 flex flex-col md:flex-row md:items-center md:justify-between shrink-0 border-b border-border/50 bg-card/60 backdrop-blur-sm px-4 md:h-14">
+	<!-- ============================================
+	     MOBILE ROW 1 / DESKTOP: Action buttons
+	     ============================================ -->
+	<!-- Mobile: justify-between for even spacing -->
+	<!-- Desktop: justify-between with title in middle -->
+	<div class="flex items-center justify-between md:w-full md:gap-4">
+		<!-- Left side: History (mobile) + Model + Thinking + Mode -->
+		<div class="flex items-center gap-1 md:gap-2">
+			{#if onHistoryClick}
+				<button
+					onclick={onHistoryClick}
+					class="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:hidden"
+					title="Session history"
+				>
+					<History class="h-5 w-5" />
+				</button>
 			{/if}
-			<span class="hidden sm:inline">{$sessionStore.mode === 'build' ? 'Build' : 'Plan'}</span>
-		</button>
-	</div>
 
-	<!-- Center: Editable title + streaming status -->
-	<div class="flex items-center gap-2">
-		{#if !$sessionStore.sessionId}
-			<!-- No session - blank -->
-		{:else if isEditingTitle}
-			<input
-				bind:this={titleInput}
-				bind:value={editedTitle}
-				onkeydown={handleTitleKeyDown}
-				onblur={saveTitle}
-				class="w-48 rounded border border-input bg-background px-2 py-1 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-ring"
-			/>
-			<button onclick={saveTitle} class="rounded p-1 text-green-500 hover:bg-muted">
-				<Check class="h-4 w-4" />
-			</button>
-		{:else}
 			<button
-				onclick={startEditTitle}
-				class="group flex items-center gap-2 rounded-lg px-2 py-1 text-sm font-medium transition-colors hover:bg-muted"
+				onclick={onModelClick}
+				class="flex items-center gap-1.5 md:gap-2 rounded-lg px-2 md:px-3 py-1.5 text-sm font-medium transition-colors hover:bg-muted"
+				title="Select model"
 			>
-				<span class="max-w-[200px] truncate">{$sessionStore.title}</span>
-				<Pencil class="h-3 w-3 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+				<Cpu class="h-4 w-4 text-muted-foreground" />
+				<span class="hidden sm:inline">{getModelDisplayName(currentModel)}</span>
 			</button>
-		{/if}
 
-		{#if $sessionStore.isStreaming}
-			<span class="flex items-center gap-2 text-sm text-muted-foreground">
-				<span class="h-2 w-2 animate-pulse rounded-full bg-green-500"></span>
-				{$sessionStore.isThinking ? 'Thinking...' : 'Streaming...'}
-			</span>
-		{/if}
+			<button
+				onclick={toggleThinking}
+				class="flex items-center gap-1 rounded-lg px-2 py-1.5 text-sm transition-colors md:px-2.5
+					{$sessionStore.thinkingEnabled
+						? 'bg-purple-500/20 text-purple-400 hover:bg-purple-500/30'
+						: 'text-muted-foreground hover:bg-muted'}"
+				title="Toggle extended thinking"
+			>
+				<Brain class="h-4 w-4" />
+			</button>
+
+			<button
+				onclick={toggleMode}
+				class="flex items-center gap-1 rounded-lg px-2 py-1.5 text-sm transition-colors md:px-2.5
+					{$sessionStore.mode === 'build'
+						? 'bg-orange-500/20 text-orange-400 hover:bg-orange-500/30'
+						: 'bg-green-500/20 text-green-400 hover:bg-green-500/30'}"
+				title="Toggle mode (Build/Plan)"
+			>
+				{#if $sessionStore.mode === 'build'}
+					<Hammer class="h-4 w-4" />
+				{:else}
+					<FileText class="h-4 w-4" />
+				{/if}
+			</button>
+		</div>
+
+		<!-- Right side: Pinch + New (mobile: always visible, desktop: at end) -->
+		<div class="flex items-center gap-1 md:gap-2">
+			<button
+				onclick={onPinch}
+				disabled={!$sessionStore.sessionId || isPinching}
+				class="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+				title="Pinch (branch session)"
+			>
+				{#if isPinching}
+					<span class="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"></span>
+				{:else}
+					<GitBranch class="h-4 w-4" />
+				{/if}
+			</button>
+
+			<button
+				onclick={openNewSessionModal}
+				class="flex items-center gap-1.5 rounded-lg px-2 md:px-3 py-1.5 text-sm font-medium transition-colors hover:bg-muted"
+				title="New session"
+			>
+				<Plus class="h-4 w-4" />
+				<span class="hidden sm:inline">New</span>
+			</button>
+		</div>
 	</div>
 
-	<!-- Right: Token count + Pinch + New session -->
-	<div class="flex items-center gap-2">
+	<!-- ============================================
+	     MOBILE ROW 2: Title + Context (hidden on desktop)
+	     ============================================ -->
+	<!-- Show on mobile only: flex md:hidden -->
+	<!-- Row 1 border-top on mobile to separate from actions -->
+	<div class="flex items-center justify-between border-t border-border/30 py-2 md:hidden md:border-none md:py-0">
+		<!-- Title (left) -->
+		<div class="flex items-center gap-2 min-w-0 flex-1">
+			{#if !$sessionStore.sessionId}
+				<span class="text-sm text-muted-foreground">No session</span>
+			{:else if isEditingTitle}
+				<input
+					bind:this={titleInput}
+					bind:value={editedTitle}
+					onkeydown={handleTitleKeyDown}
+					onblur={saveTitle}
+					class="w-full min-w-[120px] max-w-[200px] rounded border border-input bg-background px-2 py-1 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-ring"
+				/>
+				<button onclick={saveTitle} class="rounded p-1 text-green-500 hover:bg-muted shrink-0">
+					<Check class="h-4 w-4" />
+				</button>
+			{:else}
+				<button
+					onclick={startEditTitle}
+					class="group flex items-center gap-2 rounded-lg px-2 py-1 text-sm font-medium transition-colors hover:bg-muted truncate"
+				>
+					<span class="truncate max-w-[150px]">{$sessionStore.title}</span>
+					<Pencil class="h-3 w-3 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 shrink-0" />
+				</button>
+			{/if}
+
+			{#if $sessionStore.isStreaming}
+				<span class="flex items-center gap-1.5 text-xs text-muted-foreground shrink-0">
+					<span class="h-2 w-2 animate-pulse rounded-full bg-green-500"></span>
+				</span>
+			{/if}
+		</div>
+
+		<!-- Git info + Token count (right) -->
+		<div class="flex items-center gap-2 shrink-0">
+			{#if $gitStore.status?.in_repo && $gitStore.status.branch}
+				<span class="text-xs text-muted-foreground truncate max-w-[100px]" title={$gitStore.status.branch}>
+					{$gitStore.status.branch}
+				</span>
+			{/if}
+			{#if shouldShowGitSummary()}
+				<span class="hidden sm:inline-flex items-center gap-1 text-xs">
+					<span class="text-green-500">+{$gitStore.status?.branch_additions}</span>
+					<span class="text-red-500">-{$gitStore.status?.branch_deletions}</span>
+				</span>
+			{/if}
+			{#if $sessionStore.tokenCount > 0}
+				{@const status = getContextStatus($sessionStore.tokenCount)}
+				<span class="text-xs {status.color}" title="Context usage">
+					{#if status.label}
+						<span class="font-semibold">{status.label}</span>
+					{/if}
+					{Math.round($sessionStore.tokenCount / CONTEXT_LIMIT * 100)}%
+				</span>
+			{/if}
+		</div>
+	</div>
+
+	<!-- ============================================
+	     DESKTOP ONLY: Center title area (hidden on mobile)
+	     ============================================ -->
+	<!-- Show on desktop only: hidden md:flex -->
+	<div class="hidden md:flex items-center gap-2">
 		{#if $gitStore.status?.in_repo}
 			{#if shouldShowGitSummary()}
 				<span
-					class="hidden lg:inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/30 px-2 py-1 text-xs"
+					class="hidden sm:inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/30 px-2 py-1 text-xs"
 					title="Git status"
 				>
 					<span class="text-muted-foreground">{$gitStore.status.branch_files} files</span>
@@ -399,7 +479,7 @@
 
 			{#if $gitStore.worktrees.length > 1}
 				<select
-					class="hidden xl:block max-w-[180px] rounded-md border border-input bg-background px-2 py-1 text-xs"
+					class="hidden md:block max-w-[180px] rounded-md border border-input bg-background px-2 py-1 text-xs"
 					title="Switch git worktree"
 					value={currentWorktreePath()}
 					onchange={handleWorktreeChange}
@@ -421,15 +501,53 @@
 					onchange={handleBranchChange}
 					disabled={isSwitchingBranch || $sessionStore.isStreaming}
 				>
-					{#each $gitStore.branches as branch (branch.name)}
+					{#each $gitStore.branches.filter(b => !b.is_remote) as branch (branch.name)}
 						<option value={branch.name}>{branch.is_current ? '• ' : ''}{branch.name}</option>
 					{/each}
+					{#if $gitStore.branches.some(b => b.is_remote)}
+						<optgroup label="Remote">
+							{#each $gitStore.branches.filter(b => b.is_remote) as branch (branch.name)}
+								<option value={branch.name}>{branch.name}</option>
+							{/each}
+						</optgroup>
+					{/if}
 				</select>
 			{/if}
 		{/if}
 
 		{#if $gitStore.isLoading || isSwitchingBranch || isSwitchingWorktree}
 			<Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
+		{/if}
+
+		<!-- Desktop: Title in center -->
+		{#if $sessionStore.sessionId}
+			{#if isEditingTitle}
+				<input
+					bind:this={titleInput}
+					bind:value={editedTitle}
+					onkeydown={handleTitleKeyDown}
+					onblur={saveTitle}
+					class="w-48 rounded border border-input bg-background px-2 py-1 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-ring"
+				/>
+				<button onclick={saveTitle} class="rounded p-1 text-green-500 hover:bg-muted">
+					<Check class="h-4 w-4" />
+				</button>
+			{:else}
+				<button
+					onclick={startEditTitle}
+					class="group flex items-center gap-2 rounded-lg px-2 py-1 text-sm font-medium transition-colors hover:bg-muted"
+				>
+					<span class="max-w-[200px] truncate">{$sessionStore.title}</span>
+					<Pencil class="h-3 w-3 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+				</button>
+			{/if}
+
+			{#if $sessionStore.isStreaming}
+				<span class="flex items-center gap-2 text-sm text-muted-foreground">
+					<span class="h-2 w-2 animate-pulse rounded-full bg-green-500"></span>
+					{$sessionStore.isThinking ? 'Thinking...' : 'Streaming...'}
+				</span>
+			{/if}
 		{/if}
 
 		{#if $sessionStore.tokenCount > 0}
@@ -441,28 +559,6 @@
 				{formatTokens($sessionStore.tokenCount)} / {formatTokens(CONTEXT_LIMIT)}
 			</span>
 		{/if}
-
-		<button
-			onclick={onPinch}
-			disabled={!$sessionStore.sessionId || isPinching}
-			class="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-			title="Pinch (branch session)"
-		>
-			{#if isPinching}
-				<span class="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"></span>
-			{:else}
-				<GitBranch class="h-4 w-4" />
-			{/if}
-		</button>
-
-		<button
-			onclick={openNewSessionModal}
-			class="flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors hover:bg-muted"
-			title="New session"
-		>
-			<Plus class="h-4 w-4" />
-			<span class="hidden sm:inline">New</span>
-		</button>
 
 		<div class="hidden sm:block h-4 w-px bg-border"></div>
 	</div>

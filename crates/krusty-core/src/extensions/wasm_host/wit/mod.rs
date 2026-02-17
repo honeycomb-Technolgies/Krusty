@@ -31,11 +31,11 @@ pub use latest::Command;
 
 pub fn new_linker(
     f: impl Fn(&mut Linker<WasmState>, fn(&mut WasmState) -> &mut WasmState) -> Result<()>,
-) -> Linker<WasmState> {
+) -> Result<Linker<WasmState>> {
     let mut linker = Linker::new(&wasm_engine());
-    wasmtime_wasi::add_to_linker_async(&mut linker).unwrap();
-    f(&mut linker, wasi_view).unwrap();
-    linker
+    wasmtime_wasi::add_to_linker_async(&mut linker)?;
+    f(&mut linker, wasi_view)?;
+    Ok(linker)
 }
 
 fn wasi_view(state: &mut WasmState) -> &mut WasmState {

@@ -95,6 +95,36 @@ impl OpenAIParser {
         Ok(None)
     }
 
+    fn apply_tool_arguments_snapshot(
+        &self,
+        key: &str,
+        snapshot: &str,
+    ) -> anyhow::Result<Option<String>> {
+        let mut accumulators = self.lock_tool_accumulators()?;
+        if let Some(acc) = accumulators.get_mut(key) {
+            let mut replace_snapshot = acc.arguments.is_empty();
+            if !replace_snapshot && acc.arguments != snapshot {
+                if snapshot.len() > acc.arguments.len() && snapshot.starts_with(&acc.arguments) {
+                    replace_snapshot = true;
+                } else {
+                    let current_valid = serde_json::from_str::<Value>(&acc.arguments).is_ok();
+                    let snapshot_valid = serde_json::from_str::<Value>(snapshot).is_ok();
+                    if !current_valid && snapshot_valid {
+                        replace_snapshot = true;
+                    }
+                }
+            }
+
+            if replace_snapshot {
+                acc.arguments.clear();
+                acc.arguments.push_str(snapshot);
+            }
+
+            return Ok(Some(acc.id.clone()));
+        }
+        Ok(None)
+    }
+
     fn resolve_responses_tool_key(&self, json: &Value) -> anyhow::Result<Option<String>> {
         if let Some(call_id) = json
             .get("call_id")
@@ -350,7 +380,7 @@ impl OpenAIParser {
 
                             if let Some(arguments) = item.get("arguments").and_then(|a| a.as_str())
                             {
-                                let _ = self.append_tool_arguments(&key, arguments)?;
+                                let _ = self.apply_tool_arguments_snapshot(&key, arguments)?;
                             }
 
                             tracing::info!(
@@ -385,15 +415,11 @@ impl OpenAIParser {
                 // Arguments complete, tool call will be finalized on response.done
                 if let Some(arguments) = json.get("arguments").and_then(|a| a.as_str()) {
                     if let Some(key) = self.resolve_responses_tool_key(json)? {
-                        let mut accumulators = self.lock_tool_accumulators()?;
-                        if let Some(acc) = accumulators.get_mut(&key) {
-                            if acc.arguments.is_empty() {
-                                acc.add_arguments(arguments);
-                            }
+                        if let Some(id) = self.apply_tool_arguments_snapshot(&key, arguments)? {
                             tracing::debug!(
                                 "Tool call arguments complete: id={}, args_len={}",
-                                acc.id,
-                                acc.arguments.len()
+                                id,
+                                arguments.len()
                             );
                         }
                     }
@@ -600,5 +626,181 @@ impl SseParser for OpenAIParser {
         // Check for [DONE] marker (OpenAI uses this)
         // This is handled at the SSE line level, but just in case
         Ok(SseEvent::Skip)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::OpenAIParser;
+    use crate::ai::sse::SseEvent;
+
+    #[test]
+    fn responses_output_item_done_does_not_duplicate_arguments() {
+        let parser = OpenAIParser::new();
+        let args = "{\"pattern\":\"**/*prompt*\",\"path\":\".\"}";
+
+        let start_event = json!({
+            "type": "response.output_item.added",
+            "item": {
+                "type": "function_call",
+                "id": "item_1",
+                "call_id": "call_1",
+                "name": "glob",
+                "arguments": args
+            }
+        });
+        let event = parser
+            .parse_responses_api_event(&start_event, "response.output_item.added")
+            .expect("start event should parse");
+        assert!(matches!(event, SseEvent::ToolCallStart { .. }));
+
+        let done_event = json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "function_call",
+                "id": "item_1",
+                "call_id": "call_1",
+                "name": "glob",
+                "arguments": args
+            }
+        });
+        let event = parser
+            .parse_responses_api_event(&done_event, "response.output_item.done")
+            .expect("done event should parse");
+        assert!(matches!(event, SseEvent::Skip));
+
+        let finish_event = json!({
+            "type": "response.done",
+            "response": {
+                "status": "incomplete",
+                "incomplete_details": {
+                    "reason": "tool_calls"
+                }
+            }
+        });
+        let event = parser
+            .parse_responses_api_event(&finish_event, "response.done")
+            .expect("finish event should parse");
+
+        let SseEvent::FinishWithToolCalls { tool_calls, .. } = event else {
+            panic!("expected FinishWithToolCalls event");
+        };
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].arguments["pattern"], "**/*prompt*");
+        assert_eq!(tool_calls[0].arguments["path"], ".");
+        assert!(tool_calls[0].arguments.get("raw").is_none());
+    }
+
+    #[test]
+    fn responses_output_item_done_replaces_partial_snapshot() {
+        let parser = OpenAIParser::new();
+
+        let start_event = json!({
+            "type": "response.output_item.added",
+            "item": {
+                "type": "function_call",
+                "id": "item_1",
+                "call_id": "call_1",
+                "name": "glob",
+                "arguments": "{\"pattern\":\"**/*prompt*\""
+            }
+        });
+        parser
+            .parse_responses_api_event(&start_event, "response.output_item.added")
+            .expect("start event should parse");
+
+        let done_event = json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "function_call",
+                "id": "item_1",
+                "call_id": "call_1",
+                "name": "glob",
+                "arguments": "{\"pattern\":\"**/*prompt*\",\"path\":\".\"}"
+            }
+        });
+        parser
+            .parse_responses_api_event(&done_event, "response.output_item.done")
+            .expect("done event should parse");
+
+        let finish_event = json!({
+            "type": "response.done",
+            "response": {
+                "status": "incomplete",
+                "incomplete_details": {
+                    "reason": "tool_calls"
+                }
+            }
+        });
+        let event = parser
+            .parse_responses_api_event(&finish_event, "response.done")
+            .expect("finish event should parse");
+
+        let SseEvent::FinishWithToolCalls { tool_calls, .. } = event else {
+            panic!("expected FinishWithToolCalls event");
+        };
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].arguments["pattern"], "**/*prompt*");
+        assert_eq!(tool_calls[0].arguments["path"], ".");
+        assert!(tool_calls[0].arguments.get("raw").is_none());
+    }
+
+    #[test]
+    fn responses_argument_deltas_still_accumulate() {
+        let parser = OpenAIParser::new();
+
+        let start_event = json!({
+            "type": "response.output_item.added",
+            "item": {
+                "type": "function_call",
+                "id": "item_1",
+                "call_id": "call_1",
+                "name": "glob"
+            }
+        });
+        let event = parser
+            .parse_responses_api_event(&start_event, "response.output_item.added")
+            .expect("start event should parse");
+        assert!(matches!(event, SseEvent::ToolCallStart { .. }));
+
+        let delta_one = json!({
+            "type": "response.function_call_arguments.delta",
+            "call_id": "call_1",
+            "delta": "{\"pattern\":\"**/*"
+        });
+        parser
+            .parse_responses_api_event(&delta_one, "response.function_call_arguments.delta")
+            .expect("first delta should parse");
+
+        let delta_two = json!({
+            "type": "response.function_call_arguments.delta",
+            "call_id": "call_1",
+            "delta": "prompt*\",\"path\":\".\"}"
+        });
+        parser
+            .parse_responses_api_event(&delta_two, "response.function_call_arguments.delta")
+            .expect("second delta should parse");
+
+        let finish_event = json!({
+            "type": "response.done",
+            "response": {
+                "status": "incomplete",
+                "incomplete_details": {
+                    "reason": "tool_calls"
+                }
+            }
+        });
+        let event = parser
+            .parse_responses_api_event(&finish_event, "response.done")
+            .expect("finish event should parse");
+
+        let SseEvent::FinishWithToolCalls { tool_calls, .. } = event else {
+            panic!("expected FinishWithToolCalls event");
+        };
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].arguments["pattern"], "**/*prompt*");
+        assert_eq!(tool_calls[0].arguments["path"], ".");
     }
 }

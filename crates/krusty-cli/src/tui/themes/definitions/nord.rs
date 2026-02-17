@@ -1,18 +1,21 @@
-use crate::tui::themes::{base::ThemeBuilder, Theme};
+use crate::tui::themes::{
+    base::{CoreColors, ThemeBuilder},
+    Theme,
+};
 use ratatui::style::Color;
 
 /// Nord theme
 pub fn nord() -> Theme {
     ThemeBuilder::new("nord", "Nord")
-        .core_colors(
-            Color::Rgb(56, 62, 76),
+        .core_colors(CoreColors::new(
+            Color::Rgb(46, 52, 64),
             Color::Rgb(59, 66, 82),
             Color::Rgb(136, 192, 208),
             Color::Rgb(129, 161, 193),
             Color::Rgb(216, 222, 233),
             Color::Rgb(163, 190, 140),
             Color::Rgb(76, 86, 106),
-        )
+        ))
         .mode_colors(
             Color::Rgb(163, 190, 140),
             Color::Rgb(180, 142, 173),
@@ -23,7 +26,7 @@ pub fn nord() -> Theme {
         .special_colors(
             Color::Rgb(235, 203, 139),
             Color::Rgb(191, 97, 106),
-            Color::Rgb(59, 66, 82),
+            Color::Rgb(51, 57, 69),
         )
         .ui_colors(
             Color::Rgb(136, 192, 208),

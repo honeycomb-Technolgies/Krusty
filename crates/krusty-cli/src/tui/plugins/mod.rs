@@ -7,9 +7,10 @@
 //! - Text: Standard ratatui widgets
 //! - KittyGraphics: Pixel rendering via Kitty graphics protocol (60fps capable)
 
-use std::any::Any;
+use std::{any::Any, sync::RwLock};
 
 use crossterm::event::Event;
+use once_cell::sync::Lazy;
 use ratatui::{buffer::Buffer, layout::Rect};
 
 use crate::tui::themes::Theme;
@@ -19,14 +20,55 @@ pub mod gamepad;
 pub mod kitty_graphics;
 #[cfg(unix)]
 pub mod libretro;
+pub mod managed;
 #[cfg(unix)]
 pub mod retroarch;
 
 #[cfg(unix)]
 pub use gamepad::GamepadHandler;
 pub use kitty_graphics::{KittyGraphics, PluginFrame};
+pub use managed::ManagedPlugin;
 #[cfg(unix)]
 pub use retroarch::RetroArchPlugin;
+
+/// Runtime descriptor for installable managed plugins.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledPluginDescriptor {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub publisher: String,
+    pub description: Option<String>,
+    pub enabled: bool,
+    pub render_mode: PluginRenderMode,
+}
+
+impl InstalledPluginDescriptor {
+    pub fn from_installed(plugin: &crate::plugins::InstalledPlugin) -> Self {
+        let render_mode = if plugin
+            .render_capabilities
+            .iter()
+            .any(|cap| matches!(cap, crate::plugins::PluginRenderCapability::Frame))
+        {
+            PluginRenderMode::KittyGraphics
+        } else {
+            PluginRenderMode::Text
+        };
+
+        Self {
+            id: plugin.id.clone(),
+            name: plugin.name.clone(),
+            version: plugin.version.clone(),
+            publisher: plugin.publisher.clone(),
+            description: plugin.description.clone(),
+            enabled: plugin.enabled,
+            render_mode,
+        }
+    }
+}
+
+static INSTALLED_PLUGINS: Lazy<RwLock<Vec<InstalledPluginDescriptor>>> =
+    Lazy::new(|| RwLock::new(Vec::new()));
 
 /// No-op gamepad handler for non-Unix platforms
 #[cfg(not(unix))]
@@ -131,14 +173,56 @@ pub fn builtin_plugins() -> Vec<Box<dyn Plugin>> {
     let mut plugins: Vec<Box<dyn Plugin>> = vec![];
     #[cfg(unix)]
     plugins.insert(0, Box::new(RetroArchPlugin::new()));
+    for descriptor in installed_plugins().into_iter().filter(|d| d.enabled) {
+        plugins.push(Box::new(ManagedPlugin::new(descriptor)));
+    }
     plugins
 }
 
 /// Get a plugin by ID
 pub fn get_plugin_by_id(id: &str) -> Option<Box<dyn Plugin>> {
-    match id {
-        #[cfg(unix)]
-        "retroarch" => Some(Box::new(RetroArchPlugin::new())),
-        _ => None,
+    #[cfg(unix)]
+    if id == "retroarch" {
+        return Some(Box::new(RetroArchPlugin::new()));
     }
+
+    installed_plugin_by_id(id).and_then(|descriptor| {
+        if descriptor.enabled {
+            Some(Box::new(ManagedPlugin::new(descriptor)) as Box<dyn Plugin>)
+        } else {
+            None
+        }
+    })
+}
+
+pub fn set_installed_plugins(mut descriptors: Vec<InstalledPluginDescriptor>) {
+    descriptors.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    if let Ok(mut guard) = INSTALLED_PLUGINS.write() {
+        *guard = descriptors;
+    }
+}
+
+pub fn installed_plugins() -> Vec<InstalledPluginDescriptor> {
+    INSTALLED_PLUGINS
+        .read()
+        .map(|guard| guard.clone())
+        .unwrap_or_default()
+}
+
+fn installed_plugin_by_id(id: &str) -> Option<InstalledPluginDescriptor> {
+    INSTALLED_PLUGINS
+        .read()
+        .ok()
+        .and_then(|guard| guard.iter().find(|descriptor| descriptor.id == id).cloned())
+}
+
+pub fn installed_plugin_version_map() -> std::collections::HashMap<String, String> {
+    installed_plugins()
+        .into_iter()
+        .map(|plugin| (plugin.id, plugin.version))
+        .collect()
+}
+
+pub fn plugin_descriptor_by_id(id: &str) -> Option<InstalledPluginDescriptor> {
+    installed_plugin_by_id(id)
 }

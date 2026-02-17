@@ -563,24 +563,26 @@ impl PlanFile {
 
     /// Update blocked status of all tasks based on dependencies
     fn update_blocked_status(&mut self) {
-        // Collect task IDs and their blocked_by lists
-        let task_deps: Vec<(String, Vec<String>)> = self
+        let completed_tasks: std::collections::HashSet<String> = self
             .phases
             .iter()
             .flat_map(|p| &p.tasks)
-            .map(|t| (t.id.clone(), t.blocked_by.clone()))
+            .filter(|t| t.status == TaskStatus::Completed || t.completed)
+            .map(|t| t.id.clone())
             .collect();
 
-        // Check which tasks should be blocked
-        let blocked_tasks: Vec<String> = task_deps
+        let blocked_tasks: std::collections::HashSet<String> = self
+            .phases
             .iter()
-            .filter(|(_, blocked_by)| {
-                !blocked_by.is_empty()
-                    && blocked_by
+            .flat_map(|p| &p.tasks)
+            .filter(|task| {
+                !task.blocked_by.is_empty()
+                    && task
+                        .blocked_by
                         .iter()
-                        .any(|blocker| !self.is_task_completed(blocker))
+                        .any(|blocker| !completed_tasks.contains(blocker))
             })
-            .map(|(id, _)| id.clone())
+            .map(|task| task.id.clone())
             .collect();
 
         // Update task statuses
@@ -686,14 +688,14 @@ impl PlanFile {
 
         // Add to blocked_by list
         if let Some(task) = self.find_task_mut(task_id) {
-            if !task.blocked_by.contains(&blocked_by_id.to_string()) {
+            if !task.blocked_by.iter().any(|dep| dep == blocked_by_id) {
                 task.blocked_by.push(blocked_by_id.to_string());
             }
         }
 
         // Add to blocks list of the blocker
         if let Some(blocker) = self.find_task_mut(blocked_by_id) {
-            if !blocker.blocks.contains(&task_id.to_string()) {
+            if !blocker.blocks.iter().any(|dep| dep == task_id) {
                 blocker.blocks.push(task_id.to_string());
             }
         }
@@ -715,7 +717,7 @@ impl PlanFile {
             }
             if visited.insert(current.clone()) {
                 if let Some(task) = self.find_task(&current) {
-                    stack.extend(task.blocked_by.clone());
+                    stack.extend(task.blocked_by.iter().cloned());
                 }
             }
         }
@@ -858,6 +860,11 @@ impl PlanFile {
 
     /// Parse from markdown string
     pub fn from_markdown(content: &str) -> Result<Self, String> {
+        const MAX_PLAN_SIZE: usize = 1_024 * 1_024; // 1MB
+        if content.len() > MAX_PLAN_SIZE {
+            return Err("Plan file exceeds maximum size of 1MB".to_string());
+        }
+
         tracing::debug!("Parsing plan from markdown");
         let mut plan = PlanFile {
             title: String::new(),

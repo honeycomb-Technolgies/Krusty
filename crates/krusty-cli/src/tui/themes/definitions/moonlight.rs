@@ -1,24 +1,27 @@
-use crate::tui::themes::{base::ThemeBuilder, Theme};
+use crate::tui::themes::{
+    base::{CoreColors, ThemeBuilder},
+    Theme,
+};
 use ratatui::style::Color;
 
 /// Moonlight theme
 pub fn moonlight() -> Theme {
     ThemeBuilder::new("moonlight", "Moonlight")
-        .core_colors(
-            Color::Rgb(50, 54, 72),
-            Color::Rgb(68, 74, 102),
-            Color::Rgb(130, 220, 235),
-            Color::Rgb(255, 146, 164),
-            Color::Rgb(195, 199, 221),
+        .core_colors(CoreColors::new(
+            Color::Rgb(33, 35, 55),
+            Color::Rgb(64, 60, 100),
+            Color::Rgb(130, 170, 255),
+            Color::Rgb(252, 167, 234),
+            Color::Rgb(163, 172, 225),
             Color::Rgb(195, 232, 141),
-            Color::Rgb(100, 106, 134),
-        )
+            Color::Rgb(122, 136, 207),
+        ))
         .mode_colors(
             Color::Rgb(195, 232, 141),
-            Color::Rgb(255, 146, 164),
+            Color::Rgb(252, 167, 234),
             Color::Rgb(199, 146, 234),
             Color::Rgb(255, 203, 107),
-            Color::Rgb(130, 220, 235),
+            Color::Rgb(130, 170, 255),
         )
         .special_colors(
             Color::Rgb(255, 203, 107),

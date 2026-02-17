@@ -11,8 +11,10 @@ use anyhow::{anyhow, bail, Context, Result};
 use once_cell::sync::Lazy;
 use regex::Regex;
 
-static PR_CACHE: Lazy<Mutex<HashMap<String, (Instant, Option<u64>)>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+type PrCacheValue = (Instant, Option<u64>);
+type PrCache = HashMap<String, PrCacheValue>;
+
+static PR_CACHE: Lazy<Mutex<PrCache>> = Lazy::new(|| Mutex::new(HashMap::new()));
 static GH_AVAILABLE: Lazy<bool> = Lazy::new(|| {
     Command::new("gh")
         .arg("--version")
@@ -21,6 +23,13 @@ static GH_AVAILABLE: Lazy<bool> = Lazy::new(|| {
         .unwrap_or(false)
 });
 const PR_CACHE_TTL: Duration = Duration::from_secs(60);
+const PR_CACHE_MAX_ENTRIES: usize = 1024;
+
+/// Returns true if git display should be suppressed for this repo.
+/// Suppresses when the repo root is the user's home directory (dotfiles repo).
+pub fn should_suppress_display(repo_root: &Path) -> bool {
+    dirs::home_dir().is_some_and(|home| repo_root == home)
+}
 
 /// Condensed repository status for UI surfaces.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,12 +60,13 @@ impl GitStatusSummary {
     }
 }
 
-/// Local branch metadata.
+/// Branch metadata (local or remote-only).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitBranchSummary {
     pub name: String,
     pub is_current: bool,
     pub upstream: Option<String>,
+    pub is_remote: bool,
 }
 
 /// Worktree metadata.
@@ -100,6 +110,10 @@ pub fn status(path: &Path) -> Result<Option<GitStatusSummary>> {
         None => return Ok(None),
     };
 
+    if should_suppress_display(&repo_root) {
+        return Ok(None);
+    }
+
     let output = run_git(
         &[
             "status",
@@ -120,13 +134,14 @@ pub fn status(path: &Path) -> Result<Option<GitStatusSummary>> {
     Ok(Some(status))
 }
 
-/// List local branches for a repository path.
+/// List local and remote branches for a repository path.
 pub fn branches(path: &Path) -> Result<Option<Vec<GitBranchSummary>>> {
     let repo_root = match resolve_repo_root(path)? {
         Some(root) => root,
         None => return Ok(None),
     };
 
+    // Local branches
     let output = run_git(
         &[
             "for-each-ref",
@@ -137,31 +152,67 @@ pub fn branches(path: &Path) -> Result<Option<Vec<GitBranchSummary>>> {
     )?;
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    let mut branches = stdout
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| {
-            let mut parts = line.split('\t');
-            let name = parts.next().unwrap_or_default().to_string();
-            let is_current = parts.next().unwrap_or_default().trim() == "*";
-            let upstream = parts.next().and_then(|u| {
-                let trimmed = u.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(trimmed.to_string())
-                }
-            });
-            GitBranchSummary {
-                name,
-                is_current,
-                upstream,
-            }
-        })
-        .collect::<Vec<_>>();
+    let mut branches = Vec::new();
+    for line in stdout.lines().filter(|line| !line.trim().is_empty()) {
+        branches.push(parse_branch_summary_line(line));
+    }
 
-    branches.sort_by(|a, b| b.is_current.cmp(&a.is_current).then(a.name.cmp(&b.name)));
+    // Remote branches (deduplicated against local)
+    let local_names: std::collections::HashSet<String> =
+        branches.iter().map(|b| b.name.clone()).collect();
+
+    if let Ok(remote_output) = run_git(
+        &[
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/remotes/origin",
+        ],
+        &repo_root,
+    ) {
+        let remote_stdout = String::from_utf8_lossy(&remote_output.stdout);
+        for line in remote_stdout.lines().filter(|l| !l.trim().is_empty()) {
+            let stripped = line.trim().strip_prefix("origin/").unwrap_or(line.trim());
+            if stripped == "HEAD" || local_names.contains(stripped) {
+                continue;
+            }
+            branches.push(GitBranchSummary {
+                name: stripped.to_string(),
+                is_current: false,
+                upstream: Some(format!("origin/{stripped}")),
+                is_remote: true,
+            });
+        }
+    }
+
+    // Sort: current first, then local, then remote, then alphabetical
+    branches.sort_by(|a, b| {
+        b.is_current
+            .cmp(&a.is_current)
+            .then(a.is_remote.cmp(&b.is_remote))
+            .then(a.name.cmp(&b.name))
+    });
     Ok(Some(branches))
+}
+
+fn parse_branch_summary_line(line: &str) -> GitBranchSummary {
+    let mut parts = line.split('\t');
+    let name = parts.next().unwrap_or_default().to_string();
+    let is_current = parts.next().unwrap_or_default().trim() == "*";
+    let upstream = parts.next().and_then(|u| {
+        let trimmed = u.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    });
+
+    GitBranchSummary {
+        name,
+        is_current,
+        upstream,
+        is_remote: false,
+    }
 }
 
 /// List worktrees for a repository path.
@@ -467,22 +518,42 @@ fn resolve_pr_number(repo_root: &Path, branch: Option<&str>) -> Option<u64> {
     let cache_key = format!("{}::{}", repo_root.display(), branch);
     let now = Instant::now();
 
-    if let Ok(cache) = PR_CACHE.lock() {
+    if let Ok(mut cache) = PR_CACHE.lock() {
         if let Some((timestamp, value)) = cache.get(&cache_key) {
             if now.duration_since(*timestamp) < PR_CACHE_TTL {
                 return *value;
             }
         }
+        // Drop stale entry so cache doesn't grow indefinitely from inactive branches/repos.
+        cache.remove(&cache_key);
     }
 
     let resolved =
         extract_pr_from_branch_name(branch).or_else(|| query_pr_number_from_gh(repo_root));
 
     if let Ok(mut cache) = PR_CACHE.lock() {
+        if cache.len() >= PR_CACHE_MAX_ENTRIES {
+            prune_pr_cache(&mut cache, now);
+        }
         cache.insert(cache_key, (now, resolved));
     }
 
     resolved
+}
+
+fn prune_pr_cache(cache: &mut PrCache, now: Instant) {
+    cache.retain(|_, (timestamp, _)| now.duration_since(*timestamp) < PR_CACHE_TTL);
+
+    while cache.len() >= PR_CACHE_MAX_ENTRIES {
+        let Some(oldest_key) = cache
+            .iter()
+            .min_by_key(|(_, (timestamp, _))| *timestamp)
+            .map(|(key, _)| key.clone())
+        else {
+            break;
+        };
+        cache.remove(&oldest_key);
+    }
 }
 
 fn extract_pr_from_branch_name(branch: &str) -> Option<u64> {

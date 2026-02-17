@@ -14,6 +14,7 @@ export interface SessionResponse {
 	token_count?: number | null;
 	working_dir: string | null;
 	parent_session_id: string | null;
+	mode: 'build' | 'plan';
 	updated_at: string;
 }
 
@@ -91,6 +92,7 @@ export interface GitBranch {
 	name: string;
 	is_current: boolean;
 	upstream: string | null;
+	is_remote: boolean;
 }
 
 /** Git branch list response */
@@ -113,6 +115,82 @@ export interface GitWorktreesResponse {
 	worktrees: GitWorktree[];
 }
 
+/** Provider credential status */
+export interface ProviderStatus {
+	id: string;
+	name: string;
+	configured: boolean;
+	has_oauth: boolean;
+}
+
+/** Push diagnostics summary */
+export interface PushStatusResponse {
+	push_configured: boolean;
+	subscription_count: number;
+	last_attempt_at: string | null;
+	last_success_at: string | null;
+	last_failure_at: string | null;
+	last_failure_reason: string | null;
+	recent_failures_24h: number;
+}
+
+/** Push test-send response */
+export interface PushTestResponse {
+	accepted: boolean;
+	attempted: number;
+	sent: number;
+	stale_removed: number;
+	failed: number;
+}
+
+/** Preview/port-forwarding settings */
+export interface PreviewSettings {
+	enabled: boolean;
+	auto_refresh_secs: number;
+	show_only_http_like: boolean;
+	probe_timeout_ms: number;
+	allow_force_open_non_http: boolean;
+	pinned_ports: number[];
+	hidden_ports: number[];
+	blocked_ports: number[];
+}
+
+/** Preview settings patch */
+export interface PreviewSettingsPatch {
+	enabled?: boolean;
+	auto_refresh_secs?: number;
+	show_only_http_like?: boolean;
+	probe_timeout_ms?: number;
+	allow_force_open_non_http?: boolean;
+	pinned_ports?: number[];
+	hidden_ports?: number[];
+	blocked_ports?: number[];
+}
+
+/** Discovered or pinned port entry */
+export interface PortEntry {
+	port: number;
+	name: string;
+	description: string | null;
+	command: string | null;
+	pid: number | null;
+	source: 'discovered' | 'pinned' | 'discovered+pinned' | string;
+	active: boolean;
+	pinned: boolean;
+	is_http_like: boolean;
+	is_previewable_http: boolean;
+	probe_status: 'ok' | 'timeout' | 'conn_refused' | 'non_http' | 'error' | string;
+	last_probe_ms: number | null;
+	preview_path: string;
+}
+
+/** Port list response */
+export interface PortListResponse {
+	ports: PortEntry[];
+	settings: PreviewSettings;
+	discovery_error?: string | null;
+}
+
 /** SSE stream event types */
 export type StreamEvent =
 	| { type: 'text_delta'; delta: string }
@@ -130,6 +208,7 @@ export type StreamEvent =
 	| { type: 'tool_approval_required'; id: string; name: string; arguments: Record<string, unknown> }
 	| { type: 'tool_approved'; id: string }
 	| { type: 'tool_denied'; id: string }
+	| { type: 'turn_complete'; turn: number; has_more: boolean }
 	| { type: 'finish'; session_id: string }
 	| { type: 'error'; error: string };
 
@@ -146,6 +225,11 @@ export function setCurrentUserId(userId: string | null) {
 
 export function getCurrentUserId(): string | null {
 	return currentUserId;
+}
+
+export function getApiUrl(path: string): string {
+	const normalized = path.startsWith('/') ? path : `/${path}`;
+	return `${API_BASE}${normalized}`;
 }
 
 class ApiError extends Error {
@@ -169,7 +253,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 		headers['X-User-Id'] = currentUserId;
 	}
 
-	const response = await fetch(`${API_BASE}${path}`, {
+	const response = await fetch(getApiUrl(path), {
 		...options,
 		headers
 	});
@@ -212,7 +296,7 @@ export const apiClient = {
 	deleteSession: (id: string) =>
 		request<void>(`/sessions/${id}`, { method: 'DELETE' }),
 
-	updateSession: (id: string, data: { title?: string; working_dir?: string }) =>
+	updateSession: (id: string, data: { title?: string; working_dir?: string; mode?: 'build' | 'plan' }) =>
 		request<SessionResponse>(`/sessions/${id}`, {
 			method: 'PATCH',
 			body: JSON.stringify(data)
@@ -238,6 +322,7 @@ export const apiClient = {
 			agent_state: string;
 			started_at: string | null;
 			last_event_at: string | null;
+			mode: 'build' | 'plan';
 		}>(`/sessions/${id}/state`),
 
 	// Models
@@ -300,6 +385,74 @@ export const apiClient = {
 			body: JSON.stringify({ session_id: sessionId, tool_call_id: toolCallId, approved })
 		}),
 
+	// Credentials
+	getCredentials: () => request<ProviderStatus[]>('/credentials'),
+
+	setCredential: (providerId: string, apiKey: string) =>
+		request<ProviderStatus>(`/credentials/${providerId}`, {
+			method: 'POST',
+			body: JSON.stringify({ api_key: apiKey })
+		}),
+
+	deleteCredential: (providerId: string) =>
+		request<void>(`/credentials/${providerId}`, { method: 'DELETE' }),
+
+	// Push notifications
+	getVapidPublicKey: () =>
+		request<{ public_key: string }>('/push/vapid-public-key'),
+
+	pushSubscribe: (subscription: { endpoint: string; p256dh: string; auth: string }) =>
+		request<{ id: string }>('/push/subscribe', {
+			method: 'POST',
+			body: JSON.stringify(subscription)
+		}),
+
+	pushUnsubscribe: (data: { endpoint: string }) =>
+		request<{ removed: boolean }>('/push/subscribe', {
+			method: 'DELETE',
+			body: JSON.stringify(data)
+		}),
+
+	getPushStatus: () => request<PushStatusResponse>('/push/status'),
+
+	sendPushTest: (payload: { session_id?: string; title?: string; body?: string } = {}) =>
+		request<PushTestResponse>('/push/test', {
+			method: 'POST',
+			body: JSON.stringify(payload)
+		}),
+
+	// Preview / Port Forwarding
+	getPorts: () => request<PortListResponse>('/ports'),
+
+	getPreviewSettings: () => request<PreviewSettings>('/settings/preview'),
+
+	updatePreviewSettings: (patch: PreviewSettingsPatch) =>
+		request<PreviewSettings>('/settings/preview', {
+			method: 'PATCH',
+			body: JSON.stringify(patch)
+		}),
+
+	addPinnedPort: (port: number) =>
+		request<PreviewSettings>('/settings/preview/pins', {
+			method: 'POST',
+			body: JSON.stringify({ port })
+		}),
+
+	removePinnedPort: (port: number) =>
+		request<PreviewSettings>(`/settings/preview/pins/${port}`, {
+			method: 'DELETE'
+		}),
+
+	addHiddenPort: (port: number) =>
+		request<PreviewSettings>('/settings/preview/hidden', {
+			method: 'POST',
+			body: JSON.stringify({ port })
+		}),
+
+	removeHiddenPort: (port: number) =>
+		request<PreviewSettings>(`/settings/preview/hidden/${port}`, {
+			method: 'DELETE'
+		}),
 };
 
 // Chat streaming
@@ -326,6 +479,7 @@ interface ChatRequest {
 	model?: string;
 	thinking_enabled?: boolean;
 	permission_mode?: 'supervised' | 'autonomous';
+	mode?: 'build' | 'plan';
 }
 
 export interface PlanItem {
@@ -333,7 +487,7 @@ export interface PlanItem {
 	completed?: boolean;
 }
 
-interface StreamCallbacks {
+export interface StreamCallbacks {
 	onTextDelta: (delta: string) => void;
 	onThinkingDelta: (thinking: string) => void;
 	onToolCallStart: (id: string, name: string) => void;
@@ -343,6 +497,7 @@ interface StreamCallbacks {
 	onToolApprovalRequired?: (id: string, name: string, args: Record<string, unknown>) => void;
 	onToolApproved?: (id: string) => void;
 	onToolDenied?: (id: string) => void;
+	onTurnComplete?: (turn: number, hasMore: boolean) => void;
 	onPlanUpdate: (items: PlanItem[]) => void;
 	onModeChange: (mode: string, reason?: string) => void;
 	onPlanComplete: (toolCallId: string, title: string, taskCount: number) => void;
@@ -358,21 +513,21 @@ interface ToolResultRequest {
 	result: string;
 }
 
-export async function streamToolResult(
-	request: ToolResultRequest,
+async function streamSSE(
+	url: string,
+	body: object,
 	callbacks: StreamCallbacks,
 	signal?: AbortSignal
-) {
-	// Build headers with optional X-User-Id for multi-tenant auth
+): Promise<void> {
 	const headers: Record<string, string> = { 'Content-Type': 'application/json' };
 	if (currentUserId) {
 		headers['X-User-Id'] = currentUserId;
 	}
 
-	const response = await fetch(`${API_BASE}/chat/tool-result`, {
+	const response = await fetch(getApiUrl(url), {
 		method: 'POST',
 		headers,
-		body: JSON.stringify(request),
+		body: JSON.stringify(body),
 		signal
 	});
 
@@ -392,7 +547,6 @@ export async function streamToolResult(
 	let buffer = '';
 	let lastActivity = Date.now();
 
-	// Activity timeout check
 	const timeoutInterval = setInterval(() => {
 		if (Date.now() - lastActivity > STREAM_ACTIVITY_TIMEOUT) {
 			clearInterval(timeoutInterval);
@@ -433,85 +587,24 @@ export async function streamToolResult(
 		}
 	} finally {
 		clearInterval(timeoutInterval);
+		reader.cancel().catch(() => {});
 	}
 }
 
-export async function streamChat(
-	request: ChatRequest,
+export async function streamToolResult(
+	req: ToolResultRequest,
 	callbacks: StreamCallbacks,
 	signal?: AbortSignal
 ) {
-	// Build headers with optional X-User-Id for multi-tenant auth
-	const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-	if (currentUserId) {
-		headers['X-User-Id'] = currentUserId;
-	}
+	return streamSSE('/chat/tool-result', req, callbacks, signal);
+}
 
-	const response = await fetch(`${API_BASE}/chat`, {
-		method: 'POST',
-		headers,
-		body: JSON.stringify(request),
-		signal
-	});
-
-	if (!response.ok) {
-		const error = await response.json().catch(() => ({ error: 'Unknown error' }));
-		callbacks.onError(error.error || 'Request failed');
-		return;
-	}
-
-	const reader = response.body?.getReader();
-	if (!reader) {
-		callbacks.onError('No response body');
-		return;
-	}
-
-	const decoder = new TextDecoder();
-	let buffer = '';
-	let lastActivity = Date.now();
-
-	// Activity timeout check
-	const timeoutInterval = setInterval(() => {
-		if (Date.now() - lastActivity > STREAM_ACTIVITY_TIMEOUT) {
-			clearInterval(timeoutInterval);
-			reader.cancel().catch(() => {});
-			callbacks.onError('Stream timeout: no data received for 30 seconds');
-		}
-	}, STREAM_CHECK_INTERVAL);
-
-	try {
-		while (true) {
-			const { done, value } = await reader.read();
-			if (done) break;
-
-			lastActivity = Date.now();
-			buffer += decoder.decode(value, { stream: true });
-			const lines = buffer.split('\n');
-			buffer = lines.pop() || '';
-
-			for (const line of lines) {
-				if (line.startsWith('data: ')) {
-					const data = line.slice(6);
-					if (data === '[DONE]') continue;
-
-					try {
-						const event = JSON.parse(data);
-						handleEvent(event, callbacks);
-					} catch (e) {
-						console.warn('[SSE] Parse error:', data, e);
-					}
-				}
-			}
-		}
-	} catch (err) {
-		if (err instanceof Error && err.name === 'AbortError') {
-			// User cancelled
-		} else {
-			callbacks.onError(err instanceof Error ? err.message : 'Stream error');
-		}
-	} finally {
-		clearInterval(timeoutInterval);
-	}
+export async function streamChat(
+	req: ChatRequest,
+	callbacks: StreamCallbacks,
+	signal?: AbortSignal
+) {
+	return streamSSE('/chat', req, callbacks, signal);
 }
 
 function handleEvent(event: StreamEvent, callbacks: StreamCallbacks) {
@@ -560,6 +653,9 @@ function handleEvent(event: StreamEvent, callbacks: StreamCallbacks) {
 			break;
 		case 'tool_denied':
 			callbacks.onToolDenied?.(event.id);
+			break;
+		case 'turn_complete':
+			callbacks.onTurnComplete?.(event.turn, event.has_more);
 			break;
 		case 'finish':
 			callbacks.onFinish(event.session_id);

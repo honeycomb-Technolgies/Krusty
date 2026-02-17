@@ -26,6 +26,40 @@ sw.addEventListener('activate', (event) => {
 	);
 });
 
+// Push notification handler
+sw.addEventListener('push', (event) => {
+	const data = event.data?.json() ?? { title: 'Krusty', body: 'Complete', session_id: null };
+	event.waitUntil(
+		sw.registration.showNotification(data.title, {
+			body: data.body,
+			icon: '/icon-192.png',
+			badge: '/icon-192.png',
+			tag: data.tag,
+			renotify: true,
+			data: { session_id: data.session_id, url: `/app?session=${data.session_id}` }
+		})
+	);
+});
+
+// Notification click — focus existing tab or open new window
+sw.addEventListener('notificationclick', (event) => {
+	event.notification.close();
+	const sessionId = event.notification.data?.session_id;
+	const targetUrl = event.notification.data?.url || '/app';
+
+	event.waitUntil(
+		sw.clients.matchAll({ type: 'window' }).then((clients) => {
+			for (const client of clients) {
+				if (client.url.includes('/app')) {
+					client.postMessage({ type: 'notification-click', session_id: sessionId });
+					return client.focus();
+				}
+			}
+			return sw.clients.openWindow(targetUrl);
+		})
+	);
+});
+
 sw.addEventListener('fetch', (event) => {
 	const { request } = event;
 	if (request.method !== 'GET') {

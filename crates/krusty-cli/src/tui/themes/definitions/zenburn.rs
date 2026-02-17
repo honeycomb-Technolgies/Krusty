@@ -1,18 +1,21 @@
-use crate::tui::themes::{base::ThemeBuilder, Theme};
+use crate::tui::themes::{
+    base::{CoreColors, ThemeBuilder},
+    Theme,
+};
 use ratatui::style::Color;
 
 /// Zenburn theme
 pub fn zenburn() -> Theme {
     ThemeBuilder::new("zenburn", "Zenburn")
-        .core_colors(
-            Color::Rgb(89, 89, 91),
-            Color::Rgb(95, 95, 95),
+        .core_colors(CoreColors::new(
+            Color::Rgb(63, 63, 63),
+            Color::Rgb(79, 79, 79),
             Color::Rgb(240, 223, 175),
             Color::Rgb(220, 163, 163),
             Color::Rgb(220, 220, 204),
             Color::Rgb(127, 159, 127),
-            Color::Rgb(108, 108, 108),
-        )
+            Color::Rgb(111, 111, 111),
+        ))
         .mode_colors(
             Color::Rgb(127, 159, 127),
             Color::Rgb(220, 163, 163),
@@ -23,7 +26,7 @@ pub fn zenburn() -> Theme {
         .special_colors(
             Color::Rgb(240, 223, 175),
             Color::Rgb(220, 163, 163),
-            Color::Rgb(79, 79, 79),
+            Color::Rgb(53, 53, 53),
         )
         .ui_colors(
             Color::Rgb(220, 163, 163),

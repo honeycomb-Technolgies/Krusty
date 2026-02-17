@@ -76,9 +76,48 @@ jobs:
           name: krusty-${{ matrix.target }}
           path: krusty-${{ matrix.target }}.*
 
+  desktop-linux:
+    name: Build Desktop Linux Bundles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install desktop bundling dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libudev-dev \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Linux desktop bundles
+        working-directory: apps/desktop/shell
+        run: |
+          bun install
+          bun run build
+
+      - name: Upload desktop Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: krusty-desktop-linux
+          path: |
+            apps/desktop/shell/src-tauri/target/release/bundle/deb/*.deb
+            apps/desktop/shell/src-tauri/target/release/bundle/rpm/*.rpm
+
   release:
     name: Create Release
-    needs: build
+    needs: [build, desktop-linux]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

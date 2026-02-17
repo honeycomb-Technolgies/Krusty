@@ -88,6 +88,7 @@ function createWorkspaceStore() {
 		 */
 		destroy() {
 			if (channel) {
+				channel.onmessage = null;
 				channel.close();
 				channel = null;
 			}

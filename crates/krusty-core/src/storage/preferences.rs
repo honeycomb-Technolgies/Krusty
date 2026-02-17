@@ -28,59 +28,55 @@ impl Preferences {
         }
     }
 
-    /// Build WHERE clause and params for user filtering
-    fn user_filter(&self) -> (&'static str, Vec<String>) {
-        if let Some(ref uid) = self.user_id {
-            ("WHERE user_id = ?1", vec![uid.clone()])
-        } else {
-            ("WHERE user_id IS NULL", vec![])
-        }
-    }
-
     /// Get a preference value
     pub fn get(&self, key: &str) -> Option<String> {
-        let (where_clause, filter_params) = self.user_filter();
-
-        let sql = format!(
-            "SELECT value FROM user_preferences {} AND key = ?2",
-            where_clause
-        );
-
-        let mut params: Vec<&dyn rusqlite::ToSql> = filter_params
-            .iter()
-            .map(|s| s as &dyn rusqlite::ToSql)
-            .collect();
-        params.push(&key);
-
-        self.db
-            .conn()
-            .query_row(&sql, params.as_slice(), |row| row.get(0))
-            .ok()
+        if let Some(uid) = self.user_id.as_deref() {
+            self.db
+                .conn()
+                .query_row(
+                    "SELECT value FROM user_preferences WHERE user_id = ?1 AND key = ?2",
+                    params![uid, key],
+                    |row| row.get(0),
+                )
+                .ok()
+        } else {
+            self.db
+                .conn()
+                .query_row(
+                    "SELECT value FROM user_preferences WHERE user_id IS NULL AND key = ?1",
+                    [key],
+                    |row| row.get(0),
+                )
+                .ok()
+        }
     }
 
     /// Set a preference value
     pub fn set(&self, key: &str, value: &str) -> Result<()> {
+        let user_id = self.user_id.as_deref();
         self.db.conn().execute(
             "INSERT INTO user_preferences (key, value, updated_at, user_id)
              VALUES (?1, ?2, strftime('%s', 'now'), ?3)
              ON CONFLICT(key) DO UPDATE SET value = ?2, updated_at = strftime('%s', 'now'), user_id = ?3",
-            params![key, value, self.user_id],
+            params![key, value, user_id],
         )?;
         Ok(())
     }
 
     /// Delete a preference
     pub fn delete(&self, key: &str) -> Result<()> {
-        let (where_clause, filter_params) = self.user_filter();
-        let sql = format!("DELETE FROM user_preferences {} AND key = ?2", where_clause);
+        if let Some(uid) = self.user_id.as_deref() {
+            self.db.conn().execute(
+                "DELETE FROM user_preferences WHERE user_id = ?1 AND key = ?2",
+                params![uid, key],
+            )?;
+        } else {
+            self.db.conn().execute(
+                "DELETE FROM user_preferences WHERE user_id IS NULL AND key = ?1",
+                [key],
+            )?;
+        }
 
-        let mut params: Vec<&dyn rusqlite::ToSql> = filter_params
-            .iter()
-            .map(|s| s as &dyn rusqlite::ToSql)
-            .collect();
-        params.push(&key);
-
-        self.db.conn().execute(&sql, params.as_slice())?;
         Ok(())
     }
 

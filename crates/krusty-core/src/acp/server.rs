@@ -289,6 +289,7 @@ fn get_provider_api_key(provider: ProviderId) -> Option<String> {
         ProviderId::MiniMax => "MINIMAX_API_KEY",
         ProviderId::OpenRouter => "OPENROUTER_API_KEY",
         ProviderId::ZAi => "ZAI_API_KEY",
+        ProviderId::Anthropic => "ANTHROPIC_API_KEY",
         ProviderId::OpenAI => "OPENAI_API_KEY",
     };
     std::env::var(env_var).ok().filter(|s| !s.is_empty())

@@ -10,6 +10,9 @@ use tokio::sync::RwLock;
 
 use super::providers::{ProviderId, ReasoningFormat};
 
+pub type ModelsByProvider = HashMap<ProviderId, Vec<ModelMetadata>>;
+pub type OrganizedModels = (Vec<ModelMetadata>, ModelsByProvider);
+
 /// API format for model requests
 ///
 /// OpenCode Zen routes different models to different endpoints based on format.
@@ -226,7 +229,7 @@ impl ModelRegistry {
     pub async fn get_organized_models(
         &self,
         configured_providers: &[ProviderId],
-    ) -> (Vec<ModelMetadata>, HashMap<ProviderId, Vec<ModelMetadata>>) {
+    ) -> OrganizedModels {
         let models = self.models.read().await;
         let index = self.model_index.read().await;
         let recent_ids = self.recent_ids.read().await;
@@ -264,7 +267,7 @@ impl ModelRegistry {
     pub fn try_get_organized_models(
         &self,
         configured_providers: &[ProviderId],
-    ) -> Option<(Vec<ModelMetadata>, HashMap<ProviderId, Vec<ModelMetadata>>)> {
+    ) -> Option<OrganizedModels> {
         let models = self.models.try_read().ok()?;
         let index = self.model_index.try_read().ok()?;
         let recent_ids = self.recent_ids.try_read().ok()?;

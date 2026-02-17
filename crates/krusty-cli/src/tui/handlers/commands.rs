@@ -110,6 +110,9 @@ impl App {
             "/skills" => {
                 self.open_skills_browser();
             }
+            "/plugins" => {
+                self.handle_plugins_command(&parts);
+            }
             "/mcp" => {
                 self.open_mcp_browser();
             }
@@ -527,8 +530,10 @@ impl App {
                 if let Some(ref mut plan) = self.runtime.active_plan {
                     // Mark as abandoned and save
                     plan.status = PlanStatus::Abandoned;
-                    if let Err(e) = self.services.plan_manager.save_plan(plan) {
-                        tracing::warn!("Failed to save abandoned plan: {}", e);
+                    if let Some(ref pm) = self.services.plan_manager {
+                        if let Err(e) = pm.save_plan(plan) {
+                            tracing::warn!("Failed to save abandoned plan: {}", e);
+                        }
                     }
                     let title = plan.title.clone();
                     let file_path = plan
@@ -553,36 +558,34 @@ impl App {
             Some("list") | Some("history") => {
                 // Show completed plans for this working directory
                 let working_dir_str = self.runtime.working_dir.to_string_lossy().into_owned();
-                match self
-                    .services
-                    .plan_manager
-                    .list_completed_for_dir(&working_dir_str)
-                {
-                    Ok(plans) if plans.is_empty() => {
-                        self.runtime.chat.messages.push((
-                            "system".to_string(),
-                            "No completed plans for this directory.".to_string(),
-                        ));
-                    }
-                    Ok(plans) => {
-                        let mut msg = String::from("Completed plans:\n");
-                        for plan in plans.iter().take(5) {
-                            let date = plan.created_at.format("%Y-%m-%d");
-                            msg.push_str(&format!(
-                                "  • {} ({}) - {}/{} tasks\n",
-                                plan.title, date, plan.progress.0, plan.progress.1,
+                if let Some(ref pm) = self.services.plan_manager {
+                    match pm.list_completed_for_dir(&working_dir_str) {
+                        Ok(plans) if plans.is_empty() => {
+                            self.runtime.chat.messages.push((
+                                "system".to_string(),
+                                "No completed plans for this directory.".to_string(),
                             ));
                         }
-                        if plans.len() > 5 {
-                            msg.push_str(&format!("  ... and {} more", plans.len() - 5));
+                        Ok(plans) => {
+                            let mut msg = String::from("Completed plans:\n");
+                            for plan in plans.iter().take(5) {
+                                let date = plan.created_at.format("%Y-%m-%d");
+                                msg.push_str(&format!(
+                                    "  • {} ({}) - {}/{} tasks\n",
+                                    plan.title, date, plan.progress.0, plan.progress.1,
+                                ));
+                            }
+                            if plans.len() > 5 {
+                                msg.push_str(&format!("  ... and {} more", plans.len() - 5));
+                            }
+                            self.runtime.chat.messages.push(("system".to_string(), msg));
                         }
-                        self.runtime.chat.messages.push(("system".to_string(), msg));
-                    }
-                    Err(e) => {
-                        self.runtime
-                            .chat
-                            .messages
-                            .push(("system".to_string(), format!("Failed to list plans: {}", e)));
+                        Err(e) => {
+                            self.runtime.chat.messages.push((
+                                "system".to_string(),
+                                format!("Failed to list plans: {}", e),
+                            ));
+                        }
                     }
                 }
             }
@@ -605,7 +608,7 @@ impl App {
                     self.runtime.chat.messages.push((
                         "system".to_string(),
                         "No active plan.\n\
-                        • Enter PLAN mode (Ctrl+B) and ask the AI to create a plan\n\
+                        • Enter PLAN mode (Ctrl+G) and ask the AI to create a plan\n\
                         • Use /plan list to see completed plans"
                             .to_string(),
                     ));
@@ -651,6 +654,371 @@ impl App {
             Err(_) => return,
         };
         self.ui.popups.skills.set_skills(skills);
+    }
+
+    fn handle_plugins_command(&mut self, parts: &[&str]) {
+        let Some(manager) = self.services.plugin_manager.as_ref() else {
+            self.runtime.chat.messages.push((
+                "system".to_string(),
+                "Plugin manager is unavailable in this build.".to_string(),
+            ));
+            return;
+        };
+
+        match parts.get(1).copied() {
+            None => self.open_plugins_browser(),
+            Some("list") => {
+                let installed = futures::executor::block_on(manager.list_installed_plugins());
+                match installed {
+                    Ok(plugins) if plugins.is_empty() => {
+                        self.runtime.chat.messages.push((
+                            "system".to_string(),
+                            "No plugins installed. Use /plugins install <manifest-path-or-url>."
+                                .to_string(),
+                        ));
+                    }
+                    Ok(plugins) => {
+                        let mut message = String::from("Installed plugins:\n");
+                        for plugin in plugins {
+                            let state = if plugin.enabled {
+                                "enabled"
+                            } else {
+                                "disabled"
+                            };
+                            message.push_str(&format!(
+                                "  • {}@{} ({}) [{}]\n",
+                                plugin.id, plugin.version, plugin.publisher, state
+                            ));
+                        }
+                        self.runtime
+                            .chat
+                            .messages
+                            .push(("system".to_string(), message));
+                    }
+                    Err(err) => self.runtime.chat.messages.push((
+                        "system".to_string(),
+                        format!("Failed to list installed plugins: {}", err),
+                    )),
+                }
+            }
+            Some("install") => {
+                let Some(manifest_ref) = parts.get(2) else {
+                    self.runtime.chat.messages.push((
+                        "system".to_string(),
+                        "Usage: /plugins install <manifest-path-or-url>".to_string(),
+                    ));
+                    return;
+                };
+
+                match futures::executor::block_on(manager.install_from_manifest_ref(manifest_ref)) {
+                    Ok(plugin) => {
+                        self.refresh_plugin_catalog(true);
+                        self.show_toast(crate::tui::components::Toast::success(format!(
+                            "Installed plugin {} v{}",
+                            plugin.id, plugin.version
+                        )));
+                        self.runtime.chat.messages.push((
+                            "system".to_string(),
+                            format!(
+                                "Installed {}@{} from {}",
+                                plugin.id, plugin.version, manifest_ref
+                            ),
+                        ));
+                    }
+                    Err(err) => self
+                        .runtime
+                        .chat
+                        .messages
+                        .push(("system".to_string(), format!("Install failed: {}", err))),
+                }
+            }
+            Some("enable") | Some("disable") => {
+                let enable = matches!(parts.get(1), Some(&"enable"));
+                let Some(plugin_id) = parts.get(2) else {
+                    self.runtime.chat.messages.push((
+                        "system".to_string(),
+                        format!("Usage: /plugins {} <plugin-id>", parts[1]),
+                    ));
+                    return;
+                };
+                match futures::executor::block_on(manager.set_plugin_enabled(plugin_id, enable)) {
+                    Ok(()) => {
+                        self.refresh_plugin_catalog(true);
+                        self.runtime.chat.messages.push((
+                            "system".to_string(),
+                            format!(
+                                "{} plugin {}",
+                                if enable { "Enabled" } else { "Disabled" },
+                                plugin_id
+                            ),
+                        ));
+                    }
+                    Err(err) => self.runtime.chat.messages.push((
+                        "system".to_string(),
+                        format!("Failed to change plugin state: {}", err),
+                    )),
+                }
+            }
+            Some("reload") => {
+                let Some(plugin_id) = parts.get(2) else {
+                    self.runtime.chat.messages.push((
+                        "system".to_string(),
+                        "Usage: /plugins reload <plugin-id>".to_string(),
+                    ));
+                    return;
+                };
+
+                match futures::executor::block_on(manager.reload_plugin(plugin_id)) {
+                    Ok(()) => {
+                        if self.ui.plugin_window.active_plugin_id.as_deref() == Some(*plugin_id) {
+                            let plugin = crate::tui::plugins::get_plugin_by_id(plugin_id);
+                            self.ui.plugin_window.set_plugin(plugin);
+                        }
+                        self.runtime.chat.messages.push((
+                            "system".to_string(),
+                            format!("Reload request acknowledged for {}", plugin_id),
+                        ));
+                    }
+                    Err(err) => self
+                        .runtime
+                        .chat
+                        .messages
+                        .push(("system".to_string(), format!("Reload failed: {}", err))),
+                }
+            }
+            Some("add-source") => {
+                let Some(source_ref) = parts.get(2) else {
+                    self.runtime.chat.messages.push((
+                        "system".to_string(),
+                        "Usage: /plugins add-source <manifest-url> [name]".to_string(),
+                    ));
+                    return;
+                };
+                let name = parts.get(3).copied();
+                match futures::executor::block_on(manager.add_source(name, source_ref)) {
+                    Ok(source) => self.runtime.chat.messages.push((
+                        "system".to_string(),
+                        format!("Added source '{}' -> {}", source.name, source.manifest_url),
+                    )),
+                    Err(err) => self.runtime.chat.messages.push((
+                        "system".to_string(),
+                        format!("Failed to add source: {}", err),
+                    )),
+                }
+            }
+            Some("sources") => match futures::executor::block_on(manager.list_sources()) {
+                Ok(sources) if sources.is_empty() => self.runtime.chat.messages.push((
+                    "system".to_string(),
+                    "No plugin sources configured.".to_string(),
+                )),
+                Ok(sources) => {
+                    let mut message = String::from("Plugin sources:\n");
+                    for source in sources {
+                        message
+                            .push_str(&format!("  • {} -> {}\n", source.name, source.manifest_url));
+                    }
+                    self.runtime
+                        .chat
+                        .messages
+                        .push(("system".to_string(), message));
+                }
+                Err(err) => self.runtime.chat.messages.push((
+                    "system".to_string(),
+                    format!("Failed to list sources: {}", err),
+                )),
+            },
+            Some("allow-publisher") => {
+                let Some(publisher) = parts.get(2) else {
+                    self.runtime.chat.messages.push((
+                        "system".to_string(),
+                        "Usage: /plugins allow-publisher <publisher>".to_string(),
+                    ));
+                    return;
+                };
+
+                match futures::executor::block_on(manager.add_allowed_publisher(publisher)) {
+                    Ok(()) => self.runtime.chat.messages.push((
+                        "system".to_string(),
+                        format!("Allowlisted plugin publisher '{}'", publisher),
+                    )),
+                    Err(err) => self.runtime.chat.messages.push((
+                        "system".to_string(),
+                        format!("Failed to allow publisher: {}", err),
+                    )),
+                }
+            }
+            Some("add-key") => {
+                let (Some(key_id), Some(key_value)) = (parts.get(2), parts.get(3)) else {
+                    self.runtime.chat.messages.push((
+                        "system".to_string(),
+                        "Usage: /plugins add-key <key-id> <public-key-base64>".to_string(),
+                    ));
+                    return;
+                };
+
+                match futures::executor::block_on(manager.add_trusted_key(key_id, key_value)) {
+                    Ok(()) => self.runtime.chat.messages.push((
+                        "system".to_string(),
+                        format!("Added trusted key '{}'", key_id),
+                    )),
+                    Err(err) => self
+                        .runtime
+                        .chat
+                        .messages
+                        .push(("system".to_string(), format!("Failed to add key: {}", err))),
+                }
+            }
+            Some("refresh") | Some("update") => {
+                if self.refresh_plugin_catalog(true) {
+                    self.runtime.chat.messages.push((
+                        "system".to_string(),
+                        "Plugin catalog refreshed.".to_string(),
+                    ));
+                } else {
+                    self.runtime.chat.messages.push((
+                        "system".to_string(),
+                        "Plugin catalog is already up to date.".to_string(),
+                    ));
+                }
+            }
+            Some(other) => {
+                self.runtime.chat.messages.push((
+                    "system".to_string(),
+                    format!(
+                        "Unknown /plugins subcommand '{}'. Available: list, install, enable, disable, reload, add-source, sources, allow-publisher, add-key, refresh",
+                        other
+                    ),
+                ));
+            }
+        }
+    }
+
+    fn open_plugins_browser(&mut self) {
+        self.refresh_plugins_browser();
+        self.ui.popup = Popup::PluginsBrowser;
+    }
+
+    pub fn refresh_plugins_browser(&mut self) {
+        self.refresh_plugin_catalog(false);
+    }
+
+    pub fn toggle_selected_plugin_from_popup(&mut self) {
+        let Some(plugin_id) = self
+            .ui
+            .popups
+            .plugins
+            .selected_plugin_id()
+            .map(str::to_string)
+        else {
+            return;
+        };
+
+        let Some(descriptor) = crate::tui::plugins::plugin_descriptor_by_id(&plugin_id) else {
+            self.ui.popups.plugins.set_status_message(Some(
+                "Selected plugin no longer exists in the catalog.".to_string(),
+            ));
+            return;
+        };
+
+        let Some(manager) = self.services.plugin_manager.as_ref() else {
+            self.ui
+                .popups
+                .plugins
+                .set_status_message(Some("Plugin manager unavailable.".to_string()));
+            return;
+        };
+
+        let target_enabled = !descriptor.enabled;
+        match futures::executor::block_on(manager.set_plugin_enabled(&plugin_id, target_enabled)) {
+            Ok(()) => {
+                let action = if target_enabled {
+                    "Enabled"
+                } else {
+                    "Disabled"
+                };
+                self.ui
+                    .popups
+                    .plugins
+                    .set_status_message(Some(format!("{} plugin {}", action, plugin_id)));
+
+                if !target_enabled
+                    && self.ui.plugin_window.active_plugin_id.as_deref() == Some(plugin_id.as_str())
+                {
+                    self.ui.plugin_window.set_plugin(None);
+                }
+
+                self.refresh_plugin_catalog(true);
+            }
+            Err(err) => {
+                self.ui
+                    .popups
+                    .plugins
+                    .set_status_message(Some(format!("Failed to update {}: {}", plugin_id, err)));
+            }
+        }
+    }
+
+    pub fn refresh_plugin_catalog(&mut self, notify_active_updates: bool) -> bool {
+        let Some(manager) = self.services.plugin_manager.as_ref() else {
+            crate::tui::plugins::set_installed_plugins(Vec::new());
+            self.runtime.plugin_versions.clear();
+            self.ui.popups.plugins.set_plugins(Vec::new());
+            return false;
+        };
+
+        let installed = match futures::executor::block_on(manager.list_installed_plugins()) {
+            Ok(plugins) => plugins,
+            Err(err) => {
+                self.ui
+                    .popups
+                    .plugins
+                    .set_status_message(Some(format!("Failed to refresh plugin catalog: {}", err)));
+                return false;
+            }
+        };
+
+        let descriptors: Vec<_> = installed
+            .iter()
+            .map(crate::tui::plugins::InstalledPluginDescriptor::from_installed)
+            .collect();
+        crate::tui::plugins::set_installed_plugins(descriptors);
+        self.ui.popups.plugins.set_plugins(installed);
+
+        let previous_versions = self.runtime.plugin_versions.clone();
+        self.runtime.plugin_versions = crate::tui::plugins::installed_plugin_version_map();
+
+        let changed = self.runtime.plugin_versions != previous_versions;
+
+        if notify_active_updates {
+            if let Some(active_id) = self.ui.plugin_window.active_plugin_id.clone() {
+                if let (Some(previous), Some(current)) = (
+                    previous_versions.get(&active_id),
+                    self.runtime.plugin_versions.get(&active_id),
+                ) {
+                    if previous != current {
+                        self.show_toast(crate::tui::components::Toast::success(format!(
+                            "Plugin update ready: {} {} -> {}",
+                            active_id, previous, current
+                        )));
+                        self.runtime.chat.messages.push((
+                            "system".to_string(),
+                            format!(
+                                "Update detected for active plugin '{}'. Run `/plugins reload {}` to apply.",
+                                active_id, active_id
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+
+        if let Some(active_id) = self.ui.plugin_window.active_plugin_id.clone() {
+            if crate::tui::plugins::get_plugin_by_id(&active_id).is_none() {
+                self.ui.plugin_window.set_plugin(None);
+            }
+        }
+
+        changed
     }
 
     /// Open MCP server browser popup
