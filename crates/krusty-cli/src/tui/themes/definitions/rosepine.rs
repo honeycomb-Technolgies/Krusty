@@ -1,10 +1,13 @@
-use crate::tui::themes::{base::ThemeBuilder, Theme};
+use crate::tui::themes::{
+    base::{CoreColors, ThemeBuilder},
+    Theme,
+};
 use ratatui::style::Color;
 
 /// Rosé Pine theme
 pub fn rosepine() -> Theme {
     ThemeBuilder::new("rosepine", "Rosé Pine")
-        .core_colors(
+        .core_colors(CoreColors::new(
             Color::Rgb(25, 23, 36),
             Color::Rgb(38, 35, 58),
             Color::Rgb(156, 207, 216),
@@ -12,7 +15,7 @@ pub fn rosepine() -> Theme {
             Color::Rgb(224, 222, 244),
             Color::Rgb(49, 116, 143),
             Color::Rgb(144, 140, 170),
-        )
+        ))
         .mode_colors(
             Color::Rgb(49, 116, 143),
             Color::Rgb(235, 188, 186),

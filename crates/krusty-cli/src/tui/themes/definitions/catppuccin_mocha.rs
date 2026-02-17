@@ -1,10 +1,13 @@
-use crate::tui::themes::{base::ThemeBuilder, Theme};
+use crate::tui::themes::{
+    base::{CoreColors, ThemeBuilder},
+    Theme,
+};
 use ratatui::style::Color;
 
 /// Catppuccin Mocha theme
 pub fn catppuccin_mocha() -> Theme {
     ThemeBuilder::new("catppuccin-mocha", "Catppuccin Mocha")
-        .core_colors(
+        .core_colors(CoreColors::new(
             Color::Rgb(30, 30, 46),
             Color::Rgb(88, 91, 112),
             Color::Rgb(137, 220, 235),
@@ -12,7 +15,7 @@ pub fn catppuccin_mocha() -> Theme {
             Color::Rgb(205, 214, 244),
             Color::Rgb(166, 227, 161),
             Color::Rgb(108, 112, 134),
-        )
+        ))
         .mode_colors(
             Color::Rgb(166, 227, 161),
             Color::Rgb(245, 194, 231),

@@ -1,10 +1,13 @@
-use crate::tui::themes::{base::ThemeBuilder, Theme};
+use crate::tui::themes::{
+    base::{CoreColors, ThemeBuilder},
+    Theme,
+};
 use ratatui::style::Color;
 
 /// Ayu Dark theme
 pub fn ayu_dark() -> Theme {
     ThemeBuilder::new("ayu-dark", "Ayu Dark")
-        .core_colors(
+        .core_colors(CoreColors::new(
             Color::Rgb(10, 14, 20),
             Color::Rgb(37, 51, 64),
             Color::Rgb(57, 186, 230),
@@ -12,7 +15,7 @@ pub fn ayu_dark() -> Theme {
             Color::Rgb(230, 225, 207),
             Color::Rgb(145, 179, 98),
             Color::Rgb(95, 106, 119),
-        )
+        ))
         .mode_colors(
             Color::Rgb(134, 179, 85),
             Color::Rgb(255, 180, 91),

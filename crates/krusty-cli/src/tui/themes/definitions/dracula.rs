@@ -1,10 +1,13 @@
-use crate::tui::themes::{base::ThemeBuilder, Theme};
+use crate::tui::themes::{
+    base::{CoreColors, ThemeBuilder},
+    Theme,
+};
 use ratatui::style::Color;
 
 /// Dracula theme - popular dark theme with vibrant colors
 pub fn dracula() -> Theme {
     ThemeBuilder::new("dracula", "Dracula")
-        .core_colors(
+        .core_colors(CoreColors::new(
             Color::Rgb(40, 42, 54),    // bg
             Color::Rgb(68, 71, 90),    // border
             Color::Rgb(139, 233, 253), // title (cyan)
@@ -12,7 +15,7 @@ pub fn dracula() -> Theme {
             Color::Rgb(248, 248, 242), // text
             Color::Rgb(80, 250, 123),  // success (green)
             Color::Rgb(98, 114, 164),  // dim
-        )
+        ))
         .mode_colors(
             Color::Rgb(80, 250, 123),  // view (green)
             Color::Rgb(255, 121, 198), // chat (pink)

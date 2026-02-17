@@ -18,6 +18,8 @@ use crate::AppState;
 const PREVIEW_SETTINGS_KEY: &str = "preview_settings_v1";
 const DEFAULT_BLOCKED_PORTS: [u16; 3] = [22, 2375, 2376];
 const AUTO_REFRESH_RANGE_SECS: RangeInclusive<u16> = 2..=60;
+const PROBE_TIMEOUT_RANGE_MS: RangeInclusive<u16> = 300..=1500;
+const DEFAULT_PROBE_TIMEOUT_MS: u16 = 800;
 
 /// Preview/port-forwarding settings stored in user preferences.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,6 +28,8 @@ pub struct PreviewSettings {
     pub enabled: bool,
     pub auto_refresh_secs: u16,
     pub show_only_http_like: bool,
+    pub probe_timeout_ms: u16,
+    pub allow_force_open_non_http: bool,
     pub pinned_ports: Vec<u16>,
     pub hidden_ports: Vec<u16>,
     pub blocked_ports: Vec<u16>,
@@ -37,6 +41,8 @@ impl Default for PreviewSettings {
             enabled: true,
             auto_refresh_secs: 5,
             show_only_http_like: true,
+            probe_timeout_ms: DEFAULT_PROBE_TIMEOUT_MS,
+            allow_force_open_non_http: true,
             pinned_ports: vec![],
             hidden_ports: vec![],
             blocked_ports: DEFAULT_BLOCKED_PORTS.to_vec(),
@@ -53,6 +59,9 @@ impl PreviewSettings {
         if !AUTO_REFRESH_RANGE_SECS.contains(&self.auto_refresh_secs) {
             self.auto_refresh_secs = Self::default().auto_refresh_secs;
         }
+        if !PROBE_TIMEOUT_RANGE_MS.contains(&self.probe_timeout_ms) {
+            self.probe_timeout_ms = DEFAULT_PROBE_TIMEOUT_MS;
+        }
     }
 
     pub fn is_blocked(&self, port: u16) -> bool {
@@ -65,6 +74,8 @@ struct PreviewSettingsPatch {
     enabled: Option<bool>,
     auto_refresh_secs: Option<u16>,
     show_only_http_like: Option<bool>,
+    probe_timeout_ms: Option<u16>,
+    allow_force_open_non_http: Option<bool>,
     blocked_ports: Option<Vec<u16>>,
     pinned_ports: Option<Vec<u16>>,
     hidden_ports: Option<Vec<u16>>,
@@ -119,6 +130,21 @@ async fn update_preview_settings(
 
     if let Some(show_only_http_like) = patch.show_only_http_like {
         settings.show_only_http_like = show_only_http_like;
+    }
+
+    if let Some(probe_timeout_ms) = patch.probe_timeout_ms {
+        if !PROBE_TIMEOUT_RANGE_MS.contains(&probe_timeout_ms) {
+            return Err(AppError::BadRequest(format!(
+                "probe_timeout_ms must be within {}-{} milliseconds",
+                PROBE_TIMEOUT_RANGE_MS.start(),
+                PROBE_TIMEOUT_RANGE_MS.end()
+            )));
+        }
+        settings.probe_timeout_ms = probe_timeout_ms;
+    }
+
+    if let Some(allow_force_open_non_http) = patch.allow_force_open_non_http {
+        settings.allow_force_open_non_http = allow_force_open_non_http;
     }
 
     if let Some(blocked_ports) = patch.blocked_ports {
@@ -257,6 +283,7 @@ mod tests {
             hidden_ports: vec![3000, 3000],
             blocked_ports: vec![22, 22, 2376],
             auto_refresh_secs: 999,
+            probe_timeout_ms: 9999,
             ..PreviewSettings::default()
         };
 
@@ -266,5 +293,13 @@ mod tests {
         assert_eq!(settings.hidden_ports, vec![3000]);
         assert_eq!(settings.blocked_ports, vec![22, 2376]);
         assert_eq!(settings.auto_refresh_secs, 5);
+        assert_eq!(settings.probe_timeout_ms, DEFAULT_PROBE_TIMEOUT_MS);
+    }
+
+    #[test]
+    fn preview_settings_defaults_include_preview_probe_controls() {
+        let settings = PreviewSettings::default();
+        assert_eq!(settings.probe_timeout_ms, DEFAULT_PROBE_TIMEOUT_MS);
+        assert!(settings.allow_force_open_non_http);
     }
 }

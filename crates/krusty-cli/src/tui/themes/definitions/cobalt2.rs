@@ -1,10 +1,13 @@
-use crate::tui::themes::{base::ThemeBuilder, Theme};
+use crate::tui::themes::{
+    base::{CoreColors, ThemeBuilder},
+    Theme,
+};
 use ratatui::style::Color;
 
 /// Cobalt 2 theme
 pub fn cobalt2() -> Theme {
     ThemeBuilder::new("cobalt2", "Cobalt 2")
-        .core_colors(
+        .core_colors(CoreColors::new(
             Color::Rgb(25, 53, 73),
             Color::Rgb(35, 79, 109),
             Color::Rgb(0, 136, 255),
@@ -12,7 +15,7 @@ pub fn cobalt2() -> Theme {
             Color::Rgb(255, 255, 255),
             Color::Rgb(58, 217, 0),
             Color::Rgb(173, 183, 201),
-        )
+        ))
         .mode_colors(
             Color::Rgb(58, 217, 0),
             Color::Rgb(128, 255, 187),

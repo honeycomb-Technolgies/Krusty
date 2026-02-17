@@ -1,10 +1,13 @@
-use crate::tui::themes::{base::ThemeBuilder, Theme};
+use crate::tui::themes::{
+    base::{CoreColors, ThemeBuilder},
+    Theme,
+};
 use ratatui::style::Color;
 
 /// Palenight theme
 pub fn palenight() -> Theme {
     ThemeBuilder::new("palenight", "Palenight")
-        .core_colors(
+        .core_colors(CoreColors::new(
             Color::Rgb(41, 45, 62),
             Color::Rgb(68, 71, 90),
             Color::Rgb(130, 170, 255),
@@ -12,7 +15,7 @@ pub fn palenight() -> Theme {
             Color::Rgb(166, 172, 205),
             Color::Rgb(195, 232, 141),
             Color::Rgb(103, 110, 149),
-        )
+        ))
         .mode_colors(
             Color::Rgb(195, 232, 141),
             Color::Rgb(199, 146, 234),

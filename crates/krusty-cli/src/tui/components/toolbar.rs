@@ -61,19 +61,29 @@ pub struct PlanInfo<'a> {
     pub total: usize,
 }
 
+pub struct ToolbarProps<'a> {
+    pub theme: &'a Theme,
+    pub work_mode: WorkMode,
+    pub session_title: Option<&'a str>,
+    pub is_editing: bool,
+    pub edit_buffer: &'a str,
+    pub is_busy: bool,
+    pub plan_info: Option<PlanInfo<'a>>,
+}
+
 /// Render the toolbar at the top of the screen
 /// Returns the clickable area for the session title (if in chat mode)
-pub fn render_toolbar(
-    f: &mut Frame,
-    area: Rect,
-    theme: &Theme,
-    work_mode: WorkMode,
-    session_title: Option<&str>,
-    is_editing: bool,
-    edit_buffer: &str,
-    is_busy: bool,
-    plan_info: Option<PlanInfo<'_>>,
-) -> Option<Rect> {
+pub fn render_toolbar(f: &mut Frame, area: Rect, props: ToolbarProps<'_>) -> Option<Rect> {
+    let ToolbarProps {
+        theme,
+        work_mode,
+        session_title,
+        is_editing,
+        edit_buffer,
+        is_busy,
+        plan_info,
+    } = props;
+
     // Toolbar block with rounded borders
     let block = Block::default()
         .borders(Borders::ALL)

@@ -29,6 +29,12 @@ function arrayBufferToBase64Url(buffer: ArrayBuffer): string {
 	return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
+function toArrayBuffer(view: Uint8Array): ArrayBuffer {
+	const copy = new Uint8Array(view.byteLength);
+	copy.set(view);
+	return copy.buffer;
+}
+
 function rememberSubscribed(value: boolean) {
 	try {
 		if (value) {
@@ -70,6 +76,7 @@ async function syncSubscriptionWithServer(subscription: PushSubscription): Promi
 async function ensureSubscription(registration: ServiceWorkerRegistration): Promise<PushSubscription> {
 	const { public_key } = await apiClient.getVapidPublicKey();
 	const applicationServerKey = urlBase64ToUint8Array(public_key);
+	const applicationServerKeyBuffer = toArrayBuffer(applicationServerKey);
 
 	const existing = await registration.pushManager.getSubscription();
 	if (existing) {
@@ -82,7 +89,7 @@ async function ensureSubscription(registration: ServiceWorkerRegistration): Prom
 
 	return registration.pushManager.subscribe({
 		userVisibleOnly: true,
-		applicationServerKey
+		applicationServerKey: applicationServerKeyBuffer
 	});
 }
 

@@ -1,10 +1,13 @@
-use crate::tui::themes::{base::ThemeBuilder, Theme};
+use crate::tui::themes::{
+    base::{CoreColors, ThemeBuilder},
+    Theme,
+};
 use ratatui::style::Color;
 
 /// Cyberpunk theme
 pub fn cyberpunk() -> Theme {
     ThemeBuilder::new("cyberpunk", "Cyberpunk")
-        .core_colors(
+        .core_colors(CoreColors::new(
             Color::Rgb(38, 10, 57),
             Color::Rgb(139, 0, 255),
             Color::Rgb(255, 0, 247),
@@ -12,7 +15,7 @@ pub fn cyberpunk() -> Theme {
             Color::Rgb(200, 200, 255),
             Color::Rgb(0, 255, 179),
             Color::Rgb(100, 80, 130),
-        )
+        ))
         .mode_colors(
             Color::Rgb(0, 255, 179),
             Color::Rgb(255, 0, 247),

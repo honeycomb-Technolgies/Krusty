@@ -1,10 +1,13 @@
-use crate::tui::themes::{base::ThemeBuilder, Theme};
+use crate::tui::themes::{
+    base::{CoreColors, ThemeBuilder},
+    Theme,
+};
 use ratatui::style::Color;
 
 /// Sith Lord theme
 pub fn sith_lord() -> Theme {
     ThemeBuilder::new("sith-lord", "Sith Lord")
-        .core_colors(
+        .core_colors(CoreColors::new(
             Color::Rgb(30, 10, 12),
             Color::Rgb(139, 0, 0),
             Color::Rgb(220, 20, 60),
@@ -12,7 +15,7 @@ pub fn sith_lord() -> Theme {
             Color::Rgb(192, 192, 192),
             Color::Rgb(255, 69, 0),
             Color::Rgb(105, 105, 105),
-        )
+        ))
         .mode_colors(
             Color::Rgb(255, 69, 0),
             Color::Rgb(220, 20, 60),

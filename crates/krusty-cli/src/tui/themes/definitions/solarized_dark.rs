@@ -1,10 +1,13 @@
-use crate::tui::themes::{base::ThemeBuilder, Theme};
+use crate::tui::themes::{
+    base::{CoreColors, ThemeBuilder},
+    Theme,
+};
 use ratatui::style::Color;
 
 /// Solarized Dark theme
 pub fn solarized_dark() -> Theme {
     ThemeBuilder::new("solarized-dark", "Solarized Dark")
-        .core_colors(
+        .core_colors(CoreColors::new(
             Color::Rgb(0, 43, 54),
             Color::Rgb(88, 110, 117),
             Color::Rgb(38, 139, 210),
@@ -12,7 +15,7 @@ pub fn solarized_dark() -> Theme {
             Color::Rgb(131, 148, 150),
             Color::Rgb(133, 153, 0),
             Color::Rgb(88, 110, 117),
-        )
+        ))
         .mode_colors(
             Color::Rgb(133, 153, 0),
             Color::Rgb(211, 54, 130),

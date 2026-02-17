@@ -165,6 +165,8 @@
 				enabled: previewSettings.enabled,
 				auto_refresh_secs: previewSettings.auto_refresh_secs,
 				show_only_http_like: previewSettings.show_only_http_like,
+				probe_timeout_ms: previewSettings.probe_timeout_ms,
+				allow_force_open_non_http: previewSettings.allow_force_open_non_http,
 				blocked_ports: toPortList(blockedPortsInput)
 			});
 			syncBlockedPortsInput(previewSettings);
@@ -404,33 +406,62 @@
 									</button>
 								</div>
 
-								<div class="grid grid-cols-1 gap-3 md:grid-cols-2">
-									<label class="rounded-lg border border-border p-3">
-										<div class="mb-1 text-sm font-medium">Auto Refresh (sec)</div>
-										<input
-											type="number"
+									<div class="grid grid-cols-1 gap-3 md:grid-cols-3">
+										<label class="rounded-lg border border-border p-3">
+											<div class="mb-1 text-sm font-medium">Auto Refresh (sec)</div>
+											<input
+												type="number"
 											min="2"
 											max="60"
 											bind:value={previewSettings.auto_refresh_secs}
-											class="w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm"
-										/>
-									</label>
-									<div class="rounded-lg border border-border p-3">
-										<div class="mb-1 text-sm font-medium">HTTP-like Filter</div>
-										<button
-											onclick={() => {
+												class="w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+											/>
+										</label>
+										<label class="rounded-lg border border-border p-3">
+											<div class="mb-1 text-sm font-medium">Probe Timeout (ms)</div>
+											<input
+												type="number"
+												min="300"
+												max="1500"
+												bind:value={previewSettings.probe_timeout_ms}
+												class="w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+											/>
+										</label>
+										<div class="rounded-lg border border-border p-3">
+											<div class="mb-1 text-sm font-medium">HTTP-like Filter</div>
+											<button
+												onclick={() => {
 												if (previewSettings) {
 													previewSettings.show_only_http_like = !previewSettings.show_only_http_like;
 												}
 											}}
 											class="rounded-md border border-input px-2 py-1.5 text-sm hover:bg-muted"
-										>
-											{previewSettings.show_only_http_like
-												? 'Show HTTP-like only'
-												: 'Show all discovered ports'}
-										</button>
+											>
+												{previewSettings.show_only_http_like
+													? 'Show HTTP-like only'
+													: 'Show all discovered ports'}
+											</button>
+											<div class="mt-2 text-xs text-muted-foreground">
+												Probe-backed previewability is shown in Workspace regardless of this filter.
+											</div>
+										</div>
+										<div class="rounded-lg border border-border p-3 md:col-span-3">
+											<div class="mb-1 text-sm font-medium">Non-HTTP Force Open</div>
+											<button
+												onclick={() => {
+													if (previewSettings) {
+														previewSettings.allow_force_open_non_http =
+															!previewSettings.allow_force_open_non_http;
+													}
+												}}
+												class="rounded-md border border-input px-2 py-1.5 text-sm hover:bg-muted"
+											>
+												{previewSettings.allow_force_open_non_http
+													? 'Allow force-open for non-HTTP ports'
+													: 'Block force-open for non-HTTP ports'}
+											</button>
+										</div>
 									</div>
-								</div>
 
 								<label class="block rounded-lg border border-border p-3">
 									<div class="mb-1 text-sm font-medium">Blocked Ports</div>

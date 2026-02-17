@@ -1,10 +1,13 @@
-use crate::tui::themes::{base::ThemeBuilder, Theme};
+use crate::tui::themes::{
+    base::{CoreColors, ThemeBuilder},
+    Theme,
+};
 use ratatui::style::Color;
 
 /// Tokyo Night theme - popular dark theme with blue/purple tones
 pub fn tokyo_night() -> Theme {
     ThemeBuilder::new("tokyo-night", "Tokyo Night")
-        .core_colors(
+        .core_colors(CoreColors::new(
             Color::Rgb(26, 27, 38),    // bg
             Color::Rgb(65, 72, 104),   // border
             Color::Rgb(122, 162, 247), // title
@@ -12,7 +15,7 @@ pub fn tokyo_night() -> Theme {
             Color::Rgb(192, 202, 245), // text
             Color::Rgb(158, 206, 106), // success
             Color::Rgb(86, 95, 137),   // dim
-        )
+        ))
         .mode_colors(
             Color::Rgb(158, 206, 106), // view (green)
             Color::Rgb(247, 118, 142), // chat (pink)

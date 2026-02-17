@@ -66,6 +66,16 @@ pub struct BashBlock {
     pending_output: String,
 }
 
+#[derive(Clone, Copy)]
+struct FrameRenderParams {
+    area: Rect,
+    y: u16,
+    content_end_x: u16,
+    right_x: u16,
+    border_color: Color,
+    needs_scrollbar: bool,
+}
+
 impl BashBlock {
     /// Create a new bash block
     pub fn new(command: String) -> Self {
@@ -511,15 +521,16 @@ impl BashBlock {
         // Top border - only if not clipped
         if clip_top == 0 {
             self.render_header(
-                render_y,
-                area.x,
-                area.width,
-                content_end_x,
-                right_x,
                 buf,
                 theme,
-                border_color,
-                needs_scrollbar,
+                FrameRenderParams {
+                    area,
+                    y: render_y,
+                    content_end_x,
+                    right_x,
+                    border_color,
+                    needs_scrollbar,
+                },
             );
             render_y += 1;
         }
@@ -607,13 +618,15 @@ impl BashBlock {
                 self.render_progress_bar(area, buf, progress_y, border_color, theme);
             }
             self.render_footer(
-                area,
                 buf,
-                border_color,
-                content_end_x,
-                right_x,
-                needs_scrollbar,
-                theme,
+                FrameRenderParams {
+                    area,
+                    y: area.y + area.height - 1,
+                    content_end_x,
+                    right_x,
+                    border_color,
+                    needs_scrollbar,
+                },
             );
         }
 
@@ -648,18 +661,17 @@ impl BashBlock {
     }
 
     /// Render header with command (heavy/thick line style)
-    fn render_header(
-        &self,
-        y: u16,
-        x: u16,
-        width: u16,
-        content_end_x: u16,
-        right_x: u16,
-        buf: &mut Buffer,
-        theme: &Theme,
-        border_color: Color,
-        needs_scrollbar: bool,
-    ) {
+    fn render_header(&self, buf: &mut Buffer, theme: &Theme, params: FrameRenderParams) {
+        let FrameRenderParams {
+            area,
+            y,
+            content_end_x,
+            right_x,
+            border_color,
+            needs_scrollbar,
+        } = params;
+        let x = area.x;
+        let width = area.width;
         let text_color = theme.text_color;
 
         // Left corner (heavy)
@@ -866,17 +878,15 @@ impl BashBlock {
     }
 
     /// Render footer
-    fn render_footer(
-        &self,
-        area: Rect,
-        buf: &mut Buffer,
-        border_color: Color,
-        content_end_x: u16,
-        right_x: u16,
-        needs_scrollbar: bool,
-        _theme: &Theme,
-    ) {
-        let y = area.y + area.height - 1;
+    fn render_footer(&self, buf: &mut Buffer, params: FrameRenderParams) {
+        let FrameRenderParams {
+            area,
+            y,
+            content_end_x,
+            right_x,
+            border_color,
+            needs_scrollbar,
+        } = params;
 
         // Left corner (heavy)
         if let Some(cell) = buf.cell_mut((area.x, y)) {

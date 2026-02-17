@@ -1,10 +1,13 @@
-use crate::tui::themes::{base::ThemeBuilder, Theme};
+use crate::tui::themes::{
+    base::{CoreColors, ThemeBuilder},
+    Theme,
+};
 use ratatui::style::Color;
 
 /// Retro Wave theme
 pub fn retro_wave() -> Theme {
     ThemeBuilder::new("retro-wave", "Retro Wave")
-        .core_colors(
+        .core_colors(CoreColors::new(
             Color::Rgb(48, 10, 89),
             Color::Rgb(255, 102, 204),
             Color::Rgb(255, 204, 0),
@@ -12,7 +15,7 @@ pub fn retro_wave() -> Theme {
             Color::Rgb(255, 255, 255),
             Color::Rgb(102, 255, 102),
             Color::Rgb(153, 102, 204),
-        )
+        ))
         .mode_colors(
             Color::Rgb(102, 255, 102),
             Color::Rgb(255, 102, 204),

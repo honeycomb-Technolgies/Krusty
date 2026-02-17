@@ -1,10 +1,13 @@
-use crate::tui::themes::{base::ThemeBuilder, Theme};
+use crate::tui::themes::{
+    base::{CoreColors, ThemeBuilder},
+    Theme,
+};
 use ratatui::style::Color;
 
 /// Matrix theme
 pub fn matrix() -> Theme {
     ThemeBuilder::new("matrix", "Matrix")
-        .core_colors(
+        .core_colors(CoreColors::new(
             Color::Rgb(10, 30, 12),
             Color::Rgb(0, 100, 0),
             Color::Rgb(0, 255, 0),
@@ -12,7 +15,7 @@ pub fn matrix() -> Theme {
             Color::Rgb(0, 255, 0),
             Color::Rgb(50, 255, 50),
             Color::Rgb(0, 128, 0),
-        )
+        ))
         .mode_colors(
             Color::Rgb(0, 255, 0),
             Color::Rgb(0, 200, 0),

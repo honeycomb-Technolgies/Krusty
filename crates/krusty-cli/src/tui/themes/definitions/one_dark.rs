@@ -1,10 +1,13 @@
-use crate::tui::themes::{base::ThemeBuilder, Theme};
+use crate::tui::themes::{
+    base::{CoreColors, ThemeBuilder},
+    Theme,
+};
 use ratatui::style::Color;
 
 /// One Dark theme
 pub fn one_dark() -> Theme {
     ThemeBuilder::new("one-dark", "One Dark")
-        .core_colors(
+        .core_colors(CoreColors::new(
             Color::Rgb(40, 44, 52),
             Color::Rgb(61, 68, 81),
             Color::Rgb(97, 175, 239),
@@ -12,7 +15,7 @@ pub fn one_dark() -> Theme {
             Color::Rgb(171, 178, 191),
             Color::Rgb(152, 195, 121),
             Color::Rgb(92, 99, 112),
-        )
+        ))
         .mode_colors(
             Color::Rgb(152, 195, 121),
             Color::Rgb(224, 108, 117),

@@ -8,6 +8,39 @@ pub struct ThemeBuilder {
     theme: Theme,
 }
 
+#[derive(Clone, Copy)]
+pub struct CoreColors {
+    pub bg: Color,
+    pub border: Color,
+    pub title: Color,
+    pub accent: Color,
+    pub text: Color,
+    pub success: Color,
+    pub dim: Color,
+}
+
+impl CoreColors {
+    pub const fn new(
+        bg: Color,
+        border: Color,
+        title: Color,
+        accent: Color,
+        text: Color,
+        success: Color,
+        dim: Color,
+    ) -> Self {
+        Self {
+            bg,
+            border,
+            title,
+            accent,
+            text,
+            success,
+            dim,
+        }
+    }
+}
+
 impl ThemeBuilder {
     /// Create a new theme builder with the given name and base colors
     pub fn new(name: impl Into<String>, display_name: impl Into<String>) -> Self {
@@ -84,23 +117,14 @@ impl ThemeBuilder {
     }
 
     /// Set core colors - these are required for every theme
-    pub fn core_colors(
-        mut self,
-        bg: Color,
-        border: Color,
-        title: Color,
-        accent: Color,
-        text: Color,
-        success: Color,
-        dim: Color,
-    ) -> Self {
-        self.theme.bg_color = bg;
-        self.theme.border_color = border;
-        self.theme.title_color = title;
-        self.theme.accent_color = accent;
-        self.theme.text_color = text;
-        self.theme.success_color = success;
-        self.theme.dim_color = dim;
+    pub fn core_colors(mut self, colors: CoreColors) -> Self {
+        self.theme.bg_color = colors.bg;
+        self.theme.border_color = colors.border;
+        self.theme.title_color = colors.title;
+        self.theme.accent_color = colors.accent;
+        self.theme.text_color = colors.text;
+        self.theme.success_color = colors.success;
+        self.theme.dim_color = colors.dim;
         self
     }
 

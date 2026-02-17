@@ -1,10 +1,13 @@
-use crate::tui::themes::{base::ThemeBuilder, Theme};
+use crate::tui::themes::{
+    base::{CoreColors, ThemeBuilder},
+    Theme,
+};
 use ratatui::style::Color;
 
 /// Kanagawa theme
 pub fn kanagawa() -> Theme {
     ThemeBuilder::new("kanagawa", "Kanagawa")
-        .core_colors(
+        .core_colors(CoreColors::new(
             Color::Rgb(31, 31, 40),
             Color::Rgb(54, 54, 70),
             Color::Rgb(126, 156, 216),
@@ -12,7 +15,7 @@ pub fn kanagawa() -> Theme {
             Color::Rgb(220, 215, 186),
             Color::Rgb(152, 187, 108),
             Color::Rgb(114, 113, 105),
-        )
+        ))
         .mode_colors(
             Color::Rgb(152, 187, 108),
             Color::Rgb(210, 126, 153),

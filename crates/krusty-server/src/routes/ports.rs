@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::{
     body,
@@ -15,7 +15,7 @@ use axum::{
     routing::{any, get},
     Json, Router,
 };
-use futures::{SinkExt, StreamExt};
+use futures::{stream, SinkExt, StreamExt};
 use reqwest::redirect::Policy;
 use serde::Serialize;
 use tokio_tungstenite::{connect_async, tungstenite::Message as UpstreamMessage};
@@ -30,6 +30,7 @@ use crate::AppState;
 use super::preview_settings::{load_preview_settings, PreviewSettings};
 
 const MAX_PROXY_REQUEST_BODY_BYTES: usize = 8 * 1024 * 1024;
+const PORT_PROBE_CONCURRENCY: usize = 8;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -49,7 +50,27 @@ struct PortEntry {
     active: bool,
     pinned: bool,
     is_http_like: bool,
+    is_previewable_http: bool,
+    probe_status: ProbeStatus,
+    last_probe_ms: Option<u32>,
     preview_path: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum ProbeStatus {
+    Ok,
+    Timeout,
+    ConnRefused,
+    NonHttp,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProbeResult {
+    is_previewable_http: bool,
+    status: ProbeStatus,
+    duration_ms: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -78,14 +99,17 @@ async fn list_ports(
         }));
     }
 
-    let listeners = match discover_listening_tcp_ports() {
-        Ok(listeners) => listeners,
+    let (listeners, discovery_error) = match discover_listening_tcp_ports() {
+        Ok(listeners) => (listeners, None),
         Err(err) => {
             tracing::warn!(
                 "Port discovery failed, falling back to pinned only: {}",
                 err
             );
-            vec![]
+            (
+                vec![],
+                Some("Port discovery failed. Showing pinned ports only.".to_string()),
+            )
         }
     };
     let discovered_by_port: HashMap<u16, TcpListenerInfo> =
@@ -165,8 +189,20 @@ async fn list_ports(
             active,
             pinned,
             is_http_like,
+            is_previewable_http: false,
+            probe_status: ProbeStatus::ConnRefused,
+            last_probe_ms: None,
             preview_path: format!("/api/ports/{}/proxy", port),
         });
+    }
+
+    let probe_results = probe_ports_previewability(&ports, settings.probe_timeout_ms).await;
+    for entry in &mut ports {
+        if let Some(probe) = probe_results.get(&entry.port) {
+            entry.is_previewable_http = probe.is_previewable_http;
+            entry.probe_status = probe.status;
+            entry.last_probe_ms = Some(probe.duration_ms);
+        }
     }
 
     ports.sort_by(|a, b| {
@@ -179,7 +215,7 @@ async fn list_ports(
     Ok(Json(PortListResponse {
         ports,
         settings,
-        discovery_error: None,
+        discovery_error,
     }))
 }
 
@@ -431,6 +467,95 @@ fn proxy_http_client() -> &'static reqwest::Client {
     })
 }
 
+async fn probe_ports_previewability(
+    entries: &[PortEntry],
+    timeout_ms: u16,
+) -> HashMap<u16, ProbeResult> {
+    let timeout = Duration::from_millis(timeout_ms as u64);
+    let ports: Vec<u16> = entries
+        .iter()
+        .filter(|p| p.active)
+        .map(|p| p.port)
+        .collect();
+    if ports.is_empty() {
+        return HashMap::new();
+    }
+
+    stream::iter(ports.into_iter())
+        .map(|port| async move { (port, probe_previewable_port(port, timeout).await) })
+        .buffer_unordered(PORT_PROBE_CONCURRENCY)
+        .collect::<Vec<(u16, ProbeResult)>>()
+        .await
+        .into_iter()
+        .collect()
+}
+
+async fn probe_previewable_port(port: u16, timeout: Duration) -> ProbeResult {
+    let start = Instant::now();
+    let request = proxy_http_client()
+        .get(format!("http://127.0.0.1:{}/", port))
+        .timeout(timeout)
+        .send()
+        .await;
+
+    let elapsed = start.elapsed();
+    let duration_ms = elapsed.as_millis().min(u128::from(u32::MAX)) as u32;
+
+    match request {
+        Ok(response) => {
+            let _ = response.bytes().await;
+            ProbeResult {
+                is_previewable_http: true,
+                status: ProbeStatus::Ok,
+                duration_ms,
+            }
+        }
+        Err(err) => {
+            let err_message = err.to_string();
+            let status = classify_probe_error(err.is_timeout(), err.is_connect(), &err_message);
+            ProbeResult {
+                is_previewable_http: false,
+                status,
+                duration_ms,
+            }
+        }
+    }
+}
+
+fn classify_probe_error(is_timeout: bool, is_connect: bool, message: &str) -> ProbeStatus {
+    let message_lower;
+    let message_lower = if message.bytes().any(|byte| byte.is_ascii_uppercase()) {
+        message_lower = message.to_ascii_lowercase();
+        message_lower.as_str()
+    } else {
+        message
+    };
+
+    if is_timeout {
+        return ProbeStatus::Timeout;
+    }
+    if is_connect {
+        if message_lower.contains("connection refused")
+            || message_lower.contains("failed to connect")
+        {
+            return ProbeStatus::ConnRefused;
+        }
+        if message_lower.contains("invalid http")
+            || message_lower.contains("http parse")
+            || message_lower.contains("connection closed before message completed")
+        {
+            return ProbeStatus::NonHttp;
+        }
+    }
+    if message_lower.contains("invalid http")
+        || message_lower.contains("http parse")
+        || message_lower.contains("connection closed before message completed")
+    {
+        return ProbeStatus::NonHttp;
+    }
+    ProbeStatus::Error
+}
+
 fn resolve_process_hint<'a>(
     port: u16,
     listener: Option<&TcpListenerInfo>,
@@ -588,6 +713,8 @@ fn is_hop_by_hop_header(name: &HeaderName) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     #[test]
     fn build_upstream_path_handles_root_and_query() {
@@ -620,5 +747,61 @@ mod tests {
             None,
             Some("uvicorn app.main:app --port 9922")
         ));
+    }
+
+    #[test]
+    fn classify_probe_error_maps_timeout_connrefused_and_non_http() {
+        assert_eq!(
+            classify_probe_error(true, false, "deadline elapsed"),
+            ProbeStatus::Timeout
+        );
+        assert_eq!(
+            classify_probe_error(true, true, "connection refused"),
+            ProbeStatus::Timeout
+        );
+        assert_eq!(
+            classify_probe_error(false, true, "connection refused"),
+            ProbeStatus::ConnRefused
+        );
+        assert_eq!(
+            classify_probe_error(false, true, "invalid HTTP version parsed"),
+            ProbeStatus::NonHttp
+        );
+        assert_eq!(
+            classify_probe_error(false, false, "http parse error"),
+            ProbeStatus::NonHttp
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_previewable_port_accepts_http_statuses() {
+        let listener = match TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                eprintln!(
+                    "skipping probe_previewable_port_accepts_http_statuses: bind permission denied ({err})"
+                );
+                return;
+            }
+            Err(err) => panic!("bind test http listener: {err}"),
+        };
+        let port = listener.local_addr().expect("listener local addr").port();
+
+        let server = tokio::spawn(async move {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                let mut buf = [0u8; 1024];
+                let _ = socket.read(&mut buf).await;
+                let _ = socket
+                    .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
+                    .await;
+            }
+        });
+
+        let result = probe_previewable_port(port, Duration::from_millis(1000)).await;
+        server.await.expect("join test http server");
+
+        assert!(result.is_previewable_http);
+        assert_eq!(result.status, ProbeStatus::Ok);
+        assert!(result.duration_ms <= 1000);
     }
 }

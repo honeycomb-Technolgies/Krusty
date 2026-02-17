@@ -1,10 +1,13 @@
-use crate::tui::themes::{base::ThemeBuilder, Theme};
+use crate::tui::themes::{
+    base::{CoreColors, ThemeBuilder},
+    Theme,
+};
 use ratatui::style::Color;
 
 /// Serenity theme
 pub fn serenity() -> Theme {
     ThemeBuilder::new("serenity", "Serenity")
-        .core_colors(
+        .core_colors(CoreColors::new(
             Color::Rgb(52, 56, 74),
             Color::Rgb(73, 77, 100),
             Color::Rgb(146, 195, 224),
@@ -12,7 +15,7 @@ pub fn serenity() -> Theme {
             Color::Rgb(212, 213, 219),
             Color::Rgb(146, 224, 176),
             Color::Rgb(108, 113, 134),
-        )
+        ))
         .mode_colors(
             Color::Rgb(146, 224, 176),
             Color::Rgb(224, 146, 195),

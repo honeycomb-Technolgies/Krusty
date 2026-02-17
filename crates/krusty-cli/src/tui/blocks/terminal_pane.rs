@@ -75,6 +75,15 @@ pub struct TerminalPane {
     pinned: bool,
 }
 
+#[derive(Clone, Copy)]
+struct ContentRenderParams {
+    area: Rect,
+    content_end_x: u16,
+    start_y: u16,
+    lines_to_show: u16,
+    clip_top: u16,
+}
+
 impl TerminalPane {
     /// Spawn a command in a new PTY
     pub fn spawn(cmd: &str, rows: u16, cols: u16) -> anyhow::Result<Self> {
@@ -607,16 +616,15 @@ impl TerminalPane {
     }
 
     /// Render content area
-    fn render_content(
-        &self,
-        area: Rect,
-        buf: &mut Buffer,
-        theme: &Theme,
-        content_end_x: u16,
-        start_y: u16,
-        lines_to_show: u16,
-        clip_top: u16,
-    ) {
+    fn render_content(&self, buf: &mut Buffer, theme: &Theme, params: ContentRenderParams) {
+        let ContentRenderParams {
+            area,
+            content_end_x,
+            start_y,
+            lines_to_show,
+            clip_top,
+        } = params;
+
         let parser = match self.parser.lock() {
             Ok(p) => p,
             Err(_) => return,
@@ -821,13 +829,15 @@ impl StreamBlock for TerminalPane {
         let content_lines_to_show = area.height.saturating_sub(reserved_top + reserved_bottom);
 
         self.render_content(
-            area,
             buf,
             theme,
-            content_end_x,
-            render_y,
-            content_lines_to_show,
-            clip_top,
+            ContentRenderParams {
+                area,
+                content_end_x,
+                start_y: render_y,
+                lines_to_show: content_lines_to_show,
+                clip_top,
+            },
         );
 
         // Footer - only if not clipped from bottom

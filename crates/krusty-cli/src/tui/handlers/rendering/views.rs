@@ -14,8 +14,9 @@ use crate::tui::app::App;
 use crate::tui::blocks::StreamBlock;
 use crate::tui::components::{
     render_input_scrollbar, render_messages_scrollbar, render_plan_sidebar, render_plugin_window,
-    render_status_bar, render_toolbar, MIN_TERMINAL_WIDTH,
+    render_status_bar, render_toolbar, StatusBarProps, ToolbarProps, MIN_TERMINAL_WIDTH,
 };
+use crate::tui::input::multi_line::StyledInputRenderOptions;
 use crate::tui::state::SelectionArea;
 
 impl App {
@@ -43,13 +44,15 @@ impl App {
         render_toolbar(
             f,
             chunks[0],
-            &self.ui.theme,
-            self.ui.work_mode,
-            None,
-            false,
-            "",
-            self.is_busy(),
-            self.get_plan_info(),
+            ToolbarProps {
+                theme: &self.ui.theme,
+                work_mode: self.ui.work_mode,
+                session_title: None,
+                is_editing: false,
+                edit_buffer: "",
+                is_busy: self.is_busy(),
+                plan_info: self.get_plan_info(),
+            },
         );
 
         // Logo area with border
@@ -323,17 +326,19 @@ impl App {
             .input_file_ref
             .as_ref()
             .map(|(s, e, _)| (*s, *e));
-        let input_widget = self.ui.input.render_styled_with_file_refs(
-            input_area,
-            self.ui.theme.bg_color,
-            input_border_color,
-            self.ui.theme.text_color,
-            input_selection,
-            self.ui.theme.selection_bg_color,
-            self.ui.theme.selection_fg_color,
-            Some(self.ui.theme.link_color),
-            hover_range,
-        );
+        let input_widget = self
+            .ui
+            .input
+            .render_styled_with_file_refs(StyledInputRenderOptions {
+                bg_color: self.ui.theme.bg_color,
+                border_color: input_border_color,
+                text_color: self.ui.theme.text_color,
+                selection: input_selection,
+                selection_bg: self.ui.theme.selection_bg_color,
+                selection_fg: self.ui.theme.selection_fg_color,
+                link_color: Some(self.ui.theme.link_color),
+                hover_range,
+            });
         f.render_widget(input_widget, input_area);
 
         // Render input scrollbar (always shows track, thumb when content overflows)
@@ -387,13 +392,15 @@ impl App {
         render_status_bar(
             f,
             chunks[4],
-            &self.ui.theme,
-            &self.runtime.current_model,
-            &self.runtime.working_dir,
-            self.runtime.git_status.as_ref(),
-            None,
-            self.runtime.running_process_count,
-            self.runtime.running_process_elapsed,
+            StatusBarProps {
+                theme: &self.ui.theme,
+                model: &self.runtime.current_model,
+                cwd: &self.runtime.working_dir,
+                git_status: self.runtime.git_status.as_ref(),
+                context_tokens: None,
+                running_processes: self.runtime.running_process_count,
+                process_elapsed: self.runtime.running_process_elapsed,
+            },
         );
     }
 
@@ -469,13 +476,15 @@ impl App {
         self.ui.scroll_system.layout.toolbar_title_area = render_toolbar(
             f,
             chunks[0],
-            &self.ui.theme,
-            self.ui.work_mode,
-            self.runtime.session_title.as_deref(),
-            self.runtime.title_editor.is_editing,
-            &self.runtime.title_editor.buffer,
-            self.is_busy(),
-            self.get_plan_info(),
+            ToolbarProps {
+                theme: &self.ui.theme,
+                work_mode: self.ui.work_mode,
+                session_title: self.runtime.session_title.as_deref(),
+                is_editing: self.runtime.title_editor.is_editing,
+                edit_buffer: &self.runtime.title_editor.buffer,
+                is_busy: self.is_busy(),
+                plan_info: self.get_plan_info(),
+            },
         );
 
         // Render pinned terminal if present
@@ -586,17 +595,19 @@ impl App {
             .input_file_ref
             .as_ref()
             .map(|(s, e, _)| (*s, *e));
-        let input_widget = self.ui.input.render_styled_with_file_refs(
-            input_area,
-            self.ui.theme.bg_color,
-            input_border_color,
-            self.ui.theme.text_color,
-            input_selection,
-            self.ui.theme.selection_bg_color,
-            self.ui.theme.selection_fg_color,
-            Some(self.ui.theme.link_color),
-            hover_range,
-        );
+        let input_widget = self
+            .ui
+            .input
+            .render_styled_with_file_refs(StyledInputRenderOptions {
+                bg_color: self.ui.theme.bg_color,
+                border_color: input_border_color,
+                text_color: self.ui.theme.text_color,
+                selection: input_selection,
+                selection_bg: self.ui.theme.selection_bg_color,
+                selection_fg: self.ui.theme.selection_fg_color,
+                link_color: Some(self.ui.theme.link_color),
+                hover_range,
+            });
         f.render_widget(input_widget, input_area);
 
         // Render input scrollbar (1 column wide, always shows track, thumb when content overflows)
@@ -654,13 +665,15 @@ impl App {
         render_status_bar(
             f,
             chunks[5],
-            &self.ui.theme,
-            &self.runtime.current_model,
-            &self.runtime.working_dir,
-            self.runtime.git_status.as_ref(),
-            context_tokens,
-            self.runtime.running_process_count,
-            self.runtime.running_process_elapsed,
+            StatusBarProps {
+                theme: &self.ui.theme,
+                model: &self.runtime.current_model,
+                cwd: &self.runtime.working_dir,
+                git_status: self.runtime.git_status.as_ref(),
+                context_tokens,
+                running_processes: self.runtime.running_process_count,
+                process_elapsed: self.runtime.running_process_elapsed,
+            },
         );
 
         // Render sidebar content (plan and/or plugin window)
