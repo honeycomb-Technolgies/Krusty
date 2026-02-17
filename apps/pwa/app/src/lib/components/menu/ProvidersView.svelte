@@ -18,6 +18,7 @@
 	let apiKeyInput = $state('');
 	let showApiKey = $state(false);
 	let saving = $state(false);
+	let apiKeyInputEl = $state<HTMLInputElement>(undefined!);
 
 	onMount(() => {
 		loadProviders();
@@ -71,6 +72,7 @@
 		editingProvider = providerId;
 		apiKeyInput = '';
 		showApiKey = false;
+		setTimeout(() => apiKeyInputEl?.focus(), 0);
 	}
 
 	function cancelEditing() {
@@ -156,6 +158,7 @@
 							<div class="mt-4 space-y-3">
 								<div class="relative">
 									<input
+										bind:this={apiKeyInputEl}
 										type={showApiKey ? 'text' : 'password'}
 										bind:value={apiKeyInput}
 										placeholder="Enter API key..."
