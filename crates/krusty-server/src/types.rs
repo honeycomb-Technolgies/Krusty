@@ -20,6 +20,7 @@ pub struct UpdateSessionRequest {
     pub title: Option<String>,
     pub working_dir: Option<String>,
     pub mode: Option<WorkMode>,
+    pub model: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -51,6 +52,7 @@ pub struct SessionResponse {
     pub parent_session_id: Option<String>,
     pub working_dir: Option<String>,
     pub mode: WorkMode,
+    pub model: Option<String>,
 }
 
 impl From<SessionInfo> for SessionResponse {
@@ -63,6 +65,7 @@ impl From<SessionInfo> for SessionResponse {
             parent_session_id: s.parent_session_id,
             working_dir: s.working_dir,
             mode: s.work_mode,
+            model: s.model,
         }
     }
 }

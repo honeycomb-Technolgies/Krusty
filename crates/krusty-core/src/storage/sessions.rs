@@ -11,21 +11,21 @@ use super::database::Database;
 use crate::agent::PinchContext;
 
 const LIST_SESSIONS_SQL_ALL: &str =
-    "SELECT id, title, updated_at, token_count, parent_session_id, working_dir, user_id, work_mode
+    "SELECT id, title, updated_at, token_count, parent_session_id, working_dir, user_id, work_mode, model
              FROM sessions
              ORDER BY updated_at DESC";
 const LIST_SESSIONS_SQL_BY_DIR: &str =
-    "SELECT id, title, updated_at, token_count, parent_session_id, working_dir, user_id, work_mode
+    "SELECT id, title, updated_at, token_count, parent_session_id, working_dir, user_id, work_mode, model
              FROM sessions
              WHERE working_dir = ?1
              ORDER BY updated_at DESC";
 const LIST_SESSIONS_SQL_BY_USER: &str =
-    "SELECT id, title, updated_at, token_count, parent_session_id, working_dir, user_id, work_mode
+    "SELECT id, title, updated_at, token_count, parent_session_id, working_dir, user_id, work_mode, model
              FROM sessions
              WHERE user_id = ?1
              ORDER BY updated_at DESC";
 const LIST_SESSIONS_SQL_BY_DIR_AND_USER: &str =
-    "SELECT id, title, updated_at, token_count, parent_session_id, working_dir, user_id, work_mode
+    "SELECT id, title, updated_at, token_count, parent_session_id, working_dir, user_id, work_mode, model
              FROM sessions
              WHERE working_dir = ?1 AND user_id = ?2
              ORDER BY updated_at DESC";
@@ -36,12 +36,12 @@ const LIST_SESSION_DIRS_SQL_BY_USER: &str = "SELECT DISTINCT working_dir FROM se
                  WHERE working_dir IS NOT NULL AND user_id = ?1
                  ORDER BY working_dir";
 const LIST_SESSIONS_BY_DIRECTORY_SQL: &str =
-    "SELECT id, title, updated_at, token_count, parent_session_id, working_dir, user_id, work_mode
+    "SELECT id, title, updated_at, token_count, parent_session_id, working_dir, user_id, work_mode, model
              FROM sessions
              WHERE working_dir IS NOT NULL
              ORDER BY working_dir, updated_at DESC";
 const GET_SESSION_SQL: &str =
-    "SELECT id, title, updated_at, token_count, parent_session_id, working_dir, user_id, work_mode
+    "SELECT id, title, updated_at, token_count, parent_session_id, working_dir, user_id, work_mode, model
              FROM sessions
              WHERE id = ?1";
 
@@ -60,6 +60,8 @@ pub struct SessionInfo {
     pub user_id: Option<String>,
     /// Current work mode for this session
     pub work_mode: WorkMode,
+    /// Model selected for this session
+    pub model: Option<String>,
 }
 
 /// Session work mode
@@ -192,6 +194,7 @@ impl SessionManager {
         let updated_at: String = row.get(2)?;
         let token_count: Option<i64> = row.get(3)?;
         let work_mode_raw: String = row.get(7)?;
+        let model: Option<String> = row.get(8)?;
 
         Ok(SessionInfo {
             id: row.get(0)?,
@@ -204,6 +207,7 @@ impl SessionManager {
             working_dir: row.get(5)?,
             user_id: row.get(6)?,
             work_mode: work_mode_raw.parse().unwrap_or_default(),
+            model,
         })
     }
 
@@ -336,6 +340,18 @@ impl SessionManager {
         self.db.conn().execute(
             "UPDATE sessions SET work_mode = ?1, updated_at = ?2 WHERE id = ?3",
             params![work_mode.to_string(), now, session_id],
+        )?;
+
+        Ok(())
+    }
+
+    /// Update session model
+    pub fn update_session_model(&self, session_id: &str, model: Option<&str>) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+
+        self.db.conn().execute(
+            "UPDATE sessions SET model = ?1, updated_at = ?2 WHERE id = ?3",
+            params![model, now, session_id],
         )?;
 
         Ok(())

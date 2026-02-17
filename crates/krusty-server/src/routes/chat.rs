@@ -291,6 +291,11 @@ async fn chat(
             if !sm.verify_session_ownership(&id, user_id.as_deref())? {
                 return Err(AppError::NotFound(format!("Session {} not found", id)));
             }
+            // Update model if provided in request
+            if let Some(ref model) = req.model {
+                let normalized = if model.is_empty() { None } else { Some(model.as_str()) };
+                sm.update_session_model(&id, normalized)?;
+            }
             let messages = sm.load_session_messages(&id)?;
             (id, messages.is_empty())
         }

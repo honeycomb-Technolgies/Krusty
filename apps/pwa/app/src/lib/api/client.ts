@@ -16,6 +16,7 @@ export interface SessionResponse {
 	parent_session_id: string | null;
 	mode: 'build' | 'plan';
 	updated_at: string;
+	model?: string | null;
 }
 
 /** Message content block */
@@ -296,7 +297,7 @@ export const apiClient = {
 	deleteSession: (id: string) =>
 		request<void>(`/sessions/${id}`, { method: 'DELETE' }),
 
-	updateSession: (id: string, data: { title?: string; working_dir?: string; mode?: 'build' | 'plan' }) =>
+	updateSession: (id: string, data: { title?: string; working_dir?: string; mode?: 'build' | 'plan'; model?: string }) =>
 		request<SessionResponse>(`/sessions/${id}`, {
 			method: 'PATCH',
 			body: JSON.stringify(data)

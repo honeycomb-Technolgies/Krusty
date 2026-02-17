@@ -292,23 +292,21 @@
 
 <!--
   Mobile (< md): Two rows
-    - Row 1: Action buttons (left + right)
-    - Row 2: Title + token count
+    - Row 1: History | Title | Pinch | New chat
+    - Row 2: Diff | Context
   Desktop (md+): Single row, original layout
 -->
 <header class="relative z-50 flex flex-col md:flex-row md:items-center md:justify-between shrink-0 border-b border-border/50 bg-card/60 backdrop-blur-sm px-4 md:h-14">
 	<!-- ============================================
-	     MOBILE ROW 1 / DESKTOP: Title area
+	     MOBILE ROW 1: History | Title | Pinch | New chat
 	     ============================================ -->
-	<!-- Mobile: Row 1 is now title + controls (history moved to title area) -->
-	<!-- Desktop: flex row with title in center -->
-	<div class="flex items-center justify-between md:w-full md:gap-4">
-		<!-- Left: History (mobile) -->
-		<div class="flex items-center gap-1 md:gap-2">
+	<div class="flex items-center justify-between py-2 md:hidden md:py-0">
+		<!-- Left: History -->
+		<div class="flex items-center">
 			{#if onHistoryClick}
 				<button
 					onclick={onHistoryClick}
-					class="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:hidden"
+					class="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
 					title="Session history"
 				>
 					<History class="h-5 w-5" />
@@ -316,66 +314,194 @@
 			{/if}
 		</div>
 
-		<!-- Desktop only: Git info center -->
-		<!-- Git info now in mobile row 2, only show on desktop here -->
-		<div class="hidden md:flex items-center gap-2">
-			{#if $gitStore.status?.in_repo}
-				{#if shouldShowGitSummary()}
-					<span
-						class="hidden sm:inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/30 px-2 py-1 text-xs"
-						title="Git status"
-					>
-						<span class="text-muted-foreground">{$gitStore.status.branch_files} files</span>
-						<span class="text-green-500">+{$gitStore.status.branch_additions}</span>
-						<span class="text-red-500">-{$gitStore.status.branch_deletions}</span>
-					</span>
-				{/if}
-
-				{#if $gitStore.worktrees.length > 1}
-					<select
-						class="hidden md:block max-w-[180px] rounded-md border border-input bg-background px-2 py-1 text-xs"
-						title="Switch git worktree"
-						value={currentWorktreePath()}
-						onchange={handleWorktreeChange}
-						disabled={isSwitchingWorktree || $sessionStore.isStreaming}
-					>
-						{#each $gitStore.worktrees as wt (wt.path)}
-							<option value={wt.path}>
-								{wt.is_current ? '• ' : ''}{getShortPath(wt.path)}
-							</option>
-						{/each}
-					</select>
-				{/if}
-
-				{#if $gitStore.branches.length > 0}
-					<select
-						class="hidden md:block max-w-[160px] rounded-md border border-input bg-background px-2 py-1 text-xs"
-						title="Switch git branch"
-						value={$gitStore.status.branch ?? ''}
-						onchange={handleBranchChange}
-						disabled={isSwitchingBranch || $sessionStore.isStreaming}
-					>
-						{#each $gitStore.branches.filter(b => !b.is_remote) as branch (branch.name)}
-							<option value={branch.name}>{branch.is_current ? '• ' : ''}{branch.name}</option>
-						{/each}
-						{#if $gitStore.branches.some(b => b.is_remote)}
-							<optgroup label="Remote">
-								{#each $gitStore.branches.filter(b => b.is_remote) as branch (branch.name)}
-									<option value={branch.name}>{branch.name}</option>
-								{/each}
-							</optgroup>
-						{/if}
-					</select>
-				{/if}
+		<!-- Center: Title -->
+		<div class="flex items-center gap-2 min-w-0 flex-1 justify-center">
+			{#if !$sessionStore.sessionId}
+				<span class="text-sm text-muted-foreground">No session</span>
+			{:else if isEditingTitle}
+				<input
+					bind:this={titleInput}
+					bind:value={editedTitle}
+					onkeydown={handleTitleKeyDown}
+					onblur={saveTitle}
+					class="w-full min-w-[120px] max-w-[160px] rounded border border-input bg-background px-2 py-1 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-ring"
+				/>
+				<button onclick={saveTitle} class="rounded p-1 text-green-500 hover:bg-muted shrink-0">
+					<Check class="h-4 w-4" />
+				</button>
+			{:else}
+				<button
+					onclick={startEditTitle}
+					class="group flex items-center gap-2 rounded-lg px-2 py-1 text-sm font-medium transition-colors hover:bg-muted truncate"
+				>
+					<span class="truncate max-w-[120px]">{$sessionStore.title}</span>
+					<Pencil class="h-3 w-3 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 shrink-0" />
+				</button>
 			{/if}
 
-			{#if $gitStore.isLoading || isSwitchingBranch || isSwitchingWorktree}
-				<Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
+			{#if $sessionStore.isStreaming}
+				<div class="flex items-center gap-0.5 h-4 shrink-0" title="Streaming">
+					<span class="w-1 h-1 rounded-full bg-green-500 animate-[wave_1s_ease-in-out_infinite]"></span>
+					<span class="w-1 h-1.5 rounded-full bg-green-500 animate-[wave_1s_ease-in-out_infinite_0.1s]"></span>
+					<span class="w-1 h-2 rounded-full bg-green-500 animate-[wave_1s_ease-in-out_infinite_0.2s]"></span>
+					<span class="w-1 h-1.5 rounded-full bg-green-500 animate-[wave_1s_ease-in-out_infinite_0.3s]"></span>
+					<span class="w-1 h-1 rounded-full bg-green-500 animate-[wave_1s_ease-in-out_infinite_0.4s]"></span>
+				</div>
 			{/if}
 		</div>
 
-		<!-- Desktop: Title in center -->
-		<div class="hidden md:flex items-center gap-2">
+		<!-- Right: Pinch + New chat -->
+		<div class="flex items-center gap-1">
+			<!-- Pinch button -->
+			<button
+				onclick={onPinch}
+				disabled={!$sessionStore.sessionId || isPinching}
+				class="rounded p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+				title="Pinch (branch session)"
+			>
+				{#if isPinching}
+					<span class="h-4 w-4 animate-spin rounded-full border border-current border-t-transparent"></span>
+				{:else}
+					<GitBranch class="h-4 w-4" />
+				{/if}
+			</button>
+
+			<!-- New session button -->
+			<button
+				onclick={openNewSessionModal}
+				class="rounded p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+				title="New session"
+			>
+				<Plus class="h-4 w-4" />
+			</button>
+		</div>
+	</div>
+
+	<!-- ============================================
+	     MOBILE ROW 2: Diff | Git controls | Context (hidden on desktop)
+	     ============================================ -->
+	<div class="flex items-center justify-between border-t border-border/30 py-2 md:hidden md:border-none md:py-0">
+		<!-- Left: Diff summary -->
+		<div class="flex items-center gap-2">
+			{#if shouldShowGitSummary()}
+				<span class="inline-flex items-center gap-1 text-xs">
+					<span class="text-green-500">+{$gitStore.status?.branch_additions}</span>
+					<span class="text-red-500">-{$gitStore.status?.branch_deletions}</span>
+				</span>
+			{/if}
+		</div>
+
+		<!-- Center: Git branch dropdown -->
+		<div class="flex items-center">
+			{#if $gitStore.status?.in_repo && $gitStore.branches.length > 0}
+				<select
+					class="max-w-[80px] rounded border border-input bg-background px-1 py-0.5 text-xs truncate"
+					title="Switch git branch"
+					value={$gitStore.status.branch ?? ''}
+					onchange={handleBranchChange}
+					disabled={isSwitchingBranch || $sessionStore.isStreaming}
+				>
+					{#each $gitStore.branches.filter(b => !b.is_remote).slice(0, 5) as branch (branch.name)}
+						<option value={branch.name}>{branch.is_current ? '• ' : ''}{branch.name}</option>
+					{/each}
+					{#if $gitStore.branches.filter(b => !b.is_remote).length > 5}
+						<option value="...">More...</option>
+					{/if}
+				</select>
+			{/if}
+		</div>
+
+		<!-- Right: Context -->
+		<div class="flex items-center gap-2">
+			{#if $sessionStore.tokenCount > 0}
+				{@const status = getContextStatus($sessionStore.tokenCount)}
+				<span class="text-xs {status.color}" title="Context usage">
+					{#if status.label}
+						<span class="font-semibold">{status.label}</span>
+					{/if}
+					{Math.round($sessionStore.tokenCount / CONTEXT_LIMIT * 100)}%
+				</span>
+			{/if}
+		</div>
+	</div>
+
+	<!-- ============================================
+	     DESKTOP ONLY: Full header row (hidden on mobile)
+	     ============================================ -->
+	<div class="hidden md:flex items-center justify-between w-full">
+		<!-- Left: History -->
+		<div class="flex items-center">
+			{#if onHistoryClick}
+				<button
+					onclick={onHistoryClick}
+					class="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+					title="Session history"
+				>
+					<History class="h-5 w-5" />
+				</button>
+			{/if}
+		</div>
+
+		<!-- Center: Git info + Title -->
+		<div class="flex items-center gap-2 flex-1 justify-center">
+			<!-- Git info -->
+			<div class="flex items-center gap-2">
+				{#if $gitStore.status?.in_repo}
+					{#if shouldShowGitSummary()}
+						<span
+							class="hidden sm:inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/30 px-2 py-1 text-xs"
+							title="Git status"
+						>
+							<span class="text-muted-foreground">{$gitStore.status.branch_files} files</span>
+							<span class="text-green-500">+{$gitStore.status.branch_additions}</span>
+							<span class="text-red-500">-{$gitStore.status.branch_deletions}</span>
+						</span>
+					{/if}
+
+					{#if $gitStore.worktrees.length > 1}
+						<select
+							class="hidden md:block max-w-[180px] rounded-md border border-input bg-background px-2 py-1 text-xs"
+							title="Switch git worktree"
+							value={currentWorktreePath()}
+							onchange={handleWorktreeChange}
+							disabled={isSwitchingWorktree || $sessionStore.isStreaming}
+						>
+							{#each $gitStore.worktrees as wt (wt.path)}
+								<option value={wt.path}>
+									{wt.is_current ? '• ' : ''}{getShortPath(wt.path)}
+								</option>
+							{/each}
+						</select>
+					{/if}
+
+					{#if $gitStore.branches.length > 0}
+						<select
+							class="hidden md:block max-w-[160px] rounded-md border border-input bg-background px-2 py-1 text-xs"
+							title="Switch git branch"
+							value={$gitStore.status.branch ?? ''}
+							onchange={handleBranchChange}
+							disabled={isSwitchingBranch || $sessionStore.isStreaming}
+						>
+							{#each $gitStore.branches.filter(b => !b.is_remote) as branch (branch.name)}
+								<option value={branch.name}>{branch.is_current ? '• ' : ''}{branch.name}</option>
+							{/each}
+							{#if $gitStore.branches.some(b => b.is_remote)}
+								<optgroup label="Remote">
+									{#each $gitStore.branches.filter(b => b.is_remote) as branch (branch.name)}
+										<option value={branch.name}>{branch.name}</option>
+									{/each}
+								</optgroup>
+							{/if}
+						</select>
+					{/if}
+				{/if}
+
+				{#if $gitStore.isLoading || isSwitchingBranch || isSwitchingWorktree}
+					<Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
+				{/if}
+			</div>
+
+			<!-- Title -->
 			{#if $sessionStore.sessionId}
 				{#if isEditingTitle}
 					<input
@@ -419,113 +545,29 @@
 			<div class="hidden sm:block h-4 w-px bg-border"></div>
 		</div>
 
-		<!-- Right: spacer for desktop -->
-		<div class="w-10 md:w-auto"></div>
-	</div>
-
-	<!-- ============================================
-	     MOBILE ROW 2: Title + Context (hidden on desktop)
-	     ============================================ -->
-	<!-- Show on mobile only: flex md:hidden -->
-	<!-- Row 1 border-top on mobile to separate from actions -->
-	<div class="flex items-center justify-between border-t border-border/30 py-2 md:hidden md:border-none md:py-0">
-		<!-- Title (left) -->
-		<div class="flex items-center gap-2 min-w-0 flex-1">
-			{#if !$sessionStore.sessionId}
-				<span class="text-sm text-muted-foreground">No session</span>
-			{:else if isEditingTitle}
-				<input
-					bind:this={titleInput}
-					bind:value={editedTitle}
-					onkeydown={handleTitleKeyDown}
-					onblur={saveTitle}
-					class="w-full min-w-[120px] max-w-[200px] rounded border border-input bg-background px-2 py-1 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-ring"
-				/>
-				<button onclick={saveTitle} class="rounded p-1 text-green-500 hover:bg-muted shrink-0">
-					<Check class="h-4 w-4" />
-				</button>
-			{:else}
-				<button
-					onclick={startEditTitle}
-					class="group flex items-center gap-2 rounded-lg px-2 py-1 text-sm font-medium transition-colors hover:bg-muted truncate"
-				>
-					<span class="truncate max-w-[150px]">{$sessionStore.title}</span>
-					<Pencil class="h-3 w-3 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 shrink-0" />
-				</button>
-			{/if}
-
-			{#if $sessionStore.isStreaming}
-				<!-- Wave animation -->
-				<div class="flex items-center gap-0.5 h-4 shrink-0" title="Streaming">
-					<span class="w-1 h-1 rounded-full bg-green-500 animate-[wave_1s_ease-in-out_infinite]"></span>
-					<span class="w-1 h-1.5 rounded-full bg-green-500 animate-[wave_1s_ease-in-out_infinite_0.1s]"></span>
-					<span class="w-1 h-2 rounded-full bg-green-500 animate-[wave_1s_ease-in-out_infinite_0.2s]"></span>
-					<span class="w-1 h-1.5 rounded-full bg-green-500 animate-[wave_1s_ease-in-out_infinite_0.3s]"></span>
-					<span class="w-1 h-1 rounded-full bg-green-500 animate-[wave_1s_ease-in-out_infinite_0.4s]"></span>
-				</div>
-			{/if}
-		</div>
-
-		<!-- Git branch dropdown + diff + Context + Pinch/New (right) -->
-		<div class="flex items-center gap-2 shrink-0">
-			<!-- Git branch dropdown -->
-			{#if $gitStore.status?.in_repo && $gitStore.branches.length > 0}
-				<select
-					class="max-w-[80px] rounded border border-input bg-background px-1 py-0.5 text-xs truncate"
-					title="Switch git branch"
-					value={$gitStore.status.branch ?? ''}
-					onchange={handleBranchChange}
-					disabled={isSwitchingBranch || $sessionStore.isStreaming}
-				>
-					{#each $gitStore.branches.filter(b => !b.is_remote).slice(0, 5) as branch (branch.name)}
-						<option value={branch.name}>{branch.is_current ? '• ' : ''}{branch.name}</option>
-					{/each}
-					{#if $gitStore.branches.filter(b => !b.is_remote).length > 5}
-						<option value="...">More...</option>
-					{/if}
-				</select>
-			{/if}
-			
-			<!-- Diff summary -->
-			{#if shouldShowGitSummary()}
-				<span class="inline-flex items-center gap-1 text-xs">
-					<span class="text-green-500">+{$gitStore.status?.branch_additions}</span>
-					<span class="text-red-500">-{$gitStore.status?.branch_deletions}</span>
-				</span>
-			{/if}
-			
-			<!-- Context % -->
-			{#if $sessionStore.tokenCount > 0}
-				{@const status = getContextStatus($sessionStore.tokenCount)}
-				<span class="text-xs {status.color}" title="Context usage">
-					{#if status.label}
-						<span class="font-semibold">{status.label}</span>
-					{/if}
-					{Math.round($sessionStore.tokenCount / CONTEXT_LIMIT * 100)}%
-				</span>
-			{/if}
-			
+		<!-- Right: Pinch + New chat -->
+		<div class="flex items-center gap-2">
 			<!-- Pinch button -->
 			<button
 				onclick={onPinch}
 				disabled={!$sessionStore.sessionId || isPinching}
-				class="rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+				class="rounded p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
 				title="Pinch (branch session)"
 			>
 				{#if isPinching}
-					<span class="h-3.5 w-3.5 animate-spin rounded-full border border-current border-t-transparent"></span>
+					<span class="h-4 w-4 animate-spin rounded-full border border-current border-t-transparent"></span>
 				{:else}
-					<GitBranch class="h-3.5 w-3.5" />
+					<GitBranch class="h-4 w-4" />
 				{/if}
 			</button>
 
 			<!-- New session button -->
 			<button
 				onclick={openNewSessionModal}
-				class="rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+				class="rounded p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
 				title="New session"
 			>
-				<Plus class="h-3.5 w-3.5" />
+				<Plus class="h-4 w-4" />
 			</button>
 		</div>
 	</div>
