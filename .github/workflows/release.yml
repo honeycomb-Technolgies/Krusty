@@ -101,6 +101,10 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install PWA dependencies
+        working-directory: apps/pwa/app
+        run: bun install
+
       - name: Build Linux desktop bundles
         working-directory: apps/desktop/shell
         run: |
