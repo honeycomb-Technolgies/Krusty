@@ -204,7 +204,7 @@ impl PushService {
                         return DeliveryOutcome::Success { status, latency_ms };
                     }
 
-                    if status == 404 || status == 410 {
+                    if status == 403 || status == 404 || status == 410 {
                         return DeliveryOutcome::Stale { status, latency_ms };
                     }
 
@@ -347,7 +347,7 @@ impl PushService {
                     tracing::info!(
                         endpoint = %sub.endpoint,
                         status,
-                        "Push subscription expired, removing"
+                        "Push subscription stale, removing"
                     );
                     let _ = store.remove_by_endpoint(&sub.endpoint);
                     let _ = attempt_store.record_attempt(PushDeliveryAttemptInput {
@@ -357,7 +357,7 @@ impl PushService {
                         event_type: event_type.as_str(),
                         outcome: "stale",
                         http_status: Some(status),
-                        error_message: Some("subscription expired"),
+                        error_message: Some("subscription stale or rejected"),
                         latency_ms: Some(latency_ms),
                     });
                 }

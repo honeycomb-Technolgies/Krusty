@@ -68,18 +68,31 @@ async function syncSubscriptionWithServer(subscription: PushSubscription): Promi
 }
 
 async function ensureSubscription(registration: ServiceWorkerRegistration): Promise<PushSubscription> {
+	const { public_key } = await apiClient.getVapidPublicKey();
+	const applicationServerKey = urlBase64ToUint8Array(public_key);
+
 	const existing = await registration.pushManager.getSubscription();
 	if (existing) {
-		return existing;
+		const existingKey = existing.options.applicationServerKey;
+		if (existingKey && keysMatch(existingKey, applicationServerKey)) {
+			return existing;
+		}
+		await existing.unsubscribe();
 	}
-
-	const { public_key } = await apiClient.getVapidPublicKey();
-	const applicationServerKey = Uint8Array.from(urlBase64ToUint8Array(public_key));
 
 	return registration.pushManager.subscribe({
 		userVisibleOnly: true,
 		applicationServerKey
 	});
+}
+
+function keysMatch(a: ArrayBuffer, b: Uint8Array): boolean {
+	const view = new Uint8Array(a);
+	if (view.length !== b.length) return false;
+	for (let i = 0; i < view.length; i++) {
+		if (view[i] !== b[i]) return false;
+	}
+	return true;
 }
 
 export async function subscribeToPush(): Promise<boolean> {
