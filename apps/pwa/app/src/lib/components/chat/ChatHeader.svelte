@@ -374,9 +374,14 @@
 			{/if}
 
 			{#if $sessionStore.isStreaming}
-				<span class="flex items-center gap-1.5 text-xs text-muted-foreground shrink-0">
-					<span class="h-2 w-2 animate-pulse rounded-full bg-green-500"></span>
-				</span>
+				<!-- Wave animation -->
+				<div class="flex items-center gap-0.5 h-4 shrink-0" title="Streaming">
+					<span class="w-1 h-1 rounded-full bg-green-500 animate-[wave_1s_ease-in-out_infinite]"></span>
+					<span class="w-1 h-1.5 rounded-full bg-green-500 animate-[wave_1s_ease-in-out_infinite_0.1s]"></span>
+					<span class="w-1 h-2 rounded-full bg-green-500 animate-[wave_1s_ease-in-out_infinite_0.2s]"></span>
+					<span class="w-1 h-1.5 rounded-full bg-green-500 animate-[wave_1s_ease-in-out_infinite_0.3s]"></span>
+					<span class="w-1 h-1 rounded-full bg-green-500 animate-[wave_1s_ease-in-out_infinite_0.4s]"></span>
+				</div>
 			{/if}
 		</div>
 
@@ -627,5 +632,11 @@
 	:global(.dir-scrolling .dir-item),
 	:global(.dir-scrolling .recent-item) {
 		pointer-events: none !important;
+	}
+
+	/* Wave animation for streaming indicator */
+	@keyframes wave {
+		0%, 100% { transform: scaleY(0.5); }
+		50% { transform: scaleY(1); }
 	}
 </style>
