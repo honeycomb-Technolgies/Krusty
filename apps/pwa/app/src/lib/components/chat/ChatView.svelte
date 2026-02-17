@@ -10,7 +10,7 @@
 	import Brain from 'lucide-svelte/icons/brain';
 	import Hammer from 'lucide-svelte/icons/hammer';
 	import FileText from 'lucide-svelte/icons/file-text';
-	import Settings from 'lucide-svelte/icons/settings';
+	import Bot from 'lucide-svelte/icons/bot';
 	import Message from './Message.svelte';
 	import AsciiTitle from './AsciiTitle.svelte';
 	import { sessionStore, sendMessage, stopGeneration, togglePermissionMode, toggleThinking, setMode, type Attachment, type SessionMode } from '$stores/session';
@@ -177,7 +177,7 @@
 						<Paperclip class="h-4 w-4" />
 					</button>
 
-					<!-- AI Controls: Expandable FAB -->
+					<!-- AI Controls: Robot button -->
 					<div class="relative">
 						<button
 							onclick={toggleAiControls}
@@ -185,22 +185,25 @@
 								{showAiControls 
 									? 'bg-primary text-primary-foreground' 
 									: 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
-							title="AI Settings"
+							title="AI Controls"
 						>
-							<Settings class="h-4 w-4" />
+							<Bot class="h-4 w-4" />
 						</button>
 
 						<!-- Expanded AI Controls Popover -->
 						{#if showAiControls}
-							<div class="absolute bottom-full left-0 mb-2 flex flex-col gap-1 rounded-lg border border-border bg-card p-2 shadow-lg z-50">
-								<!-- Model -->
+							<div class="absolute bottom-full left-0 mb-2 w-48 rounded-lg border border-border bg-card p-2 shadow-lg z-50 flex flex-col gap-1">
+								<!-- Model - shows current model name -->
 								<button
 									onclick={handleModelClick}
-									class="flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-muted"
+									class="flex items-center justify-between rounded-md px-3 py-2 text-sm hover:bg-muted"
 									title="Select model"
 								>
-									<Cpu class="h-4 w-4 text-muted-foreground" />
-									<span>Model</span>
+									<div class="flex items-center gap-2">
+										<Cpu class="h-4 w-4 text-muted-foreground" />
+										<span>Model</span>
+									</div>
+									<span class="text-xs text-muted-foreground">MiniMax</span>
 								</button>
 								
 								<!-- Think -->

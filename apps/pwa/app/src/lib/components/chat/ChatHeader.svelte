@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Cpu, Pencil, Check, Plus, GitBranch, X, Folder, ChevronUp, Loader2, History } from 'lucide-svelte';
+	import { Pencil, Check, Plus, GitBranch, X, Folder, ChevronUp, Loader2, History } from 'lucide-svelte';
 	import { sessionStore, updateSessionTitle, initSession } from '$stores/session';
 	import { planStore, setPlanVisible } from '$stores/plan';
 	import { createSession, getLastDirectory, loadDirectories, sessionsStore } from '$stores/sessions';
@@ -235,14 +235,6 @@
 		if (e.key === 'Escape') closeModal();
 	}
 
-	function getModelDisplayName(modelId: string): string {
-		const names: Record<string, string> = {
-			'MiniMax-M2.5': 'MiniMax M2.5',
-			'GLM-4.6': 'GLM-4.6'
-		};
-		return names[modelId] || modelId.split('-').slice(1, 3).join(' ');
-	}
-
 	function getShortPath(path: string | null): string {
 		if (!path) return 'No directory';
 		const parts = path.split('/').filter(Boolean);
@@ -311,7 +303,7 @@
 	<!-- Mobile: justify-between for even spacing -->
 	<!-- Desktop: justify-between with title in middle -->
 	<div class="flex items-center justify-between md:w-full md:gap-4">
-		<!-- Left side: History (mobile) + Model -->
+		<!-- Left side: History (mobile) -->
 		<div class="flex items-center gap-1 md:gap-2">
 			{#if onHistoryClick}
 				<button
@@ -322,16 +314,6 @@
 					<History class="h-5 w-5" />
 				</button>
 			{/if}
-
-			<!-- Model selector - can also access from input bar -->
-			<button
-				onclick={onModelClick}
-				class="flex items-center gap-1.5 md:gap-2 rounded-lg px-2 md:px-3 py-1.5 text-sm font-medium transition-colors hover:bg-muted"
-				title="Select model"
-			>
-				<Cpu class="h-4 w-4 text-muted-foreground" />
-				<span class="hidden sm:inline">{getModelDisplayName(currentModel)}</span>
-			</button>
 		</div>
 
 		<!-- Right side: Pinch + New (mobile: always visible, desktop: at end) -->
