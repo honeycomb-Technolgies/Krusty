@@ -82,6 +82,11 @@
 	onMount(() => {
 		loadSidebarState();
 		loadSessions();
+		
+		// Listen for model open event from ChatView AI controls
+		window.addEventListener('openmodel', () => {
+			showModelSelector = true;
+		});
 	});
 </script>
 

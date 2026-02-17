@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { Cpu, Brain, Pencil, Check, Hammer, FileText, Plus, GitBranch, X, Folder, ChevronUp, Loader2, History } from 'lucide-svelte';
-	import { sessionStore, updateSessionTitle, setMode, initSession, type SessionMode } from '$stores/session';
+	import { Cpu, Pencil, Check, Plus, GitBranch, X, Folder, ChevronUp, Loader2, History } from 'lucide-svelte';
+	import { sessionStore, updateSessionTitle, initSession } from '$stores/session';
 	import { planStore, setPlanVisible } from '$stores/plan';
 	import { createSession, getLastDirectory, loadDirectories, sessionsStore } from '$stores/sessions';
 	import { gitStore, refreshGit, checkoutBranch, switchWorktree, startGitPolling, stopGitPolling } from '$stores/git';
@@ -188,18 +188,6 @@
 		loadDirectory(dir);
 	}
 
-	function toggleThinking() {
-		sessionStore.update((s) => ({ ...s, thinkingEnabled: !s.thinkingEnabled }));
-	}
-
-	function toggleMode() {
-		const newMode: SessionMode = $sessionStore.mode === 'build' ? 'plan' : 'build';
-		setMode(newMode);
-		if ($planStore.items.length > 0) {
-			setPlanVisible(newMode === 'plan');
-		}
-	}
-
 	function formatTokens(count: number): string {
 		if (count >= 1000000) return `${(count / 1000000).toFixed(1)}M`;
 		if (count >= 1000) return `${(count / 1000).toFixed(1)}K`;
@@ -323,7 +311,7 @@
 	<!-- Mobile: justify-between for even spacing -->
 	<!-- Desktop: justify-between with title in middle -->
 	<div class="flex items-center justify-between md:w-full md:gap-4">
-		<!-- Left side: History (mobile) + Model + Thinking + Mode -->
+		<!-- Left side: History (mobile) + Model -->
 		<div class="flex items-center gap-1 md:gap-2">
 			{#if onHistoryClick}
 				<button
@@ -335,6 +323,7 @@
 				</button>
 			{/if}
 
+			<!-- Model selector - can also access from input bar -->
 			<button
 				onclick={onModelClick}
 				class="flex items-center gap-1.5 md:gap-2 rounded-lg px-2 md:px-3 py-1.5 text-sm font-medium transition-colors hover:bg-muted"
@@ -342,32 +331,6 @@
 			>
 				<Cpu class="h-4 w-4 text-muted-foreground" />
 				<span class="hidden sm:inline">{getModelDisplayName(currentModel)}</span>
-			</button>
-
-			<button
-				onclick={toggleThinking}
-				class="flex items-center gap-1 rounded-lg px-2 py-1.5 text-sm transition-colors md:px-2.5
-					{$sessionStore.thinkingEnabled
-						? 'bg-purple-500/20 text-purple-400 hover:bg-purple-500/30'
-						: 'text-muted-foreground hover:bg-muted'}"
-				title="Toggle extended thinking"
-			>
-				<Brain class="h-4 w-4" />
-			</button>
-
-			<button
-				onclick={toggleMode}
-				class="flex items-center gap-1 rounded-lg px-2 py-1.5 text-sm transition-colors md:px-2.5
-					{$sessionStore.mode === 'build'
-						? 'bg-orange-500/20 text-orange-400 hover:bg-orange-500/30'
-						: 'bg-green-500/20 text-green-400 hover:bg-green-500/30'}"
-				title="Toggle mode (Build/Plan)"
-			>
-				{#if $sessionStore.mode === 'build'}
-					<Hammer class="h-4 w-4" />
-				{:else}
-					<FileText class="h-4 w-4" />
-				{/if}
 			</button>
 		</div>
 
