@@ -456,6 +456,15 @@ pub struct RetroArchPlugin {
     pause_index: usize,
 }
 
+#[derive(Clone, Copy)]
+struct FileListRenderParams<'a> {
+    area: Rect,
+    ctx: &'a PluginContext<'a>,
+    start_y: u16,
+    visible_height: usize,
+    show_full_name: bool,
+}
+
 /// Krusty RetroArch directories
 struct KrustyDirs {
     system: PathBuf,
@@ -1157,7 +1166,17 @@ impl RetroArchPlugin {
                 }
             }
             MenuState::CoreBrowser => {
-                self.render_file_list(&self.cores, area, buf, ctx, content_y, visible_height, true);
+                self.render_file_list(
+                    &self.cores,
+                    buf,
+                    FileListRenderParams {
+                        area,
+                        ctx,
+                        start_y: content_y,
+                        visible_height,
+                        show_full_name: true,
+                    },
+                );
             }
             MenuState::RomBrowser => {
                 // Show current directory
@@ -1173,12 +1192,14 @@ impl RetroArchPlugin {
 
                 self.render_file_list(
                     &self.roms,
-                    area,
                     buf,
-                    ctx,
-                    content_y + 2,
-                    visible_height.saturating_sub(2),
-                    false,
+                    FileListRenderParams {
+                        area,
+                        ctx,
+                        start_y: content_y + 2,
+                        visible_height: visible_height.saturating_sub(2),
+                        show_full_name: false,
+                    },
                 );
             }
         }
@@ -1204,13 +1225,17 @@ impl RetroArchPlugin {
     fn render_file_list(
         &self,
         items: &[PathBuf],
-        area: Rect,
         buf: &mut Buffer,
-        ctx: &PluginContext,
-        start_y: u16,
-        visible_height: usize,
-        show_full_name: bool,
+        params: FileListRenderParams<'_>,
     ) {
+        let FileListRenderParams {
+            area,
+            ctx,
+            start_y,
+            visible_height,
+            show_full_name,
+        } = params;
+
         if items.is_empty() {
             let msg = "No items found";
             let x = area.x + (area.width.saturating_sub(msg.len() as u16)) / 2;

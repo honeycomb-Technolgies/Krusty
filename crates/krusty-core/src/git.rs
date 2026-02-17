@@ -25,6 +25,12 @@ static GH_AVAILABLE: Lazy<bool> = Lazy::new(|| {
 const PR_CACHE_TTL: Duration = Duration::from_secs(60);
 const PR_CACHE_MAX_ENTRIES: usize = 1024;
 
+/// Returns true if git display should be suppressed for this repo.
+/// Suppresses when the repo root is the user's home directory (dotfiles repo).
+pub fn should_suppress_display(repo_root: &Path) -> bool {
+    dirs::home_dir().is_some_and(|home| repo_root == home)
+}
+
 /// Condensed repository status for UI surfaces.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitStatusSummary {
@@ -54,12 +60,13 @@ impl GitStatusSummary {
     }
 }
 
-/// Local branch metadata.
+/// Branch metadata (local or remote-only).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitBranchSummary {
     pub name: String,
     pub is_current: bool,
     pub upstream: Option<String>,
+    pub is_remote: bool,
 }
 
 /// Worktree metadata.
@@ -103,6 +110,10 @@ pub fn status(path: &Path) -> Result<Option<GitStatusSummary>> {
         None => return Ok(None),
     };
 
+    if should_suppress_display(&repo_root) {
+        return Ok(None);
+    }
+
     let output = run_git(
         &[
             "status",
@@ -123,13 +134,14 @@ pub fn status(path: &Path) -> Result<Option<GitStatusSummary>> {
     Ok(Some(status))
 }
 
-/// List local branches for a repository path.
+/// List local and remote branches for a repository path.
 pub fn branches(path: &Path) -> Result<Option<Vec<GitBranchSummary>>> {
     let repo_root = match resolve_repo_root(path)? {
         Some(root) => root,
         None => return Ok(None),
     };
 
+    // Local branches
     let output = run_git(
         &[
             "for-each-ref",
@@ -145,7 +157,40 @@ pub fn branches(path: &Path) -> Result<Option<Vec<GitBranchSummary>>> {
         branches.push(parse_branch_summary_line(line));
     }
 
-    branches.sort_by(|a, b| b.is_current.cmp(&a.is_current).then(a.name.cmp(&b.name)));
+    // Remote branches (deduplicated against local)
+    let local_names: std::collections::HashSet<String> =
+        branches.iter().map(|b| b.name.clone()).collect();
+
+    if let Ok(remote_output) = run_git(
+        &[
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/remotes/origin",
+        ],
+        &repo_root,
+    ) {
+        let remote_stdout = String::from_utf8_lossy(&remote_output.stdout);
+        for line in remote_stdout.lines().filter(|l| !l.trim().is_empty()) {
+            let stripped = line.trim().strip_prefix("origin/").unwrap_or(line.trim());
+            if stripped == "HEAD" || local_names.contains(stripped) {
+                continue;
+            }
+            branches.push(GitBranchSummary {
+                name: stripped.to_string(),
+                is_current: false,
+                upstream: Some(format!("origin/{stripped}")),
+                is_remote: true,
+            });
+        }
+    }
+
+    // Sort: current first, then local, then remote, then alphabetical
+    branches.sort_by(|a, b| {
+        b.is_current
+            .cmp(&a.is_current)
+            .then(a.is_remote.cmp(&b.is_remote))
+            .then(a.name.cmp(&b.name))
+    });
     Ok(Some(branches))
 }
 
@@ -166,6 +211,7 @@ fn parse_branch_summary_line(line: &str) -> GitBranchSummary {
         name,
         is_current,
         upstream,
+        is_remote: false,
     }
 }
 

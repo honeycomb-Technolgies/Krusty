@@ -92,6 +92,7 @@ export interface GitBranch {
 	name: string;
 	is_current: boolean;
 	upstream: string | null;
+	is_remote: boolean;
 }
 
 /** Git branch list response */
@@ -147,6 +148,8 @@ export interface PreviewSettings {
 	enabled: boolean;
 	auto_refresh_secs: number;
 	show_only_http_like: boolean;
+	probe_timeout_ms: number;
+	allow_force_open_non_http: boolean;
 	pinned_ports: number[];
 	hidden_ports: number[];
 	blocked_ports: number[];
@@ -157,6 +160,8 @@ export interface PreviewSettingsPatch {
 	enabled?: boolean;
 	auto_refresh_secs?: number;
 	show_only_http_like?: boolean;
+	probe_timeout_ms?: number;
+	allow_force_open_non_http?: boolean;
 	pinned_ports?: number[];
 	hidden_ports?: number[];
 	blocked_ports?: number[];
@@ -173,6 +178,9 @@ export interface PortEntry {
 	active: boolean;
 	pinned: boolean;
 	is_http_like: boolean;
+	is_previewable_http: boolean;
+	probe_status: 'ok' | 'timeout' | 'conn_refused' | 'non_http' | 'error' | string;
+	last_probe_ms: number | null;
 	preview_path: string;
 }
 

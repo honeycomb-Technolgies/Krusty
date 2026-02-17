@@ -13,18 +13,28 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::tui::themes::Theme;
 
+pub struct StatusBarProps<'a> {
+    pub theme: &'a Theme,
+    pub model: &'a str,
+    pub cwd: &'a Path,
+    pub git_status: Option<&'a krusty_core::git::GitStatusSummary>,
+    pub context_tokens: Option<(usize, usize)>,
+    pub running_processes: usize,
+    pub process_elapsed: Option<Duration>,
+}
+
 /// Render the status bar at the bottom of the screen
-pub fn render_status_bar(
-    f: &mut Frame,
-    area: Rect,
-    theme: &Theme,
-    model: &str,
-    cwd: &Path,
-    git_status: Option<&krusty_core::git::GitStatusSummary>,
-    context_tokens: Option<(usize, usize)>, // (used, max)
-    running_processes: usize,
-    process_elapsed: Option<Duration>,
-) {
+pub fn render_status_bar(f: &mut Frame, area: Rect, props: StatusBarProps<'_>) {
+    let StatusBarProps {
+        theme,
+        model,
+        cwd,
+        git_status,
+        context_tokens,
+        running_processes,
+        process_elapsed,
+    } = props;
+
     // Background
     let bg = Paragraph::new("").style(Style::default().bg(theme.status_bar_bg_color));
     f.render_widget(bg, area);
@@ -42,6 +52,23 @@ pub fn render_status_bar(
 
     // Calculate left width: space + cwd + " │ " + model
     let mut left_width: u16 = 1 + cwd_display.width() as u16 + 3 + model_short.width() as u16;
+
+    // Git branch name
+    if let Some(git) = git_status {
+        if let Some(ref branch) = git.branch {
+            let branch_display = if branch.len() > 20 {
+                format!("{}...", &branch[..17])
+            } else {
+                branch.clone()
+            };
+            left_width += 3 + branch_display.width() as u16;
+            left_spans.push(Span::styled(" │ ", Style::default().fg(theme.dim_color)));
+            left_spans.push(Span::styled(
+                branch_display,
+                Style::default().fg(theme.info_color),
+            ));
+        }
+    }
 
     // Git summary in compact diff format:
     // 50 files +5162 -700

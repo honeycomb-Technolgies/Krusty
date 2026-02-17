@@ -209,6 +209,7 @@ pub struct GitBranchResponse {
     pub name: String,
     pub is_current: bool,
     pub upstream: Option<String>,
+    pub is_remote: bool,
 }
 
 #[derive(Serialize)]

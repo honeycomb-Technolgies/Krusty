@@ -75,6 +75,7 @@ async fn list_branches(
             name: b.name,
             is_current: b.is_current,
             upstream: b.upstream,
+            is_remote: b.is_remote,
         })
         .collect();
 

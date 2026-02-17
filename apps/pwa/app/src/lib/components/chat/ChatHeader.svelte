@@ -435,8 +435,19 @@
 			{/if}
 		</div>
 
-		<!-- Token count (right) -->
+		<!-- Git info + Token count (right) -->
 		<div class="flex items-center gap-2 shrink-0">
+			{#if $gitStore.status?.in_repo && $gitStore.status.branch}
+				<span class="text-xs text-muted-foreground truncate max-w-[100px]" title={$gitStore.status.branch}>
+					{$gitStore.status.branch}
+				</span>
+			{/if}
+			{#if shouldShowGitSummary()}
+				<span class="hidden sm:inline-flex items-center gap-1 text-xs">
+					<span class="text-green-500">+{$gitStore.status?.branch_additions}</span>
+					<span class="text-red-500">-{$gitStore.status?.branch_deletions}</span>
+				</span>
+			{/if}
 			{#if $sessionStore.tokenCount > 0}
 				{@const status = getContextStatus($sessionStore.tokenCount)}
 				<span class="text-xs {status.color}" title="Context usage">
@@ -457,7 +468,7 @@
 		{#if $gitStore.status?.in_repo}
 			{#if shouldShowGitSummary()}
 				<span
-					class="hidden lg:inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/30 px-2 py-1 text-xs"
+					class="hidden sm:inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/30 px-2 py-1 text-xs"
 					title="Git status"
 				>
 					<span class="text-muted-foreground">{$gitStore.status.branch_files} files</span>
@@ -468,7 +479,7 @@
 
 			{#if $gitStore.worktrees.length > 1}
 				<select
-					class="hidden xl:block max-w-[180px] rounded-md border border-input bg-background px-2 py-1 text-xs"
+					class="hidden md:block max-w-[180px] rounded-md border border-input bg-background px-2 py-1 text-xs"
 					title="Switch git worktree"
 					value={currentWorktreePath()}
 					onchange={handleWorktreeChange}
@@ -490,9 +501,16 @@
 					onchange={handleBranchChange}
 					disabled={isSwitchingBranch || $sessionStore.isStreaming}
 				>
-					{#each $gitStore.branches as branch (branch.name)}
+					{#each $gitStore.branches.filter(b => !b.is_remote) as branch (branch.name)}
 						<option value={branch.name}>{branch.is_current ? '• ' : ''}{branch.name}</option>
 					{/each}
+					{#if $gitStore.branches.some(b => b.is_remote)}
+						<optgroup label="Remote">
+							{#each $gitStore.branches.filter(b => b.is_remote) as branch (branch.name)}
+								<option value={branch.name}>{branch.name}</option>
+							{/each}
+						</optgroup>
+					{/if}
 				</select>
 			{/if}
 		{/if}
