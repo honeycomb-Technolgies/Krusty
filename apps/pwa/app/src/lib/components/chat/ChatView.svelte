@@ -2,10 +2,8 @@
 	import { onMount } from 'svelte';
 	import Send from 'lucide-svelte/icons/send';
 	import Clock from 'lucide-svelte/icons/clock';
-	import Loader2 from 'lucide-svelte/icons/loader-2';
 	import StopCircle from 'lucide-svelte/icons/stop-circle';
 	import Paperclip from 'lucide-svelte/icons/paperclip';
-	import ImagePlus from 'lucide-svelte/icons/image-plus';
 	import Shield from 'lucide-svelte/icons/shield';
 	import Zap from 'lucide-svelte/icons/zap';
 	import Message from './Message.svelte';
@@ -16,7 +14,6 @@
 	let inputElement = $state<HTMLTextAreaElement>(undefined!);
 	let messagesContainer = $state<HTMLDivElement>(undefined!);
 	let fileInput = $state<HTMLInputElement>(undefined!);
-	let imageInput = $state<HTMLInputElement>(undefined!);
 	let attachedFiles = $state<File[]>([]);
 
 	function handleSubmit() {
@@ -31,6 +28,8 @@
 		sendMessage(inputValue.trim(), attachments);
 		inputValue = '';
 		attachedFiles = [];
+		// Reset input height after clearing
+		autoResize();
 	}
 
 	function handleFileSelect(e: Event) {
@@ -54,6 +53,12 @@
 
 	function autoResize() {
 		if (inputElement) {
+			// If empty, clear height to use min-h from CSS/Tailwind
+			if (!inputElement.value) {
+				inputElement.style.height = '';
+				return;
+			}
+			// Otherwise expand to content
 			inputElement.style.height = 'auto';
 			inputElement.style.height = Math.min(inputElement.scrollHeight, 200) + 'px';
 		}
@@ -96,18 +101,11 @@
 	<!-- Input area - only show when session is active -->
 	{#if $sessionStore.sessionId}
 		<div class="shrink-0 px-4 pb-5">
-			<!-- Hidden file inputs -->
+			<!-- Hidden file input - accepts all file types including images -->
 			<input
 				bind:this={fileInput}
 				type="file"
-				multiple
-				class="hidden"
-				onchange={handleFileSelect}
-			/>
-			<input
-				bind:this={imageInput}
-				type="file"
-				accept="image/*"
+				accept="image/*,.pdf,.txt,.md,.json,.js,.ts,.html,.css,.py,.rs,.go,.java,.c,.cpp,.h,.sh,.yaml,.yml,.toml,.xml,.csv"
 				multiple
 				class="hidden"
 				onchange={handleFileSelect}
@@ -130,22 +128,14 @@
 
 			<div class="mx-auto max-w-3xl">
 				<div class="flex items-end gap-2 rounded-xl border border-border/50 bg-card/60 backdrop-blur-sm p-2">
-					<!-- Attachment buttons -->
+					<!-- Attachment button - accepts files and images -->
 					<button
 						onclick={() => fileInput.click()}
 						class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground
 							transition-colors hover:bg-muted hover:text-foreground"
-						title="Attach file"
+						title="Attach file or image"
 					>
 						<Paperclip class="h-4 w-4" />
-					</button>
-					<button
-						onclick={() => imageInput.click()}
-						class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground
-							transition-colors hover:bg-muted hover:text-foreground"
-						title="Attach image"
-					>
-						<ImagePlus class="h-4 w-4" />
 					</button>
 
 					<!-- Permission mode toggle -->
@@ -172,44 +162,37 @@
 						oninput={autoResize}
 						placeholder={$sessionStore.isStreaming ? 'Queue a message...' : 'Message Krusty...'}
 						rows={1}
+						inputmode="text"
+						enterkeyhint="send"
 						class="max-h-[200px] min-h-[36px] flex-1 resize-none bg-transparent py-2 text-sm
 							placeholder:text-muted-foreground focus:outline-none"
 					></textarea>
 
-					<!-- Send/Queue/Stop buttons -->
-					{#if $sessionStore.isStreaming}
-						<button
-							onclick={handleSubmit}
-							disabled={!inputValue.trim()}
-							class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg
-								bg-amber-500 text-white transition-colors
-								hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50"
-							title="Queue message"
-						>
+					<!-- Combined Send/Queue/Stop button -->
+					<button
+						onclick={$sessionStore.isStreaming ? (inputValue.trim() ? handleSubmit : stopGeneration) : handleSubmit}
+						disabled={!$sessionStore.isStreaming && !inputValue.trim()}
+						class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors
+							{$sessionStore.isStreaming
+								? inputValue.trim()
+									? 'bg-amber-500 text-white hover:bg-amber-600'  // Queue
+									: 'bg-destructive text-white hover:bg-destructive/90'  // Stop
+								: 'bg-primary text-primary-foreground hover:bg-primary/90'  // Send (white text)
+							}
+							{!$sessionStore.isStreaming && !inputValue.trim() ? 'disabled:cursor-not-allowed disabled:opacity-50' : ''}"
+						title={$sessionStore.isStreaming
+							? (inputValue.trim() ? 'Queue message' : 'Stop generation')
+							: 'Send message'
+						}
+					>
+						{#if $sessionStore.isStreaming && inputValue.trim()}
 							<Clock class="h-4 w-4" />
-						</button>
-						<button
-							onclick={stopGeneration}
-							class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg
-								bg-destructive text-destructive-foreground transition-colors hover:bg-destructive/90"
-						>
+						{:else if $sessionStore.isStreaming}
 							<StopCircle class="h-4 w-4" />
-						</button>
-					{:else}
-						<button
-							onclick={handleSubmit}
-							disabled={!inputValue.trim()}
-							class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg
-								bg-primary text-primary-foreground transition-colors
-								hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
-						>
-							{#if $sessionStore.isLoading}
-								<Loader2 class="h-4 w-4 animate-spin" />
-							{:else}
-								<Send class="h-4 w-4" />
-							{/if}
-						</button>
-					{/if}
+						{:else}
+							<Send class="h-4 w-4" />
+						{/if}
+					</button>
 				</div>
 			</div>
 		</div>

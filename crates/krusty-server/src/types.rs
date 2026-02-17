@@ -98,12 +98,32 @@ pub struct MessageResponse {
 // Chat Types
 // ============================================================================
 
+/// Content block from PWA (text or image)
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+pub enum ContentBlock {
+    Text { text: String },
+    Image {
+        source: ImageSource,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+pub enum ImageSource {
+    Base64 { media_type: String, data: String },
+    Url { url: String },
+}
+
 #[derive(Deserialize)]
 pub struct ChatRequest {
     /// Session ID (creates new session if not provided)
     pub session_id: Option<String>,
-    /// User message content
+    /// User message content (text fallback)
     pub message: String,
+    /// Multi-modal content blocks (text + images)
+    #[serde(default)]
+    pub content: Vec<ContentBlock>,
     /// Model override
     pub model: Option<String>,
     /// Enable extended thinking
