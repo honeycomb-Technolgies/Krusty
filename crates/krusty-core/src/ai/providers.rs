@@ -9,7 +9,7 @@ use std::fmt;
 use std::sync::LazyLock;
 
 use crate::ai::models::ApiFormat;
-use crate::auth::OpenAIAuthType;
+use crate::auth::{AnthropicAuthType, OpenAIAuthType};
 
 /// ChatGPT backend API for OAuth users (Responses API)
 /// This endpoint is required for tokens obtained via ChatGPT OAuth flow.
@@ -28,6 +28,7 @@ pub enum ProviderId {
     MiniMax,
     OpenRouter,
     ZAi,
+    Anthropic,
     OpenAI,
 }
 
@@ -37,6 +38,7 @@ impl ProviderId {
     pub fn all() -> &'static [ProviderId] {
         &[
             ProviderId::MiniMax,    // Default provider, always first
+            ProviderId::Anthropic,  // Anthropic direct (OAuth or API key)
             ProviderId::OpenAI,     // OpenAI direct (OAuth or API key)
             ProviderId::ZAi,        // GLM-5
             ProviderId::OpenRouter, // 100+ dynamic models, always last
@@ -49,13 +51,14 @@ impl ProviderId {
             ProviderId::MiniMax => "minimax",
             ProviderId::OpenRouter => "openrouter",
             ProviderId::ZAi => "z_ai",
+            ProviderId::Anthropic => "anthropic",
             ProviderId::OpenAI => "openai",
         }
     }
 
     /// Check if this provider supports OAuth authentication
     pub fn supports_oauth(&self) -> bool {
-        matches!(self, ProviderId::OpenAI)
+        matches!(self, ProviderId::OpenAI | ProviderId::Anthropic)
     }
 
     /// Get the authentication methods supported by this provider
@@ -67,6 +70,7 @@ impl ProviderId {
                 AuthMethod::OAuthDevice,
                 AuthMethod::ApiKey,
             ],
+            ProviderId::Anthropic => vec![AuthMethod::OAuthBrowser, AuthMethod::ApiKey],
             _ => vec![AuthMethod::ApiKey],
         }
     }
@@ -78,6 +82,7 @@ impl fmt::Display for ProviderId {
             ProviderId::MiniMax => write!(f, "MiniMax"),
             ProviderId::OpenRouter => write!(f, "OpenRouter"),
             ProviderId::ZAi => write!(f, "Z.ai"),
+            ProviderId::Anthropic => write!(f, "Anthropic"),
             ProviderId::OpenAI => write!(f, "OpenAI"),
         }
     }
@@ -213,6 +218,17 @@ impl ProviderConfig {
             OpenAIAuthType::ApiKey | OpenAIAuthType::None => ApiFormat::OpenAI,
         }
     }
+
+    /// Get the auth header for Anthropic based on auth type
+    ///
+    /// - OAuth tokens use Bearer authorization
+    /// - API keys use x-api-key header
+    pub fn anthropic_auth_header_for_auth(auth_type: AnthropicAuthType) -> AuthHeader {
+        match auth_type {
+            AnthropicAuthType::OAuth => AuthHeader::Bearer,
+            AnthropicAuthType::ApiKey | AnthropicAuthType::None => AuthHeader::XApiKey,
+        }
+    }
 }
 
 // ============================================================================
@@ -223,6 +239,7 @@ impl ProviderConfig {
 /// Maps to provider-specific IDs for seamless switching
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ModelFamily {
+    ClaudeOpus4_6,
     ClaudeOpus4_5,
     ClaudeSonnet4_5,
     ClaudeSonnet4,
@@ -234,6 +251,17 @@ pub enum ModelFamily {
 static MODEL_MAPPINGS: LazyLock<Vec<(ModelFamily, ProviderId, &'static str)>> =
     LazyLock::new(|| {
         vec![
+            // Claude Opus 4.6
+            (
+                ModelFamily::ClaudeOpus4_6,
+                ProviderId::Anthropic,
+                "claude-opus-4-6",
+            ),
+            (
+                ModelFamily::ClaudeOpus4_6,
+                ProviderId::OpenRouter,
+                "anthropic/claude-opus-4.6",
+            ),
             // Claude Opus 4.5
             (
                 ModelFamily::ClaudeOpus4_5,
@@ -331,6 +359,14 @@ impl ProviderCapabilities {
                 context_management: false,
                 prompt_caching: false,
                 web_plugins: true, // Uses plugins array
+            },
+            // Anthropic: native prompt caching
+            ProviderId::Anthropic => Self {
+                web_search: false,
+                web_fetch: false,
+                context_management: false,
+                prompt_caching: true,
+                web_plugins: false,
             },
             // OpenAI: supports tools but not server-executed web search
             ProviderId::OpenAI => Self {
@@ -465,6 +501,28 @@ static BUILTIN_PROVIDERS: LazyLock<Vec<ProviderConfig>> = LazyLock::new(|| {
             pricing_hint: None,
             custom_headers: HashMap::new(),
         },
+        // Anthropic - Direct access with OAuth or API key (native Anthropic format)
+        ProviderConfig {
+            id: ProviderId::Anthropic,
+            name: "Anthropic".to_string(),
+            description: "Claude Opus 4.6 + Haiku (OAuth or API key)".to_string(),
+            base_url: "https://api.anthropic.com/v1/messages".to_string(),
+            auth_header: AuthHeader::Bearer, // OAuth uses Bearer; API key path overrides to XApiKey
+            models: vec![
+                ModelInfo::new("claude-opus-4-6", "Claude Opus 4.6", 200_000, 128_000)
+                    .with_anthropic_thinking(),
+                ModelInfo::new(
+                    "claude-haiku-4-5-20251001",
+                    "Claude Haiku 4.5",
+                    200_000,
+                    16_384,
+                ),
+            ],
+            supports_tools: true,
+            dynamic_models: false,
+            pricing_hint: None,
+            custom_headers: HashMap::new(),
+        },
         // OpenAI - Direct access with OAuth or API key (OpenAI-compatible format)
         // Supports OAuth browser flow, device code flow, and API key authentication
         ProviderConfig {
@@ -505,6 +563,7 @@ mod tests {
         assert_eq!(ProviderId::MiniMax.to_string(), "MiniMax");
         assert_eq!(ProviderId::OpenRouter.to_string(), "OpenRouter");
         assert_eq!(ProviderId::ZAi.to_string(), "Z.ai");
+        assert_eq!(ProviderId::Anthropic.to_string(), "Anthropic");
         assert_eq!(ProviderId::OpenAI.to_string(), "OpenAI");
     }
 
@@ -512,15 +571,17 @@ mod tests {
     fn test_storage_keys() {
         assert_eq!(ProviderId::MiniMax.storage_key(), "minimax");
         assert_eq!(ProviderId::ZAi.storage_key(), "z_ai");
+        assert_eq!(ProviderId::Anthropic.storage_key(), "anthropic");
         assert_eq!(ProviderId::OpenAI.storage_key(), "openai");
     }
 
     #[test]
     fn test_builtin_providers() {
         let providers = builtin_providers();
-        assert_eq!(providers.len(), 4);
+        assert_eq!(providers.len(), 5);
         assert!(providers.iter().any(|p| p.id == ProviderId::MiniMax));
         assert!(providers.iter().any(|p| p.id == ProviderId::OpenRouter));
+        assert!(providers.iter().any(|p| p.id == ProviderId::Anthropic));
         assert!(providers.iter().any(|p| p.id == ProviderId::OpenAI));
         assert!(providers.iter().any(|p| p.id == ProviderId::ZAi));
     }
@@ -618,6 +679,11 @@ mod tests {
         assert!(!zai.web_search);
         assert!(!zai.web_plugins);
 
+        let anthropic = ProviderCapabilities::for_provider(ProviderId::Anthropic);
+        assert!(!anthropic.web_search);
+        assert!(anthropic.prompt_caching);
+        assert!(!anthropic.web_plugins);
+
         let openai = ProviderCapabilities::for_provider(ProviderId::OpenAI);
         assert!(!openai.web_search);
         assert!(!openai.web_plugins);
@@ -637,6 +703,13 @@ mod tests {
         assert!(openai_methods.contains(&AuthMethod::OAuthBrowser));
         assert!(openai_methods.contains(&AuthMethod::OAuthDevice));
         assert!(openai_methods.contains(&AuthMethod::ApiKey));
+
+        // Anthropic supports OAuth (browser + API key, no device code)
+        assert!(ProviderId::Anthropic.supports_oauth());
+        let anthropic_methods = ProviderId::Anthropic.auth_methods();
+        assert!(anthropic_methods.contains(&AuthMethod::OAuthBrowser));
+        assert!(!anthropic_methods.contains(&AuthMethod::OAuthDevice));
+        assert!(anthropic_methods.contains(&AuthMethod::ApiKey));
 
         // MiniMax doesn't support OAuth
         assert!(!ProviderId::MiniMax.supports_oauth());

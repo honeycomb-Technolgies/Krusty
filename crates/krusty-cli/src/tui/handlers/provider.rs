@@ -13,6 +13,12 @@ use crate::tui::app::App;
 
 impl App {
     fn resolve_auth_for_active_provider(&self) -> Option<String> {
+        if self.runtime.active_provider == ProviderId::Anthropic {
+            let resolved =
+                krusty_core::auth::resolve_anthropic_auth(&self.services.credential_store);
+            return resolved.credential;
+        }
+
         if self.runtime.active_provider == ProviderId::OpenAI {
             let resolved = krusty_core::auth::resolve_openai_auth(
                 &self.services.credential_store,
@@ -155,7 +161,9 @@ impl App {
         }
 
         // Try to load credentials for the new provider (API key or OAuth token)
-        let auth = if provider_id == ProviderId::OpenAI {
+        let auth = if provider_id == ProviderId::Anthropic {
+            krusty_core::auth::resolve_anthropic_auth(&self.services.credential_store).credential
+        } else if provider_id == ProviderId::OpenAI {
             krusty_core::auth::resolve_openai_auth(
                 &self.services.credential_store,
                 &self.runtime.current_model,

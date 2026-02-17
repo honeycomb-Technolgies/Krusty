@@ -115,6 +115,16 @@ impl ThinkingLevel {
         }
     }
 
+    /// Cycle for Anthropic Opus: Off -> Low -> Medium -> High -> Off (no XHigh)
+    pub fn cycle_anthropic(self) -> Self {
+        match self {
+            Self::Off => Self::Low,
+            Self::Low => Self::Medium,
+            Self::Medium => Self::High,
+            Self::High | Self::XHigh => Self::Off,
+        }
+    }
+
     pub fn toggle_basic(self) -> Self {
         if self.is_enabled() {
             Self::Off
@@ -464,16 +474,30 @@ impl App {
                 .contains("codex")
     }
 
+    /// Whether Tab should cycle Anthropic Opus 4.6 thinking levels.
+    pub fn is_anthropic_opus_thinking_mode(&self) -> bool {
+        self.runtime.active_provider == ProviderId::Anthropic
+            && (self.runtime.current_model.contains("opus-4-6")
+                || self.runtime.current_model.contains("opus-4.6"))
+    }
+
+    /// Whether this model supports multi-level thinking cycling.
+    pub fn has_multi_level_thinking(&self) -> bool {
+        self.is_codex_thinking_mode() || self.is_anthropic_opus_thinking_mode()
+    }
+
     /// Handle Tab thinking toggle/cycle.
     pub fn cycle_thinking_level(&mut self) {
         self.runtime.thinking_level = if self.is_codex_thinking_mode() {
             self.runtime.thinking_level.cycle_codex()
+        } else if self.is_anthropic_opus_thinking_mode() {
+            self.runtime.thinking_level.cycle_anthropic()
         } else {
             self.runtime.thinking_level.toggle_basic()
         };
         tracing::info!(
             model = %self.runtime.current_model,
-            codex_mode = self.is_codex_thinking_mode(),
+            multi_level = self.has_multi_level_thinking(),
             thinking_level = self.runtime.thinking_level.label(),
             "Updated thinking level"
         );

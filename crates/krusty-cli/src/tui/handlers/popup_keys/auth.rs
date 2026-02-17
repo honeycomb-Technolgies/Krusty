@@ -6,7 +6,10 @@ use crate::ai::providers::ProviderId;
 use crate::tui::app::{App, Popup};
 use crate::tui::popups::auth::AuthState;
 use crate::tui::utils::{DeviceCodeInfo, OAuthStatusUpdate};
-use krusty_core::auth::{openai_oauth_config, AuthMethod, BrowserOAuthFlow, DeviceCodeFlow};
+use krusty_core::auth::{
+    anthropic_oauth_config, openai_oauth_config, AuthMethod, BrowserOAuthFlow, DeviceCodeFlow,
+    OAuthTokenStore, PasteCodeOAuthFlow,
+};
 
 impl App {
     /// Handle auth popup keyboard events
@@ -40,6 +43,10 @@ impl App {
                 if code == KeyCode::Esc {
                     self.ui.popups.auth.go_back();
                 }
+            }
+            AuthState::OAuthPasteCode { provider, .. } => {
+                let provider = *provider;
+                self.handle_paste_code_input(code, modifiers, provider);
             }
             AuthState::Complete { .. } => {
                 if code == KeyCode::Esc || code == KeyCode::Enter {
@@ -99,12 +106,161 @@ impl App {
         }
     }
 
+    /// Handle paste-code input for Anthropic OAuth
+    fn handle_paste_code_input(
+        &mut self,
+        code: KeyCode,
+        modifiers: KeyModifiers,
+        provider: ProviderId,
+    ) {
+        match code {
+            KeyCode::Esc => self.ui.popups.auth.go_back(),
+            KeyCode::Backspace
+                if self
+                    .ui
+                    .popups
+                    .auth
+                    .get_paste_code()
+                    .is_none_or(str::is_empty) =>
+            {
+                self.ui.popups.auth.go_back();
+            }
+            KeyCode::Backspace => self.ui.popups.auth.backspace_paste_code(),
+            KeyCode::Char('v') if modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                    if let Ok(text) = clipboard.get_text() {
+                        for c in text.trim().chars() {
+                            self.ui.popups.auth.add_paste_code_char(c);
+                        }
+                    }
+                }
+            }
+            KeyCode::Char(c) if !modifiers.contains(KeyModifiers::CONTROL) => {
+                self.ui.popups.auth.add_paste_code_char(c);
+            }
+            KeyCode::Enter => {
+                let paste_code = self.ui.popups.auth.get_paste_code().map(|k| k.to_string());
+                if let Some(code_str) = paste_code {
+                    if !code_str.is_empty() {
+                        self.exchange_anthropic_paste_code(provider, code_str);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Exchange Anthropic paste-code for tokens using stored PKCE verifier
+    fn exchange_anthropic_paste_code(&mut self, provider: ProviderId, code_str: String) {
+        let status_tx = self.services.oauth_status_tx.clone();
+
+        // Parse `code#state` format
+        let auth_code = if let Some(idx) = code_str.find('#') {
+            code_str[..idx].to_string()
+        } else {
+            code_str.clone()
+        };
+
+        // Retrieve the stored PKCE verifier from when we opened the browser
+        let verifier_rx = match self.runtime.channels.anthropic_verifier.take() {
+            Some(rx) => rx,
+            None => {
+                self.ui
+                    .popups
+                    .auth
+                    .set_paste_code_error("No PKCE verifier found - please try again");
+                return;
+            }
+        };
+
+        tokio::spawn(async move {
+            let verifier = match verifier_rx.await {
+                Ok(v) => v,
+                Err(_) => {
+                    let _ = status_tx.send(OAuthStatusUpdate {
+                        provider,
+                        success: false,
+                        message: "PKCE verifier lost - please try again".to_string(),
+                        device_code: None,
+                        token: None,
+                    });
+                    return;
+                }
+            };
+
+            let config = anthropic_oauth_config();
+            let flow = PasteCodeOAuthFlow::new(config);
+            match flow.exchange_code(&auth_code, &verifier).await {
+                Ok(token) => {
+                    // Save token to OAuth store
+                    if let Ok(mut store) = OAuthTokenStore::load() {
+                        store.set(provider, token.clone());
+                        if let Err(e) = store.save() {
+                            tracing::warn!("Failed to save Anthropic OAuth token: {}", e);
+                        }
+                    }
+
+                    let _ = status_tx.send(OAuthStatusUpdate {
+                        provider,
+                        success: true,
+                        message: "Authentication successful".to_string(),
+                        device_code: None,
+                        token: Some(token),
+                    });
+                }
+                Err(e) => {
+                    let _ = status_tx.send(OAuthStatusUpdate {
+                        provider,
+                        success: false,
+                        message: format!("Token exchange failed: {}", e),
+                        device_code: None,
+                        token: None,
+                    });
+                }
+            }
+        });
+    }
+
     /// Start OAuth flow for a provider
     pub(super) fn start_oauth_flow(&mut self, provider: ProviderId, method: AuthMethod) {
         let status_tx = self.services.oauth_status_tx.clone();
 
         match method {
             AuthMethod::OAuthBrowser => {
+                // Anthropic: paste-code flow (no localhost redirect)
+                if provider == ProviderId::Anthropic {
+                    let config = anthropic_oauth_config();
+                    let flow = PasteCodeOAuthFlow::new(config);
+                    match flow.get_auth_url() {
+                        Ok((url, verifier, _state)) => {
+                            // Open browser
+                            if let Err(e) = krusty_core::auth::open_browser(&url) {
+                                self.ui
+                                    .popups
+                                    .auth
+                                    .set_oauth_error(&format!("Failed to open browser: {}", e));
+                                return;
+                            }
+
+                            // Store verifier for later exchange
+                            // We'll store it in the runtime channels as a oneshot
+                            let (verifier_tx, verifier_rx) = tokio::sync::oneshot::channel();
+                            let _ = verifier_tx.send(verifier);
+                            self.runtime.channels.anthropic_verifier = Some(verifier_rx);
+
+                            // Transition to paste-code input state
+                            self.ui.popups.auth.set_oauth_paste_code(provider, url);
+                        }
+                        Err(e) => {
+                            self.ui
+                                .popups
+                                .auth
+                                .set_oauth_error(&format!("Failed to build auth URL: {}", e));
+                        }
+                    }
+                    return;
+                }
+
                 self.ui
                     .popups
                     .auth

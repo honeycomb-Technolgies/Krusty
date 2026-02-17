@@ -129,6 +129,69 @@ impl AiClientConfig {
     }
 }
 
+impl AiClientConfig {
+    /// Create config for Anthropic with automatic auth type detection
+    ///
+    /// Detects whether OAuth token or API key is being used:
+    /// - OAuth (sk-ant-oat*): Bearer auth + CC identity headers
+    /// - API Key (sk-ant-*): x-api-key auth
+    pub fn for_anthropic_with_auth_detection(
+        model: &str,
+        credentials: &crate::storage::CredentialStore,
+    ) -> Self {
+        use crate::ai::providers::{ProviderConfig, ProviderId};
+        use crate::auth::resolve_anthropic_auth;
+
+        let auth_resolution = resolve_anthropic_auth(credentials);
+        let auth_type = auth_resolution.auth_type;
+        let auth_header = ProviderConfig::anthropic_auth_header_for_auth(auth_type);
+
+        tracing::info!(
+            "Anthropic auth detection: {:?} -> auth_header={:?}",
+            auth_type,
+            auth_header,
+        );
+
+        let mut custom_headers = HashMap::new();
+        if matches!(auth_type, crate::auth::AnthropicAuthType::OAuth) {
+            // CC identity headers for OAuth path
+            custom_headers.insert(
+                "user-agent".to_string(),
+                "claude-cli/2.1.2 (external, cli)".to_string(),
+            );
+            custom_headers.insert("x-app".to_string(), "cli".to_string());
+        }
+
+        Self {
+            model: model.to_string(),
+            max_tokens: constants::ai::MAX_OUTPUT_TOKENS,
+            base_url: Some("https://api.anthropic.com/v1/messages".to_string()),
+            auth_header,
+            provider_id: ProviderId::Anthropic,
+            api_format: ApiFormat::Anthropic,
+            custom_headers,
+        }
+    }
+}
+
+/// Anthropic adaptive effort for Opus 4.6 thinking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnthropicAdaptiveEffort {
+    Low,
+    Medium,
+    High,
+}
+
+impl AnthropicAdaptiveEffort {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
+}
+
 use crate::ai::providers::ReasoningFormat;
 use crate::ai::types::{
     AiTool, ContextManagement, ThinkingConfig, WebFetchConfig, WebSearchConfig,
@@ -182,6 +245,8 @@ pub struct CallOptions {
     pub codex_reasoning_effort: Option<CodexReasoningEffort>,
     /// Codex tool parallelism toggle (disabled by default until parser hardening)
     pub codex_parallel_tool_calls: bool,
+    /// Anthropic Opus 4.6 adaptive thinking effort
+    pub anthropic_adaptive_effort: Option<AnthropicAdaptiveEffort>,
 }
 
 impl Default for CallOptions {
@@ -200,6 +265,7 @@ impl Default for CallOptions {
             session_id: None,
             codex_reasoning_effort: None,
             codex_parallel_tool_calls: false,
+            anthropic_adaptive_effort: None,
         }
     }
 }

@@ -18,7 +18,7 @@ use crate::ai::format::google::GoogleFormat;
 use crate::ai::format::openai::OpenAIFormat;
 use crate::ai::format::FormatHandler;
 use crate::ai::parsers::{AnthropicParser, GoogleParser, OpenAIParser};
-use crate::ai::providers::{ProviderCapabilities, ReasoningFormat};
+use crate::ai::providers::{ProviderCapabilities, ProviderId, ReasoningFormat};
 use crate::ai::reasoning::{ReasoningConfig, DEFAULT_THINKING_BUDGET};
 use crate::ai::sse::{
     create_streaming_channels, spawn_buffer_processor, SseParser, SseStreamProcessor,
@@ -299,13 +299,33 @@ impl AiClient {
         });
 
         // Add system prompt with cache control
+        // For Anthropic OAuth, prepend CC identity prompt as first block
+        let is_anthropic_oauth = self.provider_id() == ProviderId::Anthropic
+            && crate::auth::is_anthropic_oauth_token(self.api_key());
         if !system.is_empty() {
             if options.enable_caching {
-                body["system"] = serde_json::json!([{
-                    "type": "text",
-                    "text": system,
-                    "cache_control": {"type": "ephemeral"}
-                }]);
+                if is_anthropic_oauth {
+                    // OAuth: CC identity prompt + Krusty system prompt as separate cached blocks
+                    body["system"] = serde_json::json!([
+                        {
+                            "type": "text",
+                            "text": "You are Claude Code, Anthropic's official CLI for Claude.",
+                            "cache_control": {"type": "ephemeral"}
+                        },
+                        {
+                            "type": "text",
+                            "text": system,
+                            "cache_control": {"type": "ephemeral"}
+                        }
+                    ]);
+                    debug!("CC identity + Krusty system prompt added for Anthropic OAuth");
+                } else {
+                    body["system"] = serde_json::json!([{
+                        "type": "text",
+                        "text": system,
+                        "cache_control": {"type": "ephemeral"}
+                    }]);
+                }
                 debug!("Cache breakpoint added to system prompt");
             } else {
                 body["system"] = Value::String(system);
@@ -788,6 +808,21 @@ impl AiClient {
         options: &CallOptions,
         reasoning_enabled: bool,
     ) {
+        // Anthropic Opus 4.6 adaptive thinking path
+        if self.is_anthropic_opus_4_6() && reasoning_enabled {
+            let effort = options
+                .anthropic_adaptive_effort
+                .map(|e| e.as_str())
+                .unwrap_or("high");
+            body["thinking"] = serde_json::json!({ "type": "adaptive" });
+            body["output_config"] = serde_json::json!({ "effort": effort });
+            debug!(
+                "Anthropic Opus 4.6 adaptive thinking enabled (effort={})",
+                effort
+            );
+            return;
+        }
+
         let budget_tokens = options.thinking.as_ref().map(|t| t.budget_tokens);
 
         if let Some(reasoning_config) = ReasoningConfig::build(
@@ -849,6 +884,13 @@ impl AiClient {
         }
     }
 
+    /// Check if current model is Anthropic Opus 4.6
+    fn is_anthropic_opus_4_6(&self) -> bool {
+        self.provider_id() == ProviderId::Anthropic
+            && (self.config().model.contains("opus-4-6")
+                || self.config().model.contains("opus-4.6"))
+    }
+
     /// Add context management to the request body
     fn add_context_management(&self, body: &mut Value, options: &CallOptions) {
         if let Some(ctx_mgmt) = &options.context_management {
@@ -908,6 +950,16 @@ impl AiClient {
     fn build_beta_headers(&self, options: &CallOptions) -> Vec<&'static str> {
         let mut beta_headers: Vec<&str> = Vec::new();
 
+        let is_anthropic_provider = self.provider_id() == ProviderId::Anthropic;
+        let is_anthropic_oauth =
+            is_anthropic_provider && crate::auth::is_anthropic_oauth_token(self.api_key());
+
+        // Anthropic OAuth: CC identity betas
+        if is_anthropic_oauth {
+            beta_headers.push("claude-code-20250219");
+            beta_headers.push("oauth-2025-04-20");
+        }
+
         // Add thinking beta headers for Anthropic reasoning format
         let anthropic_thinking =
             matches!(options.reasoning_format, Some(ReasoningFormat::Anthropic))
@@ -919,6 +971,14 @@ impl AiClient {
             if self.config().model.contains("opus-4-5") {
                 beta_headers.push("effort-2025-11-24");
             }
+        }
+
+        // Anthropic Opus 4.6: adaptive thinking needs interleaved-thinking beta
+        if self.is_anthropic_opus_4_6()
+            && options.anthropic_adaptive_effort.is_some()
+            && !beta_headers.contains(&"interleaved-thinking-2025-05-14")
+        {
+            beta_headers.push("interleaved-thinking-2025-05-14");
         }
 
         // Context management beta

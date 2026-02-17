@@ -154,6 +154,10 @@ pub fn wrap_provider_options(options: Value, provider_id: ProviderId) -> Provide
             openrouter: Some(options),
             ..Default::default()
         },
+        ProviderId::Anthropic => ProviderOptions {
+            anthropic: Some(options),
+            ..Default::default()
+        },
         ProviderId::ZAi | ProviderId::MiniMax | ProviderId::OpenAI => {
             // For OpenAI-compatible providers (GLM, MiniMax, OpenAI)
             // Check if options contain reasoning_content (DeepSeek/MiniMax style)

@@ -45,6 +45,13 @@ pub enum AuthState {
         user_code: String,
         verification_uri: String,
     },
+    /// OAuth paste-code flow - waiting for user to paste authorization code
+    OAuthPasteCode {
+        provider: ProviderId,
+        input: String,
+        auth_url: String,
+        error: Option<String>,
+    },
     /// Authentication saved successfully
     Complete { provider: ProviderId },
 }
@@ -246,6 +253,7 @@ impl AuthPopup {
         let provider = match &self.state {
             AuthState::OAuthBrowserWaiting { provider, .. } => *provider,
             AuthState::OAuthDeviceCode { provider, .. } => *provider,
+            AuthState::OAuthPasteCode { provider, .. } => *provider,
             _ => return,
         };
         self.state = AuthState::Complete { provider };
@@ -256,6 +264,7 @@ impl AuthPopup {
         let provider = match &self.state {
             AuthState::OAuthBrowserWaiting { provider, .. } => *provider,
             AuthState::OAuthDeviceCode { provider, .. } => *provider,
+            AuthState::OAuthPasteCode { provider, .. } => *provider,
             _ => return,
         };
         self.state = AuthState::ApiKeyInput {
@@ -263,6 +272,50 @@ impl AuthPopup {
             input: String::new(),
             error: Some(error.to_string()),
         };
+    }
+
+    /// Set paste-code state for Anthropic OAuth
+    pub fn set_oauth_paste_code(&mut self, provider: ProviderId, auth_url: String) {
+        self.state = AuthState::OAuthPasteCode {
+            provider,
+            input: String::new(),
+            auth_url,
+            error: None,
+        };
+    }
+
+    /// Set error on paste-code state
+    pub fn set_paste_code_error(&mut self, error: &str) {
+        if let AuthState::OAuthPasteCode {
+            error: current_error,
+            ..
+        } = &mut self.state
+        {
+            *current_error = Some(error.to_string());
+        }
+    }
+
+    /// Add a char to paste-code input
+    pub fn add_paste_code_char(&mut self, c: char) {
+        if let AuthState::OAuthPasteCode { input, .. } = &mut self.state {
+            input.push(c);
+        }
+    }
+
+    /// Backspace on paste-code input
+    pub fn backspace_paste_code(&mut self) {
+        if let AuthState::OAuthPasteCode { input, .. } = &mut self.state {
+            input.pop();
+        }
+    }
+
+    /// Get paste-code input
+    pub fn get_paste_code(&self) -> Option<&str> {
+        if let AuthState::OAuthPasteCode { input, .. } = &self.state {
+            Some(input.as_str())
+        } else {
+            None
+        }
     }
 
     /// Go back to previous state
@@ -289,7 +342,8 @@ impl AuthPopup {
                 }
             }
             AuthState::OAuthBrowserWaiting { provider, .. }
-            | AuthState::OAuthDeviceCode { provider, .. } => {
+            | AuthState::OAuthDeviceCode { provider, .. }
+            | AuthState::OAuthPasteCode { provider, .. } => {
                 self.state = AuthState::AuthMethodSelection {
                     provider: *provider,
                     selected_index: 0,
@@ -356,6 +410,14 @@ impl AuthPopup {
                 user_code,
                 verification_uri,
             } => self.render_oauth_device_code(f, theme, *provider, user_code, verification_uri),
+            AuthState::OAuthPasteCode {
+                provider,
+                input,
+                auth_url,
+                error,
+            } => {
+                self.render_oauth_paste_code(f, theme, *provider, input, auth_url, error.as_deref())
+            }
             AuthState::Complete { provider } => self.render_complete(f, theme, *provider),
         }
     }
@@ -745,6 +807,7 @@ impl AuthPopup {
             ProviderId::OpenRouter => "https://openrouter.ai/keys",
             ProviderId::ZAi => "https://z.ai/",
             ProviderId::MiniMax => "https://platform.minimax.io/",
+            ProviderId::Anthropic => "https://console.anthropic.com/settings/keys",
             ProviderId::OpenAI => "https://platform.openai.com/api-keys",
         };
 
@@ -807,6 +870,123 @@ impl AuthPopup {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(": save  ", Style::default().fg(theme.text_color)),
+            Span::styled(
+                "Esc",
+                Style::default()
+                    .fg(theme.accent_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(": cancel", Style::default().fg(theme.text_color)),
+        ]))
+        .alignment(Alignment::Center);
+        f.render_widget(footer, chunks[4]);
+    }
+
+    fn render_oauth_paste_code(
+        &self,
+        f: &mut Frame,
+        theme: &Theme,
+        provider: ProviderId,
+        input: &str,
+        _auth_url: &str,
+        error: Option<&str>,
+    ) {
+        let (w, h) = PopupSize::Medium.dimensions();
+        let area = center_rect(w, h, f.area());
+        render_popup_background(f, area, theme);
+
+        let block = popup_block(theme);
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .margin(1)
+            .constraints([
+                Constraint::Length(3), // Title
+                Constraint::Length(3), // Instructions
+                Constraint::Length(3), // Input
+                Constraint::Length(2), // Error
+                Constraint::Length(2), // Footer
+            ])
+            .split(inner);
+
+        // Title
+        let title_text = format!("{} OAuth", provider);
+        let title_lines = popup_title(&title_text, theme);
+        let title = Paragraph::new(title_lines).alignment(Alignment::Center);
+        f.render_widget(title, chunks[0]);
+
+        // Instructions
+        let instructions = Paragraph::new(vec![
+            Line::from("Complete authorization in browser, then"),
+            Line::from(vec![
+                Span::raw("paste the "),
+                Span::styled(
+                    "code#state",
+                    Style::default()
+                        .fg(theme.accent_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" string below:"),
+            ]),
+        ])
+        .style(Style::default().fg(theme.text_color))
+        .alignment(Alignment::Center);
+        f.render_widget(instructions, chunks[1]);
+
+        // Input field
+        let input_block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(theme.border_color));
+
+        let display = if input.is_empty() {
+            "Paste code here...".to_string()
+        } else {
+            let len = input.len();
+            if len > 40 {
+                format!("{}...({} chars)", &input[..37], len)
+            } else {
+                input.to_string()
+            }
+        };
+
+        let input_style = if input.is_empty() {
+            Style::default().fg(theme.border_color)
+        } else {
+            Style::default().fg(theme.text_color)
+        };
+
+        let input_widget = Paragraph::new(display)
+            .style(input_style)
+            .block(input_block);
+        f.render_widget(input_widget, chunks[2]);
+
+        // Error message
+        if let Some(err) = error {
+            let error_widget = Paragraph::new(err)
+                .style(Style::default().fg(theme.error_color))
+                .alignment(Alignment::Center);
+            f.render_widget(error_widget, chunks[3]);
+        }
+
+        // Footer
+        let footer = Paragraph::new(Line::from(vec![
+            Span::styled(
+                "Ctrl+V",
+                Style::default()
+                    .fg(theme.accent_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(": paste  ", Style::default().fg(theme.text_color)),
+            Span::styled(
+                "Enter",
+                Style::default()
+                    .fg(theme.accent_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(": submit  ", Style::default().fg(theme.text_color)),
             Span::styled(
                 "Esc",
                 Style::default()

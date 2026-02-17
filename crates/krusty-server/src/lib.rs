@@ -118,6 +118,7 @@ pub fn create_ai_client(credentials: &CredentialStore) -> Option<AiClient> {
             ProviderId::MiniMax => "MINIMAX_API_KEY",
             ProviderId::OpenRouter => "OPENROUTER_API_KEY",
             ProviderId::ZAi => "Z_AI_API_KEY",
+            ProviderId::Anthropic => "ANTHROPIC_API_KEY",
             ProviderId::OpenAI => "OPENAI_API_KEY",
         };
         std::env::var(env_key).ok()

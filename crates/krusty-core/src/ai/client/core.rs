@@ -209,11 +209,15 @@ impl AiClient {
         url: &str,
         beta_headers: &[&str],
     ) -> reqwest::RequestBuilder {
-        let request = self.build_request(url);
+        let mut request = self.build_request(url);
 
-        // Beta headers are only relevant for native Anthropic API (no longer supported)
-        // Third-party Anthropic-compatible providers (Z.ai, MiniMax, etc.) may not support them
-        let _ = beta_headers;
+        // Beta headers for native Anthropic API (direct provider)
+        // Third-party Anthropic-compatible providers (Z.ai, MiniMax, etc.) don't need them
+        if self.config.provider_id == ProviderId::Anthropic && !beta_headers.is_empty() {
+            let combined = beta_headers.join(",");
+            request = request.header("anthropic-beta", combined);
+            info!("Added anthropic-beta headers for Anthropic provider");
+        }
 
         request
     }

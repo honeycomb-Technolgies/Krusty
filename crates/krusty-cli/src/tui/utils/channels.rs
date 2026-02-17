@@ -90,6 +90,8 @@ pub struct AsyncChannels {
     pub update_status: Option<mpsc::UnboundedReceiver<krusty_core::updater::UpdateStatus>>,
     /// OAuth authentication status updates
     pub oauth_status: Option<mpsc::UnboundedReceiver<OAuthStatusUpdate>>,
+    /// Anthropic PKCE verifier for paste-code flow
+    pub anthropic_verifier: Option<oneshot::Receiver<krusty_core::auth::PkceVerifier>>,
 }
 
 impl AsyncChannels {
