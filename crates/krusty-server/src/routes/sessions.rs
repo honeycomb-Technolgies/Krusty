@@ -359,13 +359,9 @@ async fn pinch_session(
     )?;
 
     // Inject the pinch context as first message in new session
+    // Save as "system" message (matches TUI behavior) with raw string format
     let system_msg = pinch_ctx.to_system_message();
-    let context_content = vec![Content::Text {
-        text: format!("[Pinch Context]\n\n{}", system_msg),
-    }];
-    let context_json = serde_json::to_string(&context_content)
-        .map_err(|e| AppError::Internal(format!("Failed to serialize pinch context: {}", e)))?;
-    session_manager.save_message(&new_session_id, "user", &context_json)?;
+    session_manager.save_message(&new_session_id, "system", &system_msg)?;
 
     // Get the new session info
     let new_session = session_manager
