@@ -51,6 +51,9 @@ const REPEATED_TOOL_FAILURE_THRESHOLD: usize = 2;
 const SESSION_LOCK_MAX_ENTRIES: usize = 1000;
 const SESSION_LOCK_MAX_AGE: Duration = Duration::from_secs(3600);
 
+type SseSender = mpsc::Sender<Result<Event, Infallible>>;
+type PendingApprovals = Arc<RwLock<HashMap<String, oneshot::Sender<bool>>>>;
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", post(chat))
@@ -69,6 +72,37 @@ struct ChatSessionContext {
     work_mode: WorkMode,
     user_id: Option<String>,
     guard: OwnedMutexGuard<()>,
+}
+
+struct AgenticLoopContext {
+    ai_client: Arc<AiClient>,
+    tool_registry: Arc<ToolRegistry>,
+    process_registry: Arc<ProcessRegistry>,
+    sse_tx: SseSender,
+    conversation: Vec<ModelMessage>,
+    options: CallOptions,
+    session_id: String,
+    db_path: Arc<PathBuf>,
+    working_dir: PathBuf,
+    user_id: Option<String>,
+    work_mode: WorkMode,
+    permission_mode: PermissionMode,
+    pending_approvals: PendingApprovals,
+    push_service: Option<Arc<PushService>>,
+}
+
+struct ExecuteToolsContext<'a> {
+    tool_registry: &'a ToolRegistry,
+    tool_calls: &'a [AiToolCall],
+    working_dir: &'a Path,
+    process_registry: &'a Arc<ProcessRegistry>,
+    sse_tx: &'a SseSender,
+    user_id: Option<&'a str>,
+    permission_mode: PermissionMode,
+    pending_approvals: &'a PendingApprovals,
+    session_id: &'a str,
+    db_path: &'a Path,
+    current_mode: WorkMode,
 }
 
 async fn setup_chat_session(
@@ -275,23 +309,23 @@ async fn chat(
 
     tokio::spawn(async move {
         let _guard = guard;
-        run_agentic_loop(
+        run_agentic_loop(AgenticLoopContext {
             ai_client,
             tool_registry,
             process_registry,
             sse_tx,
             conversation,
             options,
-            ctx_session_id,
+            session_id: ctx_session_id,
             db_path,
             working_dir,
-            ctx_user_id,
+            user_id: ctx_user_id,
             work_mode,
             permission_mode,
             pending_approvals,
             push_service,
-        )
-        .await;
+        })
+        .await
     });
 
     if let (Some(first_message), Some(title_tx)) = (first_message_for_title, title_sse_tx) {
@@ -369,19 +403,55 @@ async fn tool_result(
         apply_thinking_config(&ctx.ai_client, &mut ctx.options);
     }
 
-    let tool_result_content = vec![Content::ToolResult {
-        tool_use_id: req.tool_call_id.clone(),
-        output: serde_json::Value::String(req.result),
-        is_error: None,
-    }];
-    let tool_result_json = serde_json::to_string(&tool_result_content)?;
+    // Check if the last user message already has a placeholder tool_result for
+    // this tool_use_id (happens when AskUser was batched with other tools).
+    // If so, replace the placeholder in-place instead of creating a new message.
+    let merged = if let Some(last_msg) = ctx.conversation.last_mut() {
+        if last_msg.role == Role::User
+            && last_msg.content.iter().any(|c| {
+                matches!(c, Content::ToolResult { tool_use_id, .. } if tool_use_id == &req.tool_call_id)
+            })
+        {
+            // Replace the placeholder with the real answer
+            for c in &mut last_msg.content {
+                if let Content::ToolResult {
+                    tool_use_id,
+                    output,
+                    ..
+                } = c
+                {
+                    if tool_use_id == &req.tool_call_id {
+                        *output = serde_json::Value::String(req.result.clone());
+                        break;
+                    }
+                }
+            }
+            // Re-save the updated message
+            let updated_json = serde_json::to_string(&last_msg.content)?;
+            ctx.session_manager
+                .update_last_message(&req.session_id, "user", &updated_json)?;
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
 
-    ctx.conversation.push(ModelMessage {
-        role: Role::User,
-        content: tool_result_content,
-    });
-    ctx.session_manager
-        .save_message(&req.session_id, "user", &tool_result_json)?;
+    if !merged {
+        let tool_result_content = vec![Content::ToolResult {
+            tool_use_id: req.tool_call_id.clone(),
+            output: serde_json::Value::String(req.result.clone()),
+            is_error: None,
+        }];
+        let tool_result_json = serde_json::to_string(&tool_result_content)?;
+        ctx.conversation.push(ModelMessage {
+            role: Role::User,
+            content: tool_result_content,
+        });
+        ctx.session_manager
+            .save_message(&req.session_id, "user", &tool_result_json)?;
+    }
 
     let (sse_tx, sse_rx) = mpsc::channel::<Result<Event, Infallible>>(SSE_CHANNEL_BUFFER);
 
@@ -405,7 +475,7 @@ async fn tool_result(
 
     tokio::spawn(async move {
         let _guard = guard;
-        run_agentic_loop(
+        run_agentic_loop(AgenticLoopContext {
             ai_client,
             tool_registry,
             process_registry,
@@ -417,11 +487,11 @@ async fn tool_result(
             working_dir,
             user_id,
             work_mode,
-            PermissionMode::Autonomous,
+            permission_mode: PermissionMode::Autonomous,
             pending_approvals,
             push_service,
-        )
-        .await;
+        })
+        .await
     });
 
     let stream = ReceiverStream::new(sse_rx);
@@ -454,22 +524,24 @@ fn apply_thinking_config(ai_client: &AiClient, options: &mut CallOptions) {
     }
 }
 
-async fn run_agentic_loop(
-    ai_client: Arc<AiClient>,
-    tool_registry: Arc<ToolRegistry>,
-    process_registry: Arc<ProcessRegistry>,
-    sse_tx: mpsc::Sender<Result<Event, Infallible>>,
-    mut conversation: Vec<ModelMessage>,
-    options: CallOptions,
-    session_id: String,
-    db_path: Arc<PathBuf>,
-    working_dir: PathBuf,
-    user_id: Option<String>,
-    mut work_mode: WorkMode,
-    permission_mode: PermissionMode,
-    pending_approvals: Arc<RwLock<HashMap<String, oneshot::Sender<bool>>>>,
-    push_service: Option<Arc<PushService>>,
-) {
+async fn run_agentic_loop(ctx: AgenticLoopContext) {
+    let AgenticLoopContext {
+        ai_client,
+        tool_registry,
+        process_registry,
+        sse_tx,
+        mut conversation,
+        options,
+        session_id,
+        db_path,
+        working_dir,
+        user_id,
+        mut work_mode,
+        permission_mode,
+        pending_approvals,
+        push_service,
+    } = ctx;
+
     if let Err(e) = Database::new(&db_path) {
         send_event(
             &sse_tx,
@@ -632,12 +704,57 @@ async fn run_agentic_loop(
             break;
         }
 
-        let ask_user_calls: Vec<_> = tool_calls
+        let (ask_user_calls, non_ask_user_calls): (Vec<_>, Vec<_>) = tool_calls
             .iter()
-            .filter(|t| t.name == "AskUserQuestion")
-            .collect();
+            .partition::<Vec<_>, _>(|t| t.name == "AskUserQuestion");
 
         if !ask_user_calls.is_empty() {
+            // When AskUser appears alongside other tool calls, execute the
+            // others first and save all results (including a placeholder for
+            // AskUser) in a single user message. This keeps every tool_use
+            // paired with a tool_result, satisfying the Anthropic API.
+            // The real AskUser answer arrives later via /tool-result which
+            // merges it into this message, replacing the placeholder.
+            let mut all_results: Vec<Content> = Vec::new();
+
+            if !non_ask_user_calls.is_empty() {
+                let other_calls: Vec<AiToolCall> =
+                    non_ask_user_calls.into_iter().cloned().collect();
+                set_agent_state(db_path.as_ref(), &session_id, "tool_executing");
+                let (other_results, _next) = execute_tools(ExecuteToolsContext {
+                    tool_registry: &tool_registry,
+                    tool_calls: &other_calls,
+                    working_dir: &working_dir,
+                    process_registry: &process_registry,
+                    sse_tx: &sse_tx,
+                    user_id: user_id.as_deref(),
+                    permission_mode,
+                    pending_approvals: &pending_approvals,
+                    session_id: &session_id,
+                    db_path: db_path.as_ref().as_path(),
+                    current_mode: work_mode,
+                })
+                .await;
+                all_results.extend(other_results);
+            }
+
+            // Add placeholder results for each AskUser call so the
+            // conversation has a complete set of tool_results.
+            for call in &ask_user_calls {
+                all_results.push(Content::ToolResult {
+                    tool_use_id: call.id.clone(),
+                    output: serde_json::Value::String("Awaiting user response...".to_string()),
+                    is_error: None,
+                });
+            }
+
+            let tool_msg = ModelMessage {
+                role: Role::User,
+                content: all_results,
+            };
+            conversation.push(tool_msg.clone());
+            save_message(db_path.as_ref(), &session_id, &tool_msg);
+
             if client_connected {
                 for call in &ask_user_calls {
                     send_event(
@@ -702,19 +819,19 @@ async fn run_agentic_loop(
         }
 
         set_agent_state(db_path.as_ref(), &session_id, "tool_executing");
-        let (tool_results, next_work_mode) = execute_tools(
-            &tool_registry,
-            &tool_calls,
-            &working_dir,
-            &process_registry,
-            &sse_tx,
-            user_id.as_deref(),
+        let (tool_results, next_work_mode) = execute_tools(ExecuteToolsContext {
+            tool_registry: &tool_registry,
+            tool_calls: &tool_calls,
+            working_dir: &working_dir,
+            process_registry: &process_registry,
+            sse_tx: &sse_tx,
+            user_id: user_id.as_deref(),
             permission_mode,
-            &pending_approvals,
-            &session_id,
-            db_path.as_ref().as_path(),
-            work_mode,
-        )
+            pending_approvals: &pending_approvals,
+            session_id: &session_id,
+            db_path: db_path.as_ref().as_path(),
+            current_mode: work_mode,
+        })
         .await;
         work_mode = next_work_mode;
 
@@ -959,19 +1076,21 @@ async fn process_stream(
     )
 }
 
-async fn execute_tools(
-    tool_registry: &ToolRegistry,
-    tool_calls: &[AiToolCall],
-    working_dir: &Path,
-    process_registry: &Arc<ProcessRegistry>,
-    sse_tx: &mpsc::Sender<Result<Event, Infallible>>,
-    user_id: Option<&str>,
-    permission_mode: PermissionMode,
-    pending_approvals: &Arc<RwLock<HashMap<String, oneshot::Sender<bool>>>>,
-    session_id: &str,
-    db_path: &Path,
-    current_mode: WorkMode,
-) -> (Vec<Content>, WorkMode) {
+async fn execute_tools(ctx: ExecuteToolsContext<'_>) -> (Vec<Content>, WorkMode) {
+    let ExecuteToolsContext {
+        tool_registry,
+        tool_calls,
+        working_dir,
+        process_registry,
+        sse_tx,
+        user_id,
+        permission_mode,
+        pending_approvals,
+        session_id,
+        db_path,
+        current_mode,
+    } = ctx;
+
     let mut work_mode = current_mode;
     let mut results = Vec::new();
 

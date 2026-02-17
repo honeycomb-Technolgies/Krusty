@@ -392,6 +392,20 @@ impl SessionManager {
         super::messages::MessageStore::new(&self.db).save_message(session_id, role, content_json)
     }
 
+    /// Update the most recent message of a given role in a session
+    pub fn update_last_message(
+        &self,
+        session_id: &str,
+        role: &str,
+        content_json: &str,
+    ) -> Result<()> {
+        super::messages::MessageStore::new(&self.db).update_last_message(
+            session_id,
+            role,
+            content_json,
+        )
+    }
+
     /// Load all messages for a session
     /// Returns (role, content_json) pairs where content_json can be deserialized to Vec<Content>
     pub fn load_session_messages(&self, session_id: &str) -> Result<Vec<(String, String)>> {

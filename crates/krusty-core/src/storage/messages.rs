@@ -90,6 +90,37 @@ impl<'a> MessageStore<'a> {
         Ok(count as usize)
     }
 
+    /// Update the most recent message of a given role in a session
+    pub fn update_last_message(
+        &self,
+        session_id: &str,
+        role: &str,
+        content_json: &str,
+    ) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        let affected = self.db.conn().execute(
+            "UPDATE messages SET content = ?1
+             WHERE id = (
+                 SELECT id FROM messages
+                 WHERE session_id = ?2 AND role = ?3
+                 ORDER BY id DESC LIMIT 1
+             )",
+            params![content_json, session_id, role],
+        )?;
+        if affected == 0 {
+            anyhow::bail!(
+                "No {} message found to update in session {}",
+                role,
+                session_id
+            );
+        }
+        self.db.conn().execute(
+            "UPDATE sessions SET updated_at = ?1 WHERE id = ?2",
+            params![now, session_id],
+        )?;
+        Ok(())
+    }
+
     /// Delete all messages for a session
     /// Called automatically when session is deleted via CASCADE
     pub fn delete_session_messages(&self, session_id: &str) -> Result<()> {
@@ -153,5 +184,64 @@ mod tests {
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].0, "user");
         assert_eq!(messages[1].0, "assistant");
+    }
+
+    #[test]
+    fn test_update_last_message_preserves_created_at() {
+        let (db, _temp) = create_test_db();
+        let store = MessageStore::new(&db);
+
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        db.conn()
+            .execute(
+                "INSERT INTO sessions (id, title, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![session_id, "Test", now, now],
+            )
+            .expect("Failed to create session");
+
+        store
+            .save_message(&session_id, "user", r#"[{"type":"text","text":"first"}]"#)
+            .expect("Failed to save first message");
+        store
+            .save_message(
+                &session_id,
+                "assistant",
+                r#"[{"type":"text","text":"reply"}]"#,
+            )
+            .expect("Failed to save assistant message");
+        store
+            .save_message(&session_id, "user", r#"[{"type":"text","text":"second"}]"#)
+            .expect("Failed to save second message");
+
+        let before: String = db
+            .conn()
+            .query_row(
+                "SELECT created_at FROM messages
+                 WHERE session_id = ?1 AND role = 'user'
+                 ORDER BY id DESC LIMIT 1",
+                [session_id.as_str()],
+                |row| row.get(0),
+            )
+            .expect("Failed to read created_at before update");
+
+        store
+            .update_last_message(&session_id, "user", r#"[{"type":"text","text":"updated"}]"#)
+            .expect("Failed to update last user message");
+
+        let (content, after): (String, String) = db
+            .conn()
+            .query_row(
+                "SELECT content, created_at FROM messages
+                 WHERE session_id = ?1 AND role = 'user'
+                 ORDER BY id DESC LIMIT 1",
+                [session_id.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("Failed to read updated message");
+
+        assert_eq!(content, r#"[{"type":"text","text":"updated"}]"#);
+        assert_eq!(after, before);
     }
 }
