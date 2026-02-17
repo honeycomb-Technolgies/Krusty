@@ -107,8 +107,8 @@
 			></button>
 		{/if}
 
-		<!-- Mobile sidebar (slideover) - positioned between header and bottom nav -->
-		<div class="fixed left-0 top-14 bottom-16 z-50 w-72 transform transition-transform duration-200 md:hidden
+		<!-- Mobile sidebar (slideover) - positioned below two-row header -->
+		<div class="fixed left-0 top-24 bottom-16 z-50 w-72 transform transition-transform duration-200 md:hidden
 			{mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'}">
 			<SessionSidebar
 				currentSessionId={$sessionStore.sessionId}
