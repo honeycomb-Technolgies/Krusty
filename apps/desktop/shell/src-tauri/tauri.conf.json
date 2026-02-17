@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "cd ../../pwa/app && bun run dev --host --port 5173",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "cd ../../pwa/app && bun run build",
+    "beforeBuildCommand": "cd ../../pwa/app && bun install && bun run build",
     "frontendDist": "../../../pwa/app/build"
   },
   "app": {
