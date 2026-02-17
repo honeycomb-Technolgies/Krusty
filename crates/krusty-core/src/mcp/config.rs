@@ -84,29 +84,57 @@ impl McpServerConfig {
 }
 
 impl McpConfig {
-    /// Load config from .mcp.json in project root
+    /// Built-in MCP servers included by default.
+    /// User configs in `.mcp.json` override these by name.
+    fn builtin_servers() -> HashMap<String, McpServerConfigRaw> {
+        HashMap::from([(
+            "minimax".to_string(),
+            McpServerConfigRaw::Local {
+                command: "uvx".to_string(),
+                args: vec!["minimax-coding-plan-mcp".to_string(), "-y".to_string()],
+                env: HashMap::from([
+                    (
+                        "MINIMAX_API_KEY".to_string(),
+                        "${MINIMAX_API_KEY}".to_string(),
+                    ),
+                    (
+                        "MINIMAX_API_HOST".to_string(),
+                        "https://api.minimax.io".to_string(),
+                    ),
+                ]),
+            },
+        )])
+    }
+
+    /// Load config from .mcp.json in project root, merged with built-in defaults.
     pub async fn load(working_dir: &Path) -> Result<Self> {
+        let mut servers = Self::builtin_servers();
+
         let config_path = working_dir.join(".mcp.json");
 
-        if !config_path.exists() {
+        if config_path.exists() {
+            let content = tokio::fs::read_to_string(&config_path)
+                .await
+                .with_context(|| format!("Failed to read {:?}", config_path))?;
+
+            let user_config: McpConfig = serde_json::from_str(&content)
+                .with_context(|| format!("Failed to parse {:?}", config_path))?;
+
+            tracing::info!(
+                "Loaded MCP config with {} servers from {:?}",
+                user_config.mcp_servers.len(),
+                config_path
+            );
+
+            // User configs override built-ins
+            servers.extend(user_config.mcp_servers);
+        } else {
             tracing::debug!("No .mcp.json found at {:?}", config_path);
-            return Ok(Self::default());
         }
 
-        let content = tokio::fs::read_to_string(&config_path)
-            .await
-            .with_context(|| format!("Failed to read {:?}", config_path))?;
-
-        let config: McpConfig = serde_json::from_str(&content)
-            .with_context(|| format!("Failed to parse {:?}", config_path))?;
-
-        tracing::info!(
-            "Loaded MCP config with {} servers from {:?}",
-            config.mcp_servers.len(),
-            config_path
-        );
-
-        Ok(config)
+        Ok(Self {
+            mcp_servers: servers,
+        })
     }
 
     /// Get resolved server configurations
