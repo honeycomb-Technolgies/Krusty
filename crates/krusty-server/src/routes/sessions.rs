@@ -164,9 +164,9 @@ async fn update_session(
         return Err(AppError::NotFound(format!("Session {} not found", id)));
     }
 
-    if req.title.is_none() && req.working_dir.is_none() && req.mode.is_none() {
+    if req.title.is_none() && req.working_dir.is_none() && req.mode.is_none() && req.model.is_none() {
         return Err(AppError::BadRequest(
-            "At least one of title, working_dir, or mode must be provided".to_string(),
+            "At least one of title, working_dir, mode, or model must be provided".to_string(),
         ));
     }
 
@@ -186,6 +186,15 @@ async fn update_session(
 
     if let Some(mode) = req.mode {
         session_manager.update_session_work_mode(&id, mode)?;
+    }
+
+    if let Some(model) = req.model.as_deref() {
+        let normalized = if model.is_empty() {
+            None
+        } else {
+            Some(model)
+        };
+        session_manager.update_session_model(&id, normalized)?;
     }
 
     let session = session_manager
@@ -340,22 +349,19 @@ async fn pinch_session(
         .working_dir
         .as_deref()
         .unwrap_or(default_working_dir.as_str());
+    let model_for_child = source_session.model.as_deref();
     let new_session_id = session_manager.create_linked_session(
         &new_title,
         &id,
         &pinch_ctx,
-        None, // Use default model
+        model_for_child,
         Some(working_dir_for_child),
     )?;
 
     // Inject the pinch context as first message in new session
+    // Save as "system" message (matches TUI behavior) with raw string format
     let system_msg = pinch_ctx.to_system_message();
-    let context_content = vec![Content::Text {
-        text: format!("[Pinch Context]\n\n{}", system_msg),
-    }];
-    let context_json = serde_json::to_string(&context_content)
-        .map_err(|e| AppError::Internal(format!("Failed to serialize pinch context: {}", e)))?;
-    session_manager.save_message(&new_session_id, "user", &context_json)?;
+    session_manager.save_message(&new_session_id, "system", &system_msg)?;
 
     // Get the new session info
     let new_session = session_manager

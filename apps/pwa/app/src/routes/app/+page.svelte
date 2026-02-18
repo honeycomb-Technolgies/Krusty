@@ -6,16 +6,29 @@
 	import SessionSidebar from '$components/chat/SessionSidebar.svelte';
 	import ModelSelector from '$components/chat/ModelSelector.svelte';
 	import PlanTracker from '$components/chat/PlanTracker.svelte';
-	import { sessionStore, loadSession, clearSession } from '$stores/session';
+	import { sessionStore, loadSession, clearSession, setModel } from '$stores/session';
 	import { sessionsStore, loadSessions, deleteSession } from '$stores/sessions';
 	import { apiClient } from '$api/client';
 
 	const SIDEBAR_COLLAPSED_KEY = 'krusty:sidebar_collapsed';
 
-	let currentModel = $state('MiniMax-M2.5');
+	let defaultModel = $state('MiniMax-M2.5');
 	let showModelSelector = $state(false);
 	let sidebarCollapsed = $state(false);
 	let mobileSidebarOpen = $state(false);
+
+	// Get current model from session store, fallback to default
+	let currentModel = $derived($sessionStore.model ?? defaultModel);
+
+	// Load default model from server on mount
+	async function loadDefaultModel() {
+		try {
+			const models = await apiClient.getModels();
+			defaultModel = models.default_model;
+		} catch (err) {
+			console.error('Failed to load default model:', err);
+		}
+	}
 
 	// Load sidebar state from localStorage
 	function loadSidebarState() {
@@ -30,7 +43,7 @@
 	}
 
 	function handleModelSelect(modelId: string) {
-		currentModel = modelId;
+		setModel(modelId);
 	}
 
 	function handleNewSession() {
@@ -82,6 +95,12 @@
 	onMount(() => {
 		loadSidebarState();
 		loadSessions();
+		loadDefaultModel();
+		
+		// Listen for model open event from ChatView AI controls
+		window.addEventListener('openmodel', () => {
+			showModelSelector = true;
+		});
 	});
 </script>
 

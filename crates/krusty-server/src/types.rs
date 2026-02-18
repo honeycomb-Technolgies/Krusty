@@ -20,6 +20,7 @@ pub struct UpdateSessionRequest {
     pub title: Option<String>,
     pub working_dir: Option<String>,
     pub mode: Option<WorkMode>,
+    pub model: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -51,6 +52,7 @@ pub struct SessionResponse {
     pub parent_session_id: Option<String>,
     pub working_dir: Option<String>,
     pub mode: WorkMode,
+    pub model: Option<String>,
 }
 
 impl From<SessionInfo> for SessionResponse {
@@ -63,6 +65,7 @@ impl From<SessionInfo> for SessionResponse {
             parent_session_id: s.parent_session_id,
             working_dir: s.working_dir,
             mode: s.work_mode,
+            model: s.model,
         }
     }
 }
@@ -98,12 +101,32 @@ pub struct MessageResponse {
 // Chat Types
 // ============================================================================
 
+/// Content block from PWA (text or image)
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+pub enum ContentBlock {
+    Text { text: String },
+    Image {
+        source: ImageSource,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+pub enum ImageSource {
+    Base64 { media_type: String, data: String },
+    Url { url: String },
+}
+
 #[derive(Deserialize)]
 pub struct ChatRequest {
     /// Session ID (creates new session if not provided)
     pub session_id: Option<String>,
-    /// User message content
+    /// User message content (text fallback)
     pub message: String,
+    /// Multi-modal content blocks (text + images)
+    #[serde(default)]
+    pub content: Vec<ContentBlock>,
     /// Model override
     pub model: Option<String>,
     /// Enable extended thinking

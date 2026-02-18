@@ -49,6 +49,7 @@ interface SessionState {
 	thinkingEnabled: boolean;
 	tokenCount: number;
 	error: string | null;
+	model: string | null;
 }
 
 function toErrorMessage(err: unknown, fallback = 'Unknown error'): string {
@@ -76,7 +77,8 @@ const initialState: SessionState = {
 	thinkingContent: '',
 	thinkingEnabled: true,
 	tokenCount: 0,
-	error: null
+	error: null,
+	model: null
 };
 
 export const sessionStore = writable<SessionState>(initialState);
@@ -406,6 +408,7 @@ export async function loadSession(sessionId: string, isRefresh = false) {
 			sessionId: data.session.id,
 			title: data.session.title || 'Untitled',
 			mode: data.session.mode ?? 'build',
+			model: data.session.model ?? null,
 			messages: processedMessages,
 			isLoading: false
 		}));
@@ -549,6 +552,11 @@ export function setMode(mode: SessionMode) {
 	void persistSessionMode(mode);
 }
 
+export function setModel(model: string) {
+	sessionStore.update((s) => ({ ...s, model }));
+	void persistSessionModel(model);
+}
+
 async function persistSessionMode(mode: SessionMode) {
 	const state = get(sessionStore);
 	if (!state.sessionId) return;
@@ -558,6 +566,18 @@ async function persistSessionMode(mode: SessionMode) {
 		loadSessions();
 	} catch (err) {
 		console.error('Failed to persist session mode:', err);
+	}
+}
+
+async function persistSessionModel(model: string) {
+	const state = get(sessionStore);
+	if (!state.sessionId) return;
+
+	try {
+		await apiClient.updateSession(state.sessionId, { model });
+		loadSessions();
+	} catch (err) {
+		console.error('Failed to persist session model:', err);
 	}
 }
 

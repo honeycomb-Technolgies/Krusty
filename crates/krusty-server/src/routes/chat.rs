@@ -23,7 +23,7 @@ use krusty_core::ai::providers::ProviderId;
 use krusty_core::ai::streaming::StreamPart;
 use krusty_core::ai::title::generate_title;
 use krusty_core::ai::types::{
-    AiToolCall, Content, FinishReason, ModelMessage, Role, ThinkingConfig,
+    AiToolCall, Content, FinishReason, ImageContent, ModelMessage, Role, ThinkingConfig,
 };
 use krusty_core::plan::{PlanFile, PlanManager, TaskStatus};
 use krusty_core::process::ProcessRegistry;
@@ -36,7 +36,7 @@ use krusty_core::SessionManager;
 use crate::auth::CurrentUser;
 use crate::error::AppError;
 use crate::push::{PushEventType, PushPayload, PushService};
-use crate::types::{AgenticEvent, ChatRequest, ToolApprovalRequest, ToolResultRequest};
+use crate::types::{AgenticEvent, ChatRequest, ContentBlock, ToolApprovalRequest, ToolResultRequest};
 use crate::AppState;
 
 const MAX_ITERATIONS: usize = 50;
@@ -103,6 +103,71 @@ struct ExecuteToolsContext<'a> {
     session_id: &'a str,
     db_path: &'a Path,
     current_mode: WorkMode,
+}
+
+/// Build user message content from content blocks (images) and text message.
+/// Processes content blocks first (images), then appends text content.
+fn build_user_content(message: &str, content_blocks: &[ContentBlock]) -> Vec<Content> {
+    let mut contents: Vec<Content> = Vec::new();
+
+    // Process content blocks first (images)
+    for block in content_blocks {
+        match block {
+            ContentBlock::Text { text } => {
+                contents.push(Content::Text {
+                    text: text.clone(),
+                });
+            }
+            ContentBlock::Image { source } => {
+                let image_content = match source {
+                    crate::types::ImageSource::Base64 { media_type, data } => {
+                        Some(Content::Image {
+                            image: ImageContent {
+                                base64: Some(data.clone()),
+                                url: None,
+                                media_type: Some(media_type.clone()),
+                            },
+                            detail: None,
+                        })
+                    }
+                    crate::types::ImageSource::Url { url } => {
+                        Some(Content::Image {
+                            image: ImageContent {
+                                base64: None,
+                                url: Some(url.clone()),
+                                media_type: None,
+                            },
+                            detail: None,
+                        })
+                    }
+                };
+                if let Some(img) = image_content {
+                    contents.push(img);
+                }
+            }
+        }
+    }
+
+    // If no content blocks or message has text, add the message as text
+    // (content blocks take precedence if present)
+    if contents.is_empty() || !message.is_empty() {
+        // Check if we already have a text block from content_blocks
+        let has_text = contents.iter().any(|c| matches!(c, Content::Text { .. }));
+        if !message.is_empty() && !has_text {
+            contents.push(Content::Text {
+                text: message.to_string(),
+            });
+        }
+    }
+
+    // If nothing was added, at least include the message
+    if contents.is_empty() {
+        contents.push(Content::Text {
+            text: message.to_string(),
+        });
+    }
+
+    contents
 }
 
 async fn setup_chat_session(
@@ -226,6 +291,11 @@ async fn chat(
             if !sm.verify_session_ownership(&id, user_id.as_deref())? {
                 return Err(AppError::NotFound(format!("Session {} not found", id)));
             }
+            // Update model if provided in request
+            if let Some(ref model) = req.model {
+                let normalized = if model.is_empty() { None } else { Some(model.as_str()) };
+                sm.update_session_model(&id, normalized)?;
+            }
             let messages = sm.load_session_messages(&id)?;
             (id, messages.is_empty())
         }
@@ -270,9 +340,8 @@ async fn chat(
         None
     };
 
-    let user_content = vec![Content::Text {
-        text: req.message.clone(),
-    }];
+    // Build user content from content blocks (images) + message (text fallback)
+    let user_content = build_user_content(&req.message, &req.content);
     let user_content_json = serde_json::to_string(&user_content)?;
 
     ctx.conversation.push(ModelMessage {
