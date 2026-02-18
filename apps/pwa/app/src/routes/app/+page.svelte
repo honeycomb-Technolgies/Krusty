@@ -98,9 +98,14 @@
 		loadDefaultModel();
 		
 		// Listen for model open event from ChatView AI controls
-		window.addEventListener('openmodel', () => {
+		const openModelListener = () => {
 			showModelSelector = true;
-		});
+		};
+		window.addEventListener('openmodel', openModelListener);
+
+		return () => {
+			window.removeEventListener('openmodel', openModelListener);
+		};
 	});
 </script>
 
@@ -127,8 +132,11 @@
 		{/if}
 
 		<!-- Mobile sidebar (slideover) - positioned below two-row header -->
-		<div class="fixed left-0 top-24 bottom-16 z-50 w-72 transform transition-transform duration-200 md:hidden
-			{mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'}">
+		<div
+			class="fixed left-0 z-50 w-72 transform transition-transform duration-200 md:hidden
+				{mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'}"
+			style="top: calc(6rem + var(--safe-area-top)); bottom: calc(4rem + var(--safe-area-bottom));"
+		>
 			<SessionSidebar
 				currentSessionId={$sessionStore.sessionId}
 				isCollapsed={false}
@@ -151,7 +159,7 @@
 
 		<!-- Main chat area -->
 		<div class="flex min-h-0 flex-1 flex-col">
-			<ChatView />
+			<ChatView {currentModel} />
 		</div>
 	</div>
 </div>

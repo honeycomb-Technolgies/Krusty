@@ -168,6 +168,23 @@ fn build_user_content(message: &str, content_blocks: &[ContentBlock]) -> Vec<Con
     contents
 }
 
+fn resolve_model_override<'a>(
+    requested_model: Option<&'a str>,
+    session_model: Option<&'a str>,
+) -> Option<&'a str> {
+    requested_model
+        .and_then(|model| {
+            let trimmed = model.trim();
+            (!trimmed.is_empty()).then_some(trimmed)
+        })
+        .or_else(|| {
+            session_model.and_then(|model| {
+                let trimmed = model.trim();
+                (!trimmed.is_empty()).then_some(trimmed)
+            })
+        })
+}
+
 async fn setup_chat_session(
     state: &AppState,
     user: Option<&CurrentUser>,
@@ -238,7 +255,9 @@ async fn setup_chat_session(
         })
         .collect();
 
-    let ai_client = if let Some(requested_model) = model_override {
+    let effective_model = resolve_model_override(model_override, session.model.as_deref());
+
+    let ai_client = if let Some(requested_model) = effective_model {
         let mut cfg = base_ai_client.config().clone();
         cfg.model = requested_model.to_string();
         Arc::new(AiClient::new(cfg, base_ai_client.api_key().to_string()))
@@ -281,6 +300,7 @@ async fn chat(
         .as_ref()
         .and_then(|u| u.0.home_dir.clone())
         .unwrap_or_else(|| (*state.working_dir).clone());
+    let model_override = resolve_model_override(req.model.as_deref(), None);
 
     let (session_id, is_first_message) = match req.session_id {
         Some(id) => {
@@ -308,7 +328,7 @@ async fn chat(
             let working_dir_str = default_working_dir.to_string_lossy().to_string();
             let id = sm.create_session_for_user(
                 &title,
-                req.model.as_deref(),
+                model_override,
                 Some(working_dir_str.as_str()),
                 user_id.as_deref(),
             )?;
@@ -320,7 +340,7 @@ async fn chat(
         &state,
         user.as_ref(),
         &session_id,
-        req.model.as_deref(),
+        model_override,
         req.thinking_enabled,
     )
     .await?;
@@ -2162,7 +2182,8 @@ fn normalize_error_fingerprint(message: &str) -> String {
 mod tests {
     use super::{
         classify_error_code, detect_repeated_tool_failures, extract_error_signature,
-        normalize_error_fingerprint, truncate_output, AiToolCall, Content, MAX_TOOL_OUTPUT_CHARS,
+        normalize_error_fingerprint, resolve_model_override, truncate_output, AiToolCall, Content,
+        MAX_TOOL_OUTPUT_CHARS,
     };
     use std::collections::HashMap;
 
@@ -2231,5 +2252,26 @@ mod tests {
             std::slice::from_ref(&result),
         );
         assert!(second.is_some());
+    }
+
+    #[test]
+    fn resolve_model_override_prefers_request_and_trims_input() {
+        assert_eq!(
+            resolve_model_override(Some("  openai/gpt-5  "), Some("minimax/m2")),
+            Some("openai/gpt-5")
+        );
+    }
+
+    #[test]
+    fn resolve_model_override_falls_back_to_session_model() {
+        assert_eq!(
+            resolve_model_override(None, Some("  anthropic/claude-opus-4.6  ")),
+            Some("anthropic/claude-opus-4.6")
+        );
+    }
+
+    #[test]
+    fn resolve_model_override_ignores_empty_values() {
+        assert_eq!(resolve_model_override(Some("   "), Some("   ")), None);
     }
 }

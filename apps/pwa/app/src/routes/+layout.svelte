@@ -26,17 +26,21 @@
 
 	// iOS PWA viewport fix: set --vh variable to actual viewport height
 	function setViewportHeight() {
-		const vh = window.innerHeight * 0.01;
+		const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+		const vh = viewportHeight * 0.01;
 		document.documentElement.style.setProperty('--vh', `${vh}px`);
 	}
 
 	onMount(() => {
+		const handleOrientationChange = () => {
+			setTimeout(setViewportHeight, 100);
+		};
+
 		setViewportHeight();
 		window.addEventListener('resize', setViewportHeight);
+		window.visualViewport?.addEventListener('resize', setViewportHeight);
 		// Also handle orientation change on iOS
-		window.addEventListener('orientationchange', () => {
-			setTimeout(setViewportHeight, 100);
-		});
+		window.addEventListener('orientationchange', handleOrientationChange);
 
 		void validateWorkspace(apiClient);
 		if ('serviceWorker' in navigator) {
@@ -53,6 +57,12 @@
 				}
 			});
 		}
+
+		return () => {
+			window.removeEventListener('resize', setViewportHeight);
+			window.visualViewport?.removeEventListener('resize', setViewportHeight);
+			window.removeEventListener('orientationchange', handleOrientationChange);
+		};
 	});
 
 	let { children } = $props();
@@ -76,7 +86,7 @@
 {:else}
 	<!-- App pages -->
 	<PlasmaBackground />
-	<div class="app-container flex w-screen flex-col overflow-hidden">
+	<div class="app-container safe-top flex w-screen flex-col overflow-hidden">
 		<main class="flex-1 overflow-hidden">
 			{@render children()}
 		</main>

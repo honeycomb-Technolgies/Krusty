@@ -409,6 +409,7 @@ export async function sendMessage(content: string, attachments: Attachment[] = [
 				session_id: state.sessionId ?? undefined,
 				message: content,
 				content: contentBlocks,
+				model: state.model ?? undefined,
 				thinking_enabled: thinkingLevelToApiValue(state.thinkingLevel),
 				permission_mode: state.permissionMode,
 				mode: state.mode

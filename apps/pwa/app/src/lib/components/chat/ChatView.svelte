@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import Send from 'lucide-svelte/icons/send';
 	import Clock from 'lucide-svelte/icons/clock';
 	import StopCircle from 'lucide-svelte/icons/stop-circle';
@@ -11,6 +11,7 @@
 	import Hammer from 'lucide-svelte/icons/hammer';
 	import FileText from 'lucide-svelte/icons/file-text';
 	import Bot from 'lucide-svelte/icons/bot';
+	import Mic from 'lucide-svelte/icons/mic';
 	import X from 'lucide-svelte/icons/x';
 	import Check from 'lucide-svelte/icons/check';
 	import Message from './Message.svelte';
@@ -20,6 +21,12 @@
 	// Web Speech API type declarations (for browsers that support it)
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	type SpeechRecognitionType = any;
+
+	interface Props {
+		currentModel: string;
+	}
+
+	let { currentModel }: Props = $props();
 
 	let inputValue = $state('');
 	let inputElement = $state<HTMLTextAreaElement>(undefined!);
@@ -32,10 +39,7 @@
 
 	// Voice transcription state
 	let isTranscribing = $state(false);
-	let holdTimer: ReturnType<typeof setTimeout> | null = null;
 	let transcribedText = $state('');
-
-	const HOLD_DURATION_MS = 3000; // 3 seconds to start transcription
 
 	// Check for Web Speech API support (with type assertion)
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -79,28 +83,10 @@
 		// Don't close menu - let user continue selecting options
 	}
 
-	// Voice transcription handlers
-	function handleSendMouseDown() {
-		if (!isSpeechSupported || isTranscribing) return;
-		
-		holdTimer = setTimeout(() => {
-			// Held for 3+ seconds - start transcription
-			startTranscription();
-		}, HOLD_DURATION_MS);
-	}
-
-	function handleSendMouseUp() {
-		if (holdTimer) {
-			clearTimeout(holdTimer);
-			holdTimer = null;
-		}
-	}
-
-	function handleSendMouseLeave() {
-		if (holdTimer && !isTranscribing) {
-			clearTimeout(holdTimer);
-			holdTimer = null;
-		}
+	function formatModelLabel(modelId: string): string {
+		if (!modelId) return 'Default';
+		const compact = modelId.includes('/') ? modelId.split('/').pop() || modelId : modelId;
+		return compact.length > 16 ? `${compact.slice(0, 13)}...` : compact;
 	}
 
 	function startTranscription() {
@@ -111,7 +97,10 @@
 		
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		const SpeechRecognition = getSpeechRecognition();
-		if (!SpeechRecognition) return;
+		if (!SpeechRecognition) {
+			isTranscribing = false;
+			return;
+		}
 
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		const recognition: any = new SpeechRecognition();
@@ -176,7 +165,6 @@
 			(window as unknown as { _speechRecognition?: SpeechRecognitionType })._speechRecognition = undefined;
 		}
 		isTranscribing = false;
-		holdTimer = null;
 	}
 
 	function handleSubmit() {
@@ -186,10 +174,24 @@
 			return;
 		}
 
-		// Allow sending with attachments or text (but at least one required)
-		const hasContent = inputValue.trim() || attachedFiles.length > 0;
-		if (!hasContent) return;
+		const hasText = inputValue.trim().length > 0;
+		const hasContent = hasText || attachedFiles.length > 0;
 
+		// While streaming, empty submit acts as stop.
+		if ($sessionStore.isStreaming && !hasContent) {
+			stopGeneration();
+			return;
+		}
+
+		// Empty input on idle starts voice transcription (if supported).
+		if (!hasContent) {
+			if (isSpeechSupported) {
+				startTranscription();
+			}
+			return;
+		}
+
+		// Allow sending with attachments or text (but at least one required)
 		// Convert files to attachments
 		const attachments: Attachment[] = attachedFiles.map(file => ({
 			file,
@@ -244,6 +246,10 @@
 
 	onMount(() => {
 		inputElement?.focus();
+	});
+
+	onDestroy(() => {
+		stopTranscription();
 	});
 </script>
 
@@ -346,7 +352,9 @@
 										<Cpu class="h-4 w-4 text-muted-foreground" />
 										<span>Model</span>
 									</div>
-									<span class="text-xs text-muted-foreground">MiniMax</span>
+									<span class="text-xs text-muted-foreground" title={currentModel}>
+										{formatModelLabel(currentModel)}
+									</span>
 								</button>
 								
 								<!-- Think - cycles through thinking levels -->
@@ -413,46 +421,7 @@
 					></textarea>
 
 					<!-- Combined Send/Queue/Stop/Voice button -->
-					{#if isSpeechSupported && !isTranscribing}
-						<div class="relative group">
-							<button
-								onclick={handleSubmit}
-								onmousedown={handleSendMouseDown}
-								onmouseup={handleSendMouseUp}
-								onmouseleave={handleSendMouseLeave}
-								ontouchstart={handleSendMouseDown}
-								ontouchend={handleSendMouseUp}
-								disabled={!$sessionStore.isStreaming && !inputValue.trim() && attachedFiles.length === 0}
-								class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors
-									{$sessionStore.isStreaming
-										? inputValue.trim()
-											? 'bg-amber-500 text-white hover:bg-amber-600'  // Queue
-											: 'bg-destructive text-white hover:bg-destructive/90'  // Stop
-										: 'bg-primary text-primary-foreground hover:bg-primary/90'  // Send (white text)
-									}
-										{!$sessionStore.isStreaming && !inputValue.trim() && attachedFiles.length === 0 ? 'disabled:cursor-not-allowed disabled:opacity-50' : ''}"
-								title={$sessionStore.isStreaming
-									? (inputValue.trim() ? 'Queue message' : 'Stop generation')
-									: 'Hold 3s for voice'
-								}
-							>
-								{#if $sessionStore.isStreaming && inputValue.trim()}
-									<Clock class="h-4 w-4" />
-								{:else if $sessionStore.isStreaming}
-									<StopCircle class="h-4 w-4" />
-								{:else}
-									<Send class="h-4 w-4" />
-								{/if}
-							</button>
-							
-							<!-- Voice hint tooltip -->
-							{#if !$sessionStore.isStreaming}
-								<div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-muted text-xs text-muted-foreground rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap">
-									Hold 3s for voice
-								</div>
-							{/if}
-						</div>
-					{:else if isTranscribing}
+					{#if isTranscribing}
 						<!-- Transcription active - show check/stop button (green, reassuring) -->
 						<button
 							onclick={handleSubmit}
@@ -462,27 +431,39 @@
 							<Check class="h-4 w-4" />
 						</button>
 					{:else}
-						<!-- Speech not supported - show regular button -->
+						<!-- Unified send/queue/stop/voice button -->
+						{@const hasDraftContent = inputValue.trim().length > 0 || attachedFiles.length > 0}
+						{@const isQueueing = $sessionStore.isStreaming && hasDraftContent}
+						{@const isStopping = $sessionStore.isStreaming && !hasDraftContent}
+						{@const canStartVoice = isSpeechSupported && !hasDraftContent && !$sessionStore.isStreaming}
 						<button
 							onclick={handleSubmit}
-							disabled={!$sessionStore.isStreaming && !inputValue.trim()}
+							disabled={!$sessionStore.isStreaming && !hasDraftContent && !isSpeechSupported}
 							class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors
-								{$sessionStore.isStreaming
-									? inputValue.trim()
-										? 'bg-amber-500 text-white hover:bg-amber-600'
-										: 'bg-destructive text-white hover:bg-destructive/90'
-									: 'bg-primary text-primary-foreground hover:bg-primary/90'
+								{isQueueing
+									? 'bg-amber-500 text-white hover:bg-amber-600'
+									: isStopping
+										? 'bg-destructive text-white hover:bg-destructive/90'
+										: canStartVoice
+											? 'bg-blue-500 text-white hover:bg-blue-600'
+											: 'bg-primary text-primary-foreground hover:bg-primary/90'
 								}
-									{!$sessionStore.isStreaming && !inputValue.trim() ? 'disabled:cursor-not-allowed disabled:opacity-50' : ''}"
-							title={$sessionStore.isStreaming
-								? (inputValue.trim() ? 'Queue message' : 'Stop generation')
-								: 'Send message'
+									{!$sessionStore.isStreaming && !hasDraftContent && !isSpeechSupported ? 'disabled:cursor-not-allowed disabled:opacity-50' : ''}"
+							title={isQueueing
+								? 'Queue message'
+								: isStopping
+									? 'Stop generation'
+									: canStartVoice
+										? 'Start voice transcription'
+										: 'Send message'
 							}
 						>
-							{#if $sessionStore.isStreaming && inputValue.trim()}
+							{#if isQueueing}
 								<Clock class="h-4 w-4" />
-							{:else if $sessionStore.isStreaming}
+							{:else if isStopping}
 								<StopCircle class="h-4 w-4" />
+							{:else if canStartVoice}
+								<Mic class="h-4 w-4" />
 							{:else}
 								<Send class="h-4 w-4" />
 							{/if}
