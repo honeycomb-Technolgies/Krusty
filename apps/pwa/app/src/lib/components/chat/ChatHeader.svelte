@@ -341,11 +341,11 @@
 
 			{#if $sessionStore.isStreaming}
 				<div class="flex items-center gap-0.5 h-4 shrink-0" title="Streaming">
-					<span class="w-1 h-1 rounded-full bg-green-500 animate-[wave_1s_ease-in-out_infinite]"></span>
-					<span class="w-1 h-1.5 rounded-full bg-green-500 animate-[wave_1s_ease-in-out_infinite_0.1s]"></span>
-					<span class="w-1 h-2 rounded-full bg-green-500 animate-[wave_1s_ease-in-out_infinite_0.2s]"></span>
-					<span class="w-1 h-1.5 rounded-full bg-green-500 animate-[wave_1s_ease-in-out_infinite_0.3s]"></span>
-					<span class="w-1 h-1 rounded-full bg-green-500 animate-[wave_1s_ease-in-out_infinite_0.4s]"></span>
+					<span class="w-1 h-1 rounded-full bg-green-500 animate-wave"></span>
+					<span class="w-1 h-1.5 rounded-full bg-green-500 animate-wave" style="animation-delay: 0.1s"></span>
+					<span class="w-1 h-2 rounded-full bg-green-500 animate-wave" style="animation-delay: 0.2s"></span>
+					<span class="w-1 h-1.5 rounded-full bg-green-500 animate-wave" style="animation-delay: 0.3s"></span>
+					<span class="w-1 h-1 rounded-full bg-green-500 animate-wave" style="animation-delay: 0.4s"></span>
 				</div>
 			{/if}
 		</div>

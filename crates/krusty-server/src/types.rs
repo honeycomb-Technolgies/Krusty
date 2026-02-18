@@ -106,9 +106,7 @@ pub struct MessageResponse {
 #[serde(tag = "type")]
 pub enum ContentBlock {
     Text { text: String },
-    Image {
-        source: ImageSource,
-    },
+    Image { source: ImageSource },
 }
 
 #[derive(Debug, Deserialize)]

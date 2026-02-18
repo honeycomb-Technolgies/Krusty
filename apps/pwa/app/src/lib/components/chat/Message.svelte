@@ -70,7 +70,7 @@
 	<!-- User message - single block with avatar -->
 	<div class="message-container group flex gap-3 flex-row-reverse">
 		<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full
-			{message.isQueued ? 'bg-amber-500/20 text-amber-400' : 'bg-primary text-primary-foreground'}">
+			{message.isQueued ? 'bg-amber-500/20 text-amber-400' : 'bg-blue-500/30 text-blue-300'}">
 			{#if message.isQueued}
 				<Clock class="h-4 w-4" />
 			{:else}
@@ -85,7 +85,7 @@
 				</div>
 			{/if}
 			<div class="message-bubble rounded-2xl px-4 py-3 rounded-tr-sm
-				{message.isQueued ? 'bg-amber-500/20 text-amber-200' : 'bg-primary text-primary-foreground'}">
+				{message.isQueued ? 'bg-amber-500/20 text-amber-200' : 'bg-blue-500/20 text-blue-100 border border-blue-500/30'}">
 				<div class="prose prose-sm max-w-none prose-invert">
 					{@html renderedContent}
 				</div>
@@ -118,12 +118,12 @@
 		<!-- 3. Text content (the plan or response) -->
 		{#if message.content}
 			<div class="timeline-entry group flex gap-3">
-				<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+				<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted/50 text-muted-foreground">
 					<Bot class="h-4 w-4" />
 				</div>
 				<div class="flex min-w-0 max-w-[85%] flex-col gap-2">
 					<div class="relative">
-						<div class="message-bubble rounded-2xl px-4 py-3 bg-muted/80 text-foreground rounded-tl-sm">
+						<div class="message-bubble rounded-2xl px-4 py-2 text-foreground">
 							<div class="prose prose-sm max-w-none prose-neutral dark:prose-invert">
 								{@html renderedContent}
 							</div>

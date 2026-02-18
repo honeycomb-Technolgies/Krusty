@@ -164,7 +164,8 @@ async fn update_session(
         return Err(AppError::NotFound(format!("Session {} not found", id)));
     }
 
-    if req.title.is_none() && req.working_dir.is_none() && req.mode.is_none() && req.model.is_none() {
+    if req.title.is_none() && req.working_dir.is_none() && req.mode.is_none() && req.model.is_none()
+    {
         return Err(AppError::BadRequest(
             "At least one of title, working_dir, mode, or model must be provided".to_string(),
         ));
@@ -189,11 +190,7 @@ async fn update_session(
     }
 
     if let Some(model) = req.model.as_deref() {
-        let normalized = if model.is_empty() {
-            None
-        } else {
-            Some(model)
-        };
+        let normalized = if model.is_empty() { None } else { Some(model) };
         session_manager.update_session_model(&id, normalized)?;
     }
 
@@ -359,9 +356,11 @@ async fn pinch_session(
     )?;
 
     // Inject the pinch context as first message in new session
-    // Save as "system" message (matches TUI behavior) with raw string format
-    let system_msg = pinch_ctx.to_system_message();
-    session_manager.save_message(&new_session_id, "system", &system_msg)?;
+    // Save as "system" message (matches TUI behavior) as proper JSON array
+    let system_msg_text = pinch_ctx.to_system_message();
+    let system_msg_json =
+        serde_json::json!([{ "type": "text", "text": system_msg_text }]).to_string();
+    session_manager.save_message(&new_session_id, "system", &system_msg_json)?;
 
     // Get the new session info
     let new_session = session_manager

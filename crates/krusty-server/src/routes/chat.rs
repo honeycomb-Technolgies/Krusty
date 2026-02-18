@@ -36,7 +36,9 @@ use krusty_core::SessionManager;
 use crate::auth::CurrentUser;
 use crate::error::AppError;
 use crate::push::{PushEventType, PushPayload, PushService};
-use crate::types::{AgenticEvent, ChatRequest, ContentBlock, ToolApprovalRequest, ToolResultRequest};
+use crate::types::{
+    AgenticEvent, ChatRequest, ContentBlock, ToolApprovalRequest, ToolResultRequest,
+};
 use crate::AppState;
 
 const MAX_ITERATIONS: usize = 50;
@@ -114,9 +116,7 @@ fn build_user_content(message: &str, content_blocks: &[ContentBlock]) -> Vec<Con
     for block in content_blocks {
         match block {
             ContentBlock::Text { text } => {
-                contents.push(Content::Text {
-                    text: text.clone(),
-                });
+                contents.push(Content::Text { text: text.clone() });
             }
             ContentBlock::Image { source } => {
                 let image_content = match source {
@@ -130,16 +130,14 @@ fn build_user_content(message: &str, content_blocks: &[ContentBlock]) -> Vec<Con
                             detail: None,
                         })
                     }
-                    crate::types::ImageSource::Url { url } => {
-                        Some(Content::Image {
-                            image: ImageContent {
-                                base64: None,
-                                url: Some(url.clone()),
-                                media_type: None,
-                            },
-                            detail: None,
-                        })
-                    }
+                    crate::types::ImageSource::Url { url } => Some(Content::Image {
+                        image: ImageContent {
+                            base64: None,
+                            url: Some(url.clone()),
+                            media_type: None,
+                        },
+                        detail: None,
+                    }),
                 };
                 if let Some(img) = image_content {
                     contents.push(img);
@@ -293,7 +291,11 @@ async fn chat(
             }
             // Update model if provided in request
             if let Some(ref model) = req.model {
-                let normalized = if model.is_empty() { None } else { Some(model.as_str()) };
+                let normalized = if model.is_empty() {
+                    None
+                } else {
+                    Some(model.as_str())
+                };
                 sm.update_session_model(&id, normalized)?;
             }
             let messages = sm.load_session_messages(&id)?;

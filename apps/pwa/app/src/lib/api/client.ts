@@ -478,7 +478,7 @@ interface ChatRequest {
 	message: string;
 	content?: ContentBlock[]; // For multi-modal (text + images)
 	model?: string;
-	thinking_enabled?: boolean;
+	thinking_enabled?: boolean | string; // boolean for backward compat, string for levels (low/medium/high)
 	permission_mode?: 'supervised' | 'autonomous';
 	mode?: 'build' | 'plan';
 }

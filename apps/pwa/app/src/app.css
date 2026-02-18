@@ -62,13 +62,26 @@
 		@apply border-border;
 	}
 
+	html {
+		@apply bg-background;
+		font-feature-settings: "rlig" 1, "calt" 1;
+		height: 100%;
+	}
+
 	body {
 		@apply bg-background text-foreground;
-		font-feature-settings: "rlig" 1, "calt" 1;
+		height: 100%;
 		overflow: hidden;
-		height: 100dvh;
-		width: 100dvw;
 	}
+}
+
+/* iOS PWA: Use CSS custom property set by JS for accurate viewport height */
+:root {
+	--vh: 1vh;
+}
+
+html, body, .app-container {
+	height: calc(var(--vh) * 100);
 }
 
 /* Custom scrollbar */

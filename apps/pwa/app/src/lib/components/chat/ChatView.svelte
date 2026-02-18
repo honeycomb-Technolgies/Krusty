@@ -11,9 +11,15 @@
 	import Hammer from 'lucide-svelte/icons/hammer';
 	import FileText from 'lucide-svelte/icons/file-text';
 	import Bot from 'lucide-svelte/icons/bot';
+	import X from 'lucide-svelte/icons/x';
+	import Check from 'lucide-svelte/icons/check';
 	import Message from './Message.svelte';
 	import AsciiTitle from './AsciiTitle.svelte';
-	import { sessionStore, sendMessage, stopGeneration, togglePermissionMode, toggleThinking, setMode, type Attachment, type SessionMode } from '$stores/session';
+	import { sessionStore, sendMessage, stopGeneration, togglePermissionMode, toggleThinking, setMode, thinkingLevelLabel, type Attachment, type SessionMode } from '$stores/session';
+
+	// Web Speech API type declarations (for browsers that support it)
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	type SpeechRecognitionType = any;
 
 	let inputValue = $state('');
 	let inputElement = $state<HTMLTextAreaElement>(undefined!);
@@ -23,6 +29,24 @@
 	
 	// AI Controls expanded state
 	let showAiControls = $state(false);
+
+	// Voice transcription state
+	let isTranscribing = $state(false);
+	let holdTimer: ReturnType<typeof setTimeout> | null = null;
+	let transcribedText = $state('');
+
+	const HOLD_DURATION_MS = 3000; // 3 seconds to start transcription
+
+	// Check for Web Speech API support (with type assertion)
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const isSpeechSupported = typeof window !== 'undefined' && 
+		('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
+	
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	function getSpeechRecognition(): any {
+		if (typeof window === 'undefined') return null;
+		return (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+	}
 
 	function toggleAiControls() {
 		showAiControls = !showAiControls;
@@ -36,27 +60,135 @@
 		// Emit event to parent to open model selector
 		const event = new CustomEvent('openmodel');
 		window.dispatchEvent(event);
-		closeAiControls();
+		// Don't close menu - let user continue selecting options
 	}
 
 	function handleThinkClick() {
 		toggleThinking();
-		closeAiControls();
+		// Don't close menu - let user cycle through levels
 	}
 
 	function handleModeClick() {
 		const newMode: SessionMode = $sessionStore.mode === 'build' ? 'plan' : 'build';
 		setMode(newMode);
-		closeAiControls();
+		// Don't close menu - let user continue selecting options
 	}
 
 	function handlePermClick() {
 		togglePermissionMode();
-		closeAiControls();
+		// Don't close menu - let user continue selecting options
+	}
+
+	// Voice transcription handlers
+	function handleSendMouseDown() {
+		if (!isSpeechSupported || isTranscribing) return;
+		
+		holdTimer = setTimeout(() => {
+			// Held for 3+ seconds - start transcription
+			startTranscription();
+		}, HOLD_DURATION_MS);
+	}
+
+	function handleSendMouseUp() {
+		if (holdTimer) {
+			clearTimeout(holdTimer);
+			holdTimer = null;
+		}
+	}
+
+	function handleSendMouseLeave() {
+		if (holdTimer && !isTranscribing) {
+			clearTimeout(holdTimer);
+			holdTimer = null;
+		}
+	}
+
+	function startTranscription() {
+		if (!isSpeechSupported || isTranscribing) return;
+
+		isTranscribing = true;
+		transcribedText = '';
+		
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const SpeechRecognition = getSpeechRecognition();
+		if (!SpeechRecognition) return;
+
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const recognition: any = new SpeechRecognition();
+		recognition.continuous = true;
+		recognition.interimResults = true;
+		recognition.lang = 'en-US';
+
+		recognition.onresult = (event: SpeechRecognitionType) => {
+			let interimTranscript = '';
+			let finalTranscript = '';
+
+			for (let i = event.resultIndex; i < event.results.length; i++) {
+				const transcript = event.results[i][0].transcript;
+				if (event.results[i].isFinal) {
+					finalTranscript += transcript + ' ';
+				} else {
+					interimTranscript += transcript;
+				}
+			}
+
+			// Update input with transcribed text
+			if (finalTranscript) {
+				transcribedText += finalTranscript;
+				inputValue = transcribedText;
+				autoResize();
+			} else if (interimTranscript) {
+				// Show interim results
+				inputValue = transcribedText + interimTranscript;
+				autoResize();
+			}
+		};
+
+		recognition.onerror = (event: SpeechRecognitionType) => {
+			console.error('Speech recognition error:', event.error);
+			stopTranscription();
+		};
+
+		recognition.onend = () => {
+			// Only stop if user manually ended or there was an error
+			// Don't auto-restart
+		};
+
+		// Store reference for stopping
+		(window as unknown as { _speechRecognition: SpeechRecognitionType })._speechRecognition = recognition;
+
+		try {
+			recognition.start();
+		} catch (e) {
+			console.error('Failed to start speech recognition:', e);
+			isTranscribing = false;
+		}
+	}
+
+	function stopTranscription() {
+		const recognition = (window as unknown as { _speechRecognition?: SpeechRecognitionType })._speechRecognition;
+		if (recognition) {
+			try {
+				recognition.stop();
+			} catch (e) {
+				// Ignore errors when stopping
+			}
+			(window as unknown as { _speechRecognition?: SpeechRecognitionType })._speechRecognition = undefined;
+		}
+		isTranscribing = false;
+		holdTimer = null;
 	}
 
 	function handleSubmit() {
-		if (!inputValue.trim()) return;
+		// If transcribing, stop first
+		if (isTranscribing) {
+			stopTranscription();
+			return;
+		}
+
+		// Allow sending with attachments or text (but at least one required)
+		const hasContent = inputValue.trim() || attachedFiles.length > 0;
+		if (!hasContent) return;
 
 		// Convert files to attachments
 		const attachments: Attachment[] = attachedFiles.map(file => ({
@@ -116,6 +248,13 @@
 </script>
 
 <div class="flex h-full min-h-0 flex-col">
+	<!-- Error display -->
+	{#if $sessionStore.error}
+		<div class="mx-4 mt-2 rounded-lg bg-destructive/20 px-4 py-2 text-sm text-destructive">
+			{$sessionStore.error}
+		</div>
+	{/if}
+
 	<!-- Messages area -->
 	<div
 		bind:this={messagesContainer}
@@ -177,17 +316,21 @@
 						<Paperclip class="h-4 w-4" />
 					</button>
 
-					<!-- AI Controls: Robot button -->
+					<!-- AI Controls: Robot button - shows Bot when closed, X when open -->
 					<div class="relative">
 						<button
-							onclick={toggleAiControls}
+							onclick={showAiControls ? closeAiControls : toggleAiControls}
 							class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors
 								{showAiControls 
-									? 'bg-primary text-primary-foreground' 
-									: 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
-							title="AI Controls"
+										? 'bg-destructive text-destructive-foreground' 
+										: 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
+							title={showAiControls ? "Close menu" : "AI Controls"}
 						>
-							<Bot class="h-4 w-4" />
+							{#if showAiControls}
+								<X class="h-4 w-4" />
+							{:else}
+								<Bot class="h-4 w-4" />
+							{/if}
 						</button>
 
 						<!-- Expanded AI Controls Popover -->
@@ -206,17 +349,17 @@
 									<span class="text-xs text-muted-foreground">MiniMax</span>
 								</button>
 								
-								<!-- Think -->
+								<!-- Think - cycles through thinking levels -->
 								<button
 									onclick={handleThinkClick}
 									class="flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors hover:bg-muted
 										{$sessionStore.thinkingEnabled ? 'bg-purple-500/20 text-purple-400' : ''}"
-									title="Toggle thinking"
+									title="Click to cycle thinking level"
 								>
 									<Brain class="h-4 w-4 {$sessionStore.thinkingEnabled ? 'text-purple-400' : 'text-muted-foreground'}" />
 									<span>Think</span>
 									{#if $sessionStore.thinkingEnabled}
-										<span class="ml-auto h-2 w-2 rounded-full bg-purple-400"></span>
+										<span class="ml-auto text-xs uppercase text-purple-400">{thinkingLevelLabel($sessionStore.thinkingLevel)}</span>
 									{/if}
 								</button>
 								
@@ -261,7 +404,7 @@
 						bind:value={inputValue}
 						onkeydown={handleKeyDown}
 						oninput={autoResize}
-						placeholder={$sessionStore.isStreaming ? 'Queue a message...' : 'Message Krusty...'}
+						placeholder={isTranscribing ? 'Listening...' : ($sessionStore.isStreaming ? 'Queue a message...' : 'Message Krusty...')}
 						rows={1}
 						inputmode="text"
 						enterkeyhint="send"
@@ -269,31 +412,82 @@
 							placeholder:text-muted-foreground focus:outline-none"
 					></textarea>
 
-					<!-- Combined Send/Queue/Stop button -->
-					<button
-						onclick={$sessionStore.isStreaming ? (inputValue.trim() ? handleSubmit : stopGeneration) : handleSubmit}
-						disabled={!$sessionStore.isStreaming && !inputValue.trim()}
-						class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors
-							{$sessionStore.isStreaming
-								? inputValue.trim()
-									? 'bg-amber-500 text-white hover:bg-amber-600'  // Queue
-									: 'bg-destructive text-white hover:bg-destructive/90'  // Stop
-								: 'bg-primary text-primary-foreground hover:bg-primary/90'  // Send (white text)
+					<!-- Combined Send/Queue/Stop/Voice button -->
+					{#if isSpeechSupported && !isTranscribing}
+						<div class="relative group">
+							<button
+								onclick={handleSubmit}
+								onmousedown={handleSendMouseDown}
+								onmouseup={handleSendMouseUp}
+								onmouseleave={handleSendMouseLeave}
+								ontouchstart={handleSendMouseDown}
+								ontouchend={handleSendMouseUp}
+								disabled={!$sessionStore.isStreaming && !inputValue.trim() && attachedFiles.length === 0}
+								class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors
+									{$sessionStore.isStreaming
+										? inputValue.trim()
+											? 'bg-amber-500 text-white hover:bg-amber-600'  // Queue
+											: 'bg-destructive text-white hover:bg-destructive/90'  // Stop
+										: 'bg-primary text-primary-foreground hover:bg-primary/90'  // Send (white text)
+									}
+										{!$sessionStore.isStreaming && !inputValue.trim() && attachedFiles.length === 0 ? 'disabled:cursor-not-allowed disabled:opacity-50' : ''}"
+								title={$sessionStore.isStreaming
+									? (inputValue.trim() ? 'Queue message' : 'Stop generation')
+									: 'Hold 3s for voice'
+								}
+							>
+								{#if $sessionStore.isStreaming && inputValue.trim()}
+									<Clock class="h-4 w-4" />
+								{:else if $sessionStore.isStreaming}
+									<StopCircle class="h-4 w-4" />
+								{:else}
+									<Send class="h-4 w-4" />
+								{/if}
+							</button>
+							
+							<!-- Voice hint tooltip -->
+							{#if !$sessionStore.isStreaming}
+								<div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-muted text-xs text-muted-foreground rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap">
+									Hold 3s for voice
+								</div>
+							{/if}
+						</div>
+					{:else if isTranscribing}
+						<!-- Transcription active - show check/stop button (green, reassuring) -->
+						<button
+							onclick={handleSubmit}
+							class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-green-500 text-white hover:bg-green-600 transition-colors"
+							title="Click to stop recording"
+						>
+							<Check class="h-4 w-4" />
+						</button>
+					{:else}
+						<!-- Speech not supported - show regular button -->
+						<button
+							onclick={handleSubmit}
+							disabled={!$sessionStore.isStreaming && !inputValue.trim()}
+							class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors
+								{$sessionStore.isStreaming
+									? inputValue.trim()
+										? 'bg-amber-500 text-white hover:bg-amber-600'
+										: 'bg-destructive text-white hover:bg-destructive/90'
+									: 'bg-primary text-primary-foreground hover:bg-primary/90'
+								}
+									{!$sessionStore.isStreaming && !inputValue.trim() ? 'disabled:cursor-not-allowed disabled:opacity-50' : ''}"
+							title={$sessionStore.isStreaming
+								? (inputValue.trim() ? 'Queue message' : 'Stop generation')
+								: 'Send message'
 							}
-								{!$sessionStore.isStreaming && !inputValue.trim() ? 'disabled:cursor-not-allowed disabled:opacity-50' : ''}"
-						title={$sessionStore.isStreaming
-							? (inputValue.trim() ? 'Queue message' : 'Stop generation')
-							: 'Send message'
-						}
-					>
-						{#if $sessionStore.isStreaming && inputValue.trim()}
-							<Clock class="h-4 w-4" />
-						{:else if $sessionStore.isStreaming}
-							<StopCircle class="h-4 w-4" />
-						{:else}
-							<Send class="h-4 w-4" />
-						{/if}
-					</button>
+						>
+							{#if $sessionStore.isStreaming && inputValue.trim()}
+								<Clock class="h-4 w-4" />
+							{:else if $sessionStore.isStreaming}
+								<StopCircle class="h-4 w-4" />
+							{:else}
+								<Send class="h-4 w-4" />
+							{/if}
+						</button>
+					{/if}
 				</div>
 			</div>
 		</div>

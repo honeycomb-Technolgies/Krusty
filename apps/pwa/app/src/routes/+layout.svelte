@@ -24,21 +24,20 @@
 		{ href: '/menu', icon: Menu, label: 'Menu' }
 	];
 
-	let { children } = $props();
-
-	const publicRoutes = ['/'];
-	let isPublicRoute = $derived(publicRoutes.some((route) => $page.url.pathname === route));
-
-	// Check if we're in the app section (show bottom nav)
-	let isAppRoute = $derived(
-		$page.url.pathname.startsWith('/app') ||
-		$page.url.pathname.startsWith('/terminal') ||
-		$page.url.pathname.startsWith('/ide') ||
-		$page.url.pathname.startsWith('/workspace') ||
-		$page.url.pathname.startsWith('/menu')
-	);
+	// iOS PWA viewport fix: set --vh variable to actual viewport height
+	function setViewportHeight() {
+		const vh = window.innerHeight * 0.01;
+		document.documentElement.style.setProperty('--vh', `${vh}px`);
+	}
 
 	onMount(() => {
+		setViewportHeight();
+		window.addEventListener('resize', setViewportHeight);
+		// Also handle orientation change on iOS
+		window.addEventListener('orientationchange', () => {
+			setTimeout(setViewportHeight, 100);
+		});
+
 		void validateWorkspace(apiClient);
 		if ('serviceWorker' in navigator) {
 			void navigator.serviceWorker.register('/service-worker.js').then(() => {
@@ -55,6 +54,20 @@
 			});
 		}
 	});
+
+	let { children } = $props();
+
+	const publicRoutes = ['/'];
+	let isPublicRoute = $derived(publicRoutes.some((route) => $page.url.pathname === route));
+
+	// Check if we're in the app section (show bottom nav)
+	let isAppRoute = $derived(
+		$page.url.pathname.startsWith('/app') ||
+		$page.url.pathname.startsWith('/terminal') ||
+		$page.url.pathname.startsWith('/ide') ||
+		$page.url.pathname.startsWith('/workspace') ||
+		$page.url.pathname.startsWith('/menu')
+	);
 </script>
 
 {#if isPublicRoute}
@@ -63,7 +76,7 @@
 {:else}
 	<!-- App pages -->
 	<PlasmaBackground />
-	<div class="flex h-dvh w-dvw flex-col overflow-hidden">
+	<div class="app-container flex w-screen flex-col overflow-hidden">
 		<main class="flex-1 overflow-hidden">
 			{@render children()}
 		</main>
