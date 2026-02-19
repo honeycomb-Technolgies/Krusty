@@ -42,7 +42,9 @@ pub enum PermissionMode {
 /// Categorize a tool by name.
 pub fn tool_category(name: &str) -> ToolCategory {
     match name {
-        "read" | "glob" | "grep" | "web_search" | "web_fetch" | "explore" => ToolCategory::ReadOnly,
+        "read" | "glob" | "grep" | "list" | "web_search" | "web_fetch" | "explore" => {
+            ToolCategory::ReadOnly
+        }
         "AskUserQuestion" | "PlanConfirm" | "enter_plan_mode" | "set_work_mode" | "task_start"
         | "task_complete" | "add_subtask" | "set_dependency" => ToolCategory::Interactive,
         _ => ToolCategory::Write,

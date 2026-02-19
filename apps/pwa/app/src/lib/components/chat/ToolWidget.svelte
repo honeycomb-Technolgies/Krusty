@@ -3,8 +3,11 @@
 	import FileText from 'lucide-svelte/icons/file-text';
 	import FilePlus from 'lucide-svelte/icons/file-plus';
 	import FolderTree from 'lucide-svelte/icons/folder-tree';
+	import FolderOpen from 'lucide-svelte/icons/folder-open';
 	import Search from 'lucide-svelte/icons/search';
 	import Edit3 from 'lucide-svelte/icons/edit-3';
+	import FileDiffIcon from 'lucide-svelte/icons/file-diff';
+	import Layers from 'lucide-svelte/icons/layers';
 	import CheckIcon from 'lucide-svelte/icons/check';
 	import X from 'lucide-svelte/icons/x';
 	import ChevronDown from 'lucide-svelte/icons/chevron-down';
@@ -57,8 +60,11 @@
 		read: FileText,
 		write: FilePlus,
 		edit: Edit3,
+		multiedit: Layers,
 		glob: FolderTree,
 		grep: Search,
+		list: FolderOpen,
+		apply_patch: FileDiffIcon,
 		explore: Compass,
 		build: Hammer,
 	};
@@ -84,6 +90,9 @@
 	const isWriteTool = $derived(toolCall.name === 'write' && !isEditTool);
 	const isGlobTool = $derived(toolCall.name === 'glob');
 	const isGrepTool = $derived(toolCall.name === 'grep');
+	const isListTool = $derived(toolCall.name === 'list');
+	const isApplyPatchTool = $derived(toolCall.name === 'apply_patch');
+	const isMultiEditTool = $derived(toolCall.name === 'multiedit');
 	const isExploreTool = $derived(toolCall.name === 'explore');
 	const isBuildTool = $derived(toolCall.name === 'build');
 
@@ -170,9 +179,37 @@
 		return agents;
 	});
 
+	// List results
+	const listResults = $derived(() => {
+		if (!isListTool || !toolCall.output) return [];
+		try {
+			const parsed = JSON.parse(toolCall.output);
+			return (parsed.output || '').split('\n').filter((l: string) => l.trim());
+		} catch {
+			return toolCall.output.split('\n').filter((l: string) => l.trim());
+		}
+	});
+
+	// Apply patch results
+	const patchResults = $derived(() => {
+		if (!isApplyPatchTool || !toolCall.output) return { modified: [], created: [], deleted: [], message: '' };
+		try {
+			const parsed = JSON.parse(toolCall.output);
+			return {
+				modified: parsed.files_modified || [],
+				created: parsed.files_created || [],
+				deleted: parsed.files_deleted || [],
+				message: parsed.message || '',
+			};
+		} catch {
+			return { modified: [], created: [], deleted: [], message: toolCall.output };
+		}
+	});
+
 	// Diff containers
 	let diffContainer: HTMLDivElement | undefined = $state();
 	let writeDiffContainer: HTMLDivElement | undefined = $state();
+	let multiEditDiffContainer: HTMLDivElement | undefined = $state();
 
 	// Edit tool diff
 	$effect(() => {
@@ -239,6 +276,42 @@
 		};
 	});
 
+	// MultiEdit tool diff - combine all old_string -> new_string pairs
+	$effect(() => {
+		if (!isMultiEditTool || !multiEditDiffContainer) return;
+
+		const args = toolCall.arguments!;
+		const fp = String(args.file_path || 'file');
+		const edits = (args.edits as Array<{ old_string: string; new_string: string }>) || [];
+		const lang = getFiletypeFromFileName(fp) ?? undefined;
+
+		const oldParts = edits.map((e) => String(e.old_string)).join('\n...\n');
+		const newParts = edits.map((e) => String(e.new_string)).join('\n...\n');
+
+		const instance = new FileDiff({
+			theme: 'pierre-dark',
+			themeType: 'dark',
+			diffStyle: 'unified',
+			overflow: 'wrap',
+			disableFileHeader: true,
+			disableLineNumbers: false,
+			unsafeCSS: `
+				pre { background: transparent !important; }
+				code { background: transparent !important; }
+			`,
+		});
+
+		instance.render({
+			oldFile: { name: fp, contents: oldParts, lang },
+			newFile: { name: fp, contents: newParts, lang },
+			containerWrapper: multiEditDiffContainer,
+		});
+
+		return () => {
+			instance.cleanUp();
+		};
+	});
+
 	const description = $derived(() => {
 		if (toolCall.description) return toolCall.description;
 		if (!toolCall.arguments) return null;
@@ -250,11 +323,16 @@
 			case 'read':
 			case 'write':
 			case 'edit':
+			case 'multiedit':
 				return args.file_path as string;
 			case 'glob':
 				return args.pattern as string;
 			case 'grep':
 				return `${args.pattern} in ${args.path || '.'}`;
+			case 'list':
+				return args.path as string;
+			case 'apply_patch':
+				return 'Applying patch';
 			case 'explore':
 				return args.prompt as string;
 			case 'build':
@@ -435,6 +513,127 @@
 					</div>
 				{/each}
 			</div>
+		{/if}
+	</div>
+
+{:else if isListTool}
+	<!-- List tool: expandable directory listing -->
+	<div class="min-w-0">
+		<button onclick={() => (isExpanded = !isExpanded)} class="flex w-full items-center gap-2 px-1 py-1.5 text-left">
+			<FolderOpen class="h-3.5 w-3.5 {toolCall.status === 'running' ? 'text-blue-400' : 'text-muted-foreground'}" />
+			<span class="text-xs text-muted-foreground">list</span>
+			<span class="flex-1 min-w-0 truncate text-xs font-mono text-muted-foreground">{toolCall.arguments?.path}</span>
+			{#if toolCall.status === 'running'}
+				<Loader2 class="h-3 w-3 animate-spin text-blue-400" />
+			{:else if toolCall.status === 'success'}
+				{#if listResults().length > 0}
+					<span class="text-[10px] text-muted-foreground tabular-nums">{listResults().length} entries</span>
+				{/if}
+				<CheckIcon class="h-3 w-3 text-green-500" />
+			{:else if toolCall.status === 'error'}
+				<X class="h-3 w-3 text-red-500" />
+			{/if}
+			{#if isExpanded}
+				<ChevronUp class="h-3 w-3 text-muted-foreground" />
+			{:else}
+				<ChevronDown class="h-3 w-3 text-muted-foreground" />
+			{/if}
+		</button>
+
+		{#if isExpanded && listResults().length > 0}
+			<div class="glob-results ml-6 border-l border-border/50 pl-3 py-1 max-h-64 overflow-y-auto">
+				{#each listResults() as entry}
+					<div class="flex items-center gap-1.5 py-0.5">
+						{#if entry.endsWith('/')}
+							<FolderOpen class="h-3 w-3 shrink-0 text-blue-400/60" />
+						{:else}
+							<FileText class="h-3 w-3 shrink-0 text-muted-foreground/60" />
+						{/if}
+						<span class="text-xs font-mono text-muted-foreground truncate">{entry}</span>
+					</div>
+				{/each}
+			</div>
+		{/if}
+	</div>
+
+{:else if isApplyPatchTool}
+	<!-- Apply Patch tool: file status list -->
+	<div class="min-w-0">
+		<button onclick={() => (isExpanded = !isExpanded)} class="flex w-full items-center gap-2 px-1 py-1.5 text-left">
+			<FileDiffIcon class="h-3.5 w-3.5 {toolCall.status === 'running' ? 'text-blue-400' : 'text-muted-foreground'}" />
+			<span class="text-xs text-muted-foreground">patch</span>
+			<span class="flex-1 min-w-0 truncate text-xs font-mono text-muted-foreground">{patchResults().message || 'Applying patch...'}</span>
+			{#if toolCall.status === 'running'}
+				<div class="editing-dots flex items-center gap-1">
+					<span></span><span></span><span></span>
+				</div>
+				<span class="text-xs text-blue-400 tabular-nums">{elapsedSeconds}s</span>
+			{:else if toolCall.status === 'success'}
+				<CheckIcon class="h-3.5 w-3.5 text-green-500" />
+			{:else if toolCall.status === 'error'}
+				<X class="h-3.5 w-3.5 text-red-500" />
+			{/if}
+			{#if isExpanded}
+				<ChevronUp class="h-3 w-3 text-muted-foreground" />
+			{:else}
+				<ChevronDown class="h-3 w-3 text-muted-foreground" />
+			{/if}
+		</button>
+
+		{#if isExpanded && toolCall.status !== 'running'}
+			<div class="ml-6 border-l border-border/50 pl-3 py-1">
+				{#each patchResults().modified as file}
+					<div class="flex items-center gap-1.5 py-0.5">
+						<Edit3 class="h-3 w-3 shrink-0 text-yellow-400/70" />
+						<span class="text-xs font-mono text-muted-foreground truncate">{file}</span>
+					</div>
+				{/each}
+				{#each patchResults().created as file}
+					<div class="flex items-center gap-1.5 py-0.5">
+						<FilePlus class="h-3 w-3 shrink-0 text-green-400/70" />
+						<span class="text-xs font-mono text-muted-foreground truncate">{file}</span>
+					</div>
+				{/each}
+				{#each patchResults().deleted as file}
+					<div class="flex items-center gap-1.5 py-0.5">
+						<X class="h-3 w-3 shrink-0 text-red-400/70" />
+						<span class="text-xs font-mono text-muted-foreground truncate">{file}</span>
+					</div>
+				{/each}
+			</div>
+		{/if}
+
+		{#if toolCall.status === 'error' && toolCall.output}
+			<pre class="mt-2 rounded-lg bg-red-500/10 border border-red-500/30 p-2.5 font-mono text-xs whitespace-pre-wrap text-red-300">{toolCall.output}</pre>
+		{/if}
+	</div>
+
+{:else if isMultiEditTool}
+	<!-- MultiEdit tool: diff view -->
+	<div class="edit-tool-widget">
+		<div class="flex items-center gap-2 px-1 py-1.5">
+			<Layers class="h-3.5 w-3.5 {toolCall.status === 'running' ? 'text-blue-400' : 'text-muted-foreground'}" />
+			<span class="text-xs text-muted-foreground">multiedit</span>
+			<span class="flex-1 min-w-0 truncate text-xs font-mono {toolCall.status === 'running' ? 'text-blue-300' : 'text-muted-foreground'}">{shortPath()}</span>
+			{#if toolCall.arguments?.edits}
+				<span class="text-[10px] text-muted-foreground tabular-nums">{(toolCall.arguments.edits as unknown[]).length} edits</span>
+			{/if}
+			{#if toolCall.status === 'running'}
+				<div class="editing-dots flex items-center gap-1">
+					<span></span><span></span><span></span>
+				</div>
+				<span class="text-xs text-blue-400 tabular-nums">{elapsedSeconds}s</span>
+			{:else if toolCall.status === 'success'}
+				<CheckIcon class="h-3.5 w-3.5 text-green-500" />
+			{:else if toolCall.status === 'error'}
+				<X class="h-3.5 w-3.5 text-red-500" />
+			{/if}
+		</div>
+
+		<div bind:this={multiEditDiffContainer} class="diff-wrapper {toolCall.status === 'running' ? 'diff-active' : ''}"></div>
+
+		{#if toolCall.status === 'error' && toolCall.output}
+			<pre class="mt-2 rounded-lg bg-red-500/10 border border-red-500/30 p-2.5 font-mono text-xs whitespace-pre-wrap text-red-300">{toolCall.output}</pre>
 		{/if}
 	</div>
 

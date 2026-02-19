@@ -1,4 +1,4 @@
-//! Read tool - Read file contents
+//! Read tool - Read file contents with file suggestions on not-found
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -10,6 +10,9 @@ use crate::tools::{parse_params, ToolContext, ToolResult};
 
 /// Maximum file size to read into memory (10 MB)
 const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
+
+/// Maximum number of file suggestions on not-found
+const MAX_SUGGESTIONS: usize = 5;
 
 pub struct ReadTool;
 
@@ -29,7 +32,7 @@ impl Tool for ReadTool {
     }
 
     fn description(&self) -> &str {
-        "Read file contents. Supports line offset/limit for large files. Detects binary files."
+        "Read file contents. Supports line offset/limit for large files. Detects binary files. Suggests similar filenames when file not found."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -64,10 +67,17 @@ impl Tool for ReadTool {
         let path = match ctx.sandboxed_resolve(&params.file_path) {
             Ok(p) => p,
             Err(e) => {
-                // Fall back to regular resolve if file doesn't exist yet (for better error message)
                 let fallback = ctx.resolve_path(&params.file_path);
                 if !fallback.exists() {
-                    return ToolResult::error(format!("File not found: {}", params.file_path));
+                    let suggestions = find_suggestions(&params.file_path, ctx);
+                    let mut msg = format!("File not found: {}", params.file_path);
+                    if !suggestions.is_empty() {
+                        msg.push_str("\n\nDid you mean:\n");
+                        for s in &suggestions {
+                            msg.push_str(&format!("  - {}\n", s));
+                        }
+                    }
+                    return ToolResult::error(msg);
                 }
                 return ToolResult::error(e);
             }
@@ -147,4 +157,32 @@ impl Tool for ReadTool {
             .to_string(),
         )
     }
+}
+
+/// Search for files with a similar name when the requested path is not found.
+fn find_suggestions(file_path: &str, ctx: &ToolContext) -> Vec<String> {
+    let path = std::path::Path::new(file_path);
+    let filename = match path.file_name().and_then(|f| f.to_str()) {
+        Some(f) => f,
+        None => return Vec::new(),
+    };
+
+    let search_root = ctx.sandbox_root.as_deref().unwrap_or(&ctx.working_dir);
+
+    let pattern = format!("**/{}", filename);
+    let full_pattern = format!("{}/{}", search_root.display(), pattern);
+
+    let mut suggestions = Vec::new();
+    let matches = glob::glob(&full_pattern).ok();
+
+    if let Some(paths) = matches {
+        for entry in paths.flatten() {
+            suggestions.push(entry.display().to_string());
+            if suggestions.len() >= MAX_SUGGESTIONS {
+                break;
+            }
+        }
+    }
+
+    suggestions
 }

@@ -10,7 +10,11 @@ use tokio::process::Command;
 use tokio::time::timeout;
 
 use crate::tools::registry::{Tool, ToolOutputChunk};
+use crate::tools::truncation;
 use crate::tools::{parse_params, ToolContext, ToolResult};
+
+const MAX_OUTPUT_LINES: usize = 2000;
+const MAX_OUTPUT_BYTES: usize = 50_000; // 50KB
 
 pub struct BashTool;
 
@@ -23,6 +27,13 @@ struct Params {
     description: Option<String>,
     #[serde(default)]
     run_in_background: Option<bool>,
+}
+
+/// Strip ANSI escape sequences from text
+fn strip_ansi(text: &str) -> String {
+    let re = regex::Regex::new(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b\[[\?0-9;]*[a-zA-Z]")
+        .expect("valid regex");
+    re.replace_all(text, "").into_owned()
 }
 
 #[async_trait]
@@ -111,6 +122,9 @@ impl Tool for BashTool {
             c
         };
 
+        // Set NO_COLOR to reduce ANSI at source
+        cmd.env("NO_COLOR", "1");
+
         // Apply git author env vars if in Author mode
         if let Some(ref identity) = ctx.git_identity {
             for (key, val) in identity.env_vars() {
@@ -121,22 +135,18 @@ impl Tool for BashTool {
         cmd.current_dir(&ctx.working_dir);
 
         // Detect shell background syntax (command ending with &)
-        // Treat this the same as run_in_background: true
         let command_trimmed = effective_command.trim();
         let is_shell_backgrounded =
-            command_trimmed.ends_with('&') && !command_trimmed.ends_with("&&"); // Don't match && (logical AND)
+            command_trimmed.ends_with('&') && !command_trimmed.ends_with("&&");
 
         // Handle background execution (explicit param OR shell & syntax)
         if params.run_in_background.unwrap_or(false) || is_shell_backgrounded {
-            // Strip trailing & if present (we'll handle backgrounding ourselves)
             let clean_command = if is_shell_backgrounded {
                 command_trimmed.trim_end_matches('&').trim().to_string()
             } else {
                 effective_command.clone()
             };
-            // Use process registry if available for tracking
             if let Some(ref registry) = ctx.process_registry {
-                // Use user_id for multi-tenant isolation
                 let spawn_result = match ctx.user_id.as_deref() {
                     Some(uid) => {
                         registry
@@ -174,30 +184,37 @@ impl Tool for BashTool {
                     }
                 }
             } else {
-                // Fallback to legacy background execution without tracking
                 return execute_background(cmd).await;
             }
         }
 
         // Foreground execution with streaming output
         cmd.kill_on_drop(true);
-        cmd.stdin(Stdio::null()); // Prevent hanging on input
+        cmd.stdin(Stdio::null());
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
-        let timeout_ms = params.timeout.unwrap_or(30_000).min(600_000); // 30s default
+        let timeout_ms = params.timeout.unwrap_or(30_000).min(600_000);
         let timeout_duration = Duration::from_millis(timeout_ms);
 
-        // Check if we have streaming output channel
         let has_streaming = ctx.output_tx.is_some() && ctx.tool_use_id.is_some();
 
         if has_streaming {
-            // Streaming mode: spawn and read lines incrementally
             execute_streaming(cmd, timeout_duration, ctx).await
         } else {
-            // Legacy mode: wait for completion
             execute_blocking(cmd, timeout_duration).await
         }
+    }
+}
+
+/// Apply ANSI stripping and truncation to the final output sent to the AI model.
+fn process_output(combined: String) -> String {
+    let stripped = strip_ansi(&combined);
+    let result = truncation::truncate_tail(&stripped, MAX_OUTPUT_LINES, MAX_OUTPUT_BYTES);
+    if let Some(notice) = result.notice() {
+        format!("{}{}", result.text, notice)
+    } else {
+        result.text
     }
 }
 
@@ -225,9 +242,10 @@ async fn execute_streaming(
     let stderr = child.stderr.take();
 
     let mut combined_output = String::new();
-    const MAX_OUTPUT_SIZE: usize = 10_000_000; // 10MB cap to prevent unbounded growth
+    const MAX_OUTPUT_SIZE: usize = 10_000_000; // 10MB cap for raw collection
 
     // Spawn tasks to read stdout and stderr concurrently
+    // Streaming chunks are sent unmodified (UI can render colors)
     let stdout_tx = output_tx.clone();
     let stdout_id = tool_use_id.clone();
     let stdout_handle = tokio::spawn(async move {
@@ -235,7 +253,6 @@ async fn execute_streaming(
         if let Some(stdout) = stdout {
             let mut reader = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = reader.next_line().await {
-                // Send line to UI immediately
                 let _ = stdout_tx.send(ToolOutputChunk {
                     tool_use_id: stdout_id.clone(),
                     chunk: format!("{}\n", line),
@@ -255,7 +272,6 @@ async fn execute_streaming(
         if let Some(stderr) = stderr {
             let mut reader = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = reader.next_line().await {
-                // Send line to UI immediately (stderr)
                 let _ = stderr_tx.send(ToolOutputChunk {
                     tool_use_id: stderr_id.clone(),
                     chunk: format!("{}\n", line),
@@ -268,25 +284,21 @@ async fn execute_streaming(
         lines.join("\n")
     });
 
-    // Wait for process with timeout
     let wait_result = timeout(timeout_duration, child.wait()).await;
 
     let (exit_code, killed) = match wait_result {
         Ok(Ok(status)) => {
-            // Check for normal exit code first
             if let Some(code) = status.code() {
                 (code, false)
             } else {
-                // Process was killed by signal (Unix)
-                // On Unix, check if it was a user-initiated signal (SIGINT=2, SIGTERM=15)
                 #[cfg(unix)]
                 {
                     use std::os::unix::process::ExitStatusExt;
                     match status.signal() {
-                        Some(2) | Some(15) => (0, false), // SIGINT/SIGTERM = user closed, treat as success
+                        Some(2) | Some(15) => (0, false),
                         Some(sig) => {
                             tracing::debug!("Process killed by signal {}", sig);
-                            (128 + sig, false) // Convention: 128 + signal number
+                            (128 + sig, false)
                         }
                         None => (-1, false),
                     }
@@ -302,7 +314,6 @@ async fn execute_streaming(
             (-1, false)
         }
         Err(_) => {
-            // Timeout - kill the process
             let _ = child.kill().await;
             (-1, true)
         }
@@ -315,7 +326,6 @@ async fn execute_streaming(
         } else {
             let remaining = MAX_OUTPUT_SIZE.saturating_sub(combined_output.len());
             combined_output.push_str(&stdout_output[..remaining.min(stdout_output.len())]);
-            combined_output.push_str("\n[OUTPUT TRUNCATED: exceeded size limit]");
         }
     }
     if let Ok(stderr_output) = stderr_handle.await {
@@ -330,7 +340,6 @@ async fn execute_streaming(
                 combined_output.push('\n');
             }
             combined_output.push_str(&stderr_output[..remaining.min(stderr_output.len())]);
-            combined_output.push_str("\n[OUTPUT TRUNCATED: exceeded size limit]");
         }
     }
 
@@ -342,9 +351,12 @@ async fn execute_streaming(
         exit_code: Some(exit_code),
     });
 
+    // Strip ANSI and truncate for the ToolResult (what goes to the AI model)
+    let processed = process_output(combined_output);
+
     ToolResult {
         output: json!({
-            "output": combined_output,
+            "output": processed,
             "exitCode": exit_code,
             "killed": killed
         })
@@ -370,9 +382,11 @@ async fn execute_blocking(mut cmd: Command, timeout_duration: Duration) -> ToolR
                 (false, false) => format!("{}\n{}", stdout, stderr),
             };
 
+            let processed = process_output(combined);
+
             ToolResult {
                 output: json!({
-                    "output": combined,
+                    "output": processed,
                     "exitCode": exit_code,
                     "killed": false
                 })
@@ -404,7 +418,6 @@ async fn execute_background(mut cmd: Command) -> ToolResult {
             let pid = child.id().unwrap_or(0);
             tracing::info!(shell_id = %shell_id, pid = pid, "Started background process");
 
-            // Detach - let the process run independently
             tokio::spawn(async move {
                 let _ = child.wait_with_output().await;
             });
