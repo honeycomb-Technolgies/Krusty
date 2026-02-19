@@ -393,7 +393,14 @@ impl AiClient {
         let is_anthropic_oauth = self.provider_id() == ProviderId::Anthropic
             && crate::auth::is_anthropic_oauth_token(self.api_key());
 
-        if options.enable_caching {
+        // Gate caching on both the caller's flag AND the provider's capability.
+        // `enable_caching` defaults to true for all providers, but only Anthropic
+        // actually supports cache_control blocks. Sending them to MiniMax, Z.ai,
+        // etc. may cause errors since they use Anthropic format but don't support caching.
+        let provider_caps = ProviderCapabilities::for_provider(self.provider_id());
+        let use_caching = options.enable_caching && provider_caps.prompt_caching;
+
+        if use_caching {
             let mut system_blocks: Vec<Value> = Vec::new();
 
             // Block 1 (optional): CC identity — globally cached across all sessions
@@ -487,12 +494,11 @@ impl AiClient {
         }
 
         // Add server-executed tools based on provider capabilities
-        let capabilities = ProviderCapabilities::for_provider(self.provider_id());
-        self.add_server_tools(&mut all_tools, &mut body, options, &capabilities);
+        self.add_server_tools(&mut all_tools, &mut body, options, &provider_caps);
 
         // Add all tools to body with cache breakpoint on last one
         if !all_tools.is_empty() {
-            if options.enable_caching {
+            if use_caching {
                 if let Some(last) = all_tools.last_mut() {
                     last["cache_control"] = serde_json::json!({"type": "ephemeral"});
                 }
@@ -504,7 +510,7 @@ impl AiClient {
         // Add cache breakpoint to the last conversation message.
         // This ensures the conversation prefix from previous turns is cached,
         // so each new turn only pays for the new messages appended at the end.
-        if options.enable_caching {
+        if use_caching {
             if let Some(messages_arr) = body.get_mut("messages").and_then(|m| m.as_array_mut()) {
                 if let Some(last_msg) = messages_arr.last_mut() {
                     if let Some(content_arr) =

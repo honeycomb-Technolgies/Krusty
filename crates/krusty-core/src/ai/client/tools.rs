@@ -94,7 +94,8 @@ impl AiClient {
         max_tokens: usize,
         thinking_enabled: bool,
     ) -> Result<Value> {
-        // Sort tools deterministically to maintain stable cache prefix
+        // Sort tools deterministically to maintain stable cache prefix.
+        // Tool order is part of the cached prefix; non-deterministic order breaks caching.
         let mut sorted_tools = tools;
         sorted_tools.sort_by(|a, b| {
             let name_a = a.get("name").and_then(|n| n.as_str()).unwrap_or("");
@@ -102,25 +103,39 @@ impl AiClient {
             name_a.cmp(name_b)
         });
 
-        // Add cache_control to system prompt and last tool for sub-agent caching.
-        // Sub-agents make multiple round-trips with the same system prompt and tools,
-        // so caching the prefix saves significant cost and latency.
-        let system_value = serde_json::json!([{
-            "type": "text",
-            "text": system_prompt,
-            "cache_control": {"type": "ephemeral"}
-        }]);
+        // Only apply cache_control for providers that support prompt caching.
+        // MiniMax, Z.ai, etc. use Anthropic format but don't support caching —
+        // sending cache_control or array-format system prompts may cause errors.
+        let capabilities =
+            crate::ai::providers::ProviderCapabilities::for_provider(self.provider_id());
+        let enable_caching = capabilities.prompt_caching;
 
-        if let Some(last) = sorted_tools.last_mut() {
-            last["cache_control"] = serde_json::json!({"type": "ephemeral"});
+        let system_value: Value = if enable_caching {
+            serde_json::json!([{
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": {"type": "ephemeral"}
+            }])
+        } else {
+            Value::String(system_prompt.to_string())
+        };
+
+        if enable_caching {
+            if let Some(last) = sorted_tools.last_mut() {
+                last["cache_control"] = serde_json::json!({"type": "ephemeral"});
+            }
         }
 
         // Add cache breakpoint to last conversation message
         let mut cached_messages = messages;
-        if let Some(last_msg) = cached_messages.last_mut() {
-            if let Some(content_arr) = last_msg.get_mut("content").and_then(|c| c.as_array_mut()) {
-                if let Some(last_block) = content_arr.last_mut() {
-                    last_block["cache_control"] = serde_json::json!({"type": "ephemeral"});
+        if enable_caching {
+            if let Some(last_msg) = cached_messages.last_mut() {
+                if let Some(content_arr) =
+                    last_msg.get_mut("content").and_then(|c| c.as_array_mut())
+                {
+                    if let Some(last_block) = content_arr.last_mut() {
+                        last_block["cache_control"] = serde_json::json!({"type": "ephemeral"});
+                    }
                 }
             }
         }

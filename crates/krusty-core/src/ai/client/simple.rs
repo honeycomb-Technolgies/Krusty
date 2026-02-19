@@ -65,8 +65,8 @@ impl AiClient {
 
     /// Simple non-streaming call using Anthropic format
     ///
-    /// Uses cache_control on the system prompt so repeated calls with the same
-    /// system prompt (e.g., title generation, summarization) benefit from caching.
+    /// Uses cache_control on the system prompt when the provider supports it,
+    /// so repeated calls with the same system prompt benefit from caching.
     async fn call_simple_anthropic(
         &self,
         model: &str,
@@ -74,6 +74,21 @@ impl AiClient {
         user_message: &str,
         max_tokens: usize,
     ) -> Result<String> {
+        // Only apply cache_control for providers that support prompt caching.
+        // MiniMax, Z.ai, etc. use Anthropic format but may reject cache_control blocks.
+        let capabilities =
+            crate::ai::providers::ProviderCapabilities::for_provider(self.provider_id());
+
+        let system_value: serde_json::Value = if capabilities.prompt_caching {
+            serde_json::json!([{
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": {"type": "ephemeral"}
+            }])
+        } else {
+            serde_json::Value::String(system_prompt.to_string())
+        };
+
         let body = serde_json::json!({
             "model": model,
             "max_tokens": max_tokens,
@@ -81,11 +96,7 @@ impl AiClient {
                 "role": "user",
                 "content": user_message
             }],
-            "system": [{
-                "type": "text",
-                "text": system_prompt,
-                "cache_control": {"type": "ephemeral"}
-            }]
+            "system": system_value
         });
 
         let request = self.build_request(&self.config().api_url());
