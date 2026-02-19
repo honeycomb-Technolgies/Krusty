@@ -120,33 +120,20 @@ impl AiClient {
             Value::String(system_prompt.to_string())
         };
 
-        if enable_caching {
-            if let Some(last) = sorted_tools.last_mut() {
-                last["cache_control"] = serde_json::json!({"type": "ephemeral"});
-            }
-        }
-
-        // Add cache breakpoint to last conversation message
-        let mut cached_messages = messages;
-        if enable_caching {
-            if let Some(last_msg) = cached_messages.last_mut() {
-                if let Some(content_arr) =
-                    last_msg.get_mut("content").and_then(|c| c.as_array_mut())
-                {
-                    if let Some(last_block) = content_arr.last_mut() {
-                        last_block["cache_control"] = serde_json::json!({"type": "ephemeral"});
-                    }
-                }
-            }
-        }
-
         let mut body = serde_json::json!({
             "model": model,
             "max_tokens": max_tokens,
-            "messages": cached_messages,
+            "messages": messages,
             "system": system_value,
             "tools": sorted_tools
         });
+
+        // Enable auto-caching at the request level. The API automatically places
+        // the cache breakpoint on the last cacheable block, replacing the need for
+        // manual breakpoints on the last tool and last message.
+        if enable_caching {
+            body["cache_control"] = serde_json::json!({"type": "ephemeral"});
+        }
 
         // Add thinking configuration when enabled
         // MiniMax: Simple thinking without budget_tokens (their API doesn't support it)

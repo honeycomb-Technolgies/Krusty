@@ -98,7 +98,7 @@ impl AiClient {
             serde_json::Value::String(system_prompt.to_string())
         };
 
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": model,
             "max_tokens": max_tokens,
             "messages": [{
@@ -107,6 +107,11 @@ impl AiClient {
             }],
             "system": system_value
         });
+
+        // Auto-caching: API places breakpoint on the last cacheable block
+        if capabilities.prompt_caching {
+            body["cache_control"] = serde_json::json!({"type": "ephemeral"});
+        }
 
         let request = self.build_request(&self.config().api_url());
         let response = request.json(&body).send().await?;
@@ -398,12 +403,19 @@ impl AiClient {
             Value::String(system)
         };
 
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": model,
             "max_tokens": max_tokens,
             "system": system_value,
             "messages": api_messages,
         });
+
+        // Auto-caching: API places breakpoint on the last cacheable block.
+        // Combined with block-level caching on system prompt blocks, this
+        // ensures both the static prefix and conversation are cached.
+        if capabilities.prompt_caching {
+            body["cache_control"] = serde_json::json!({"type": "ephemeral"});
+        }
 
         debug!(
             "Cache-safe Anthropic call: {} conversation messages + appended user message",

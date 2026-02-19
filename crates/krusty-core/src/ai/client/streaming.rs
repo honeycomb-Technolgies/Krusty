@@ -499,33 +499,20 @@ impl AiClient {
         // Add server-executed tools based on provider capabilities
         self.add_server_tools(&mut all_tools, &mut body, options, &provider_caps);
 
-        // Add all tools to body with cache breakpoint on last one
+        // Add all tools to body — no manual cache breakpoint needed,
+        // auto-caching handles the last-block breakpoint automatically.
         if !all_tools.is_empty() {
-            if use_caching {
-                if let Some(last) = all_tools.last_mut() {
-                    last["cache_control"] = serde_json::json!({"type": "ephemeral"});
-                }
-                debug!("Cache breakpoint added to last tool");
-            }
             body["tools"] = Value::Array(all_tools);
         }
 
-        // Add cache breakpoint to the last conversation message.
-        // This ensures the conversation prefix from previous turns is cached,
-        // so each new turn only pays for the new messages appended at the end.
+        // Enable auto-caching at the request level.
+        // The API automatically places a cache breakpoint on the last cacheable
+        // block in the request, so we don't need to manually navigate JSON to
+        // find the last tool or last message. Block-level breakpoints on system
+        // prompt blocks above still work alongside auto-caching for the static prefix.
         if use_caching {
-            if let Some(messages_arr) = body.get_mut("messages").and_then(|m| m.as_array_mut()) {
-                if let Some(last_msg) = messages_arr.last_mut() {
-                    if let Some(content_arr) =
-                        last_msg.get_mut("content").and_then(|c| c.as_array_mut())
-                    {
-                        if let Some(last_block) = content_arr.last_mut() {
-                            last_block["cache_control"] = serde_json::json!({"type": "ephemeral"});
-                        }
-                    }
-                }
-                debug!("Cache breakpoint added to last conversation message");
-            }
+            body["cache_control"] = serde_json::json!({"type": "ephemeral"});
+            debug!("Auto-caching enabled at request level");
         }
 
         // Add reasoning/thinking config
