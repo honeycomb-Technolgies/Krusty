@@ -79,7 +79,7 @@ fn spawn_sse_stream_task<S, P>(
     });
 }
 
-fn first_text_block(content: &[Content]) -> Option<&str> {
+pub(crate) fn first_text_block(content: &[Content]) -> Option<&str> {
     content.iter().find_map(|block| match block {
         Content::Text { text } => Some(text.as_str()),
         _ => None,
@@ -93,7 +93,7 @@ fn first_text_block(content: &[Content]) -> Option<&str> {
 /// `[PROJECT INSTRUCTIONS` prefix and rarely changes within a session.
 /// Everything else (plan state, skills list) changes frequently and should
 /// NOT be included in the cached prefix.
-fn partition_system_messages(messages: &[ModelMessage]) -> (String, String) {
+pub(crate) fn partition_system_messages(messages: &[ModelMessage]) -> (String, String) {
     let mut project_context = String::new();
     let mut session_context = String::new();
 
