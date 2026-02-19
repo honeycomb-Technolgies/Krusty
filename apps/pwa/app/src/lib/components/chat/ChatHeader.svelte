@@ -314,10 +314,11 @@
 			{/if}
 		</div>
 
-		<!-- Center: Title -->
-		<div class="flex items-center gap-2 min-w-0 flex-1 justify-center">
+		<!-- Center: Title + Wave -->
+		<div class="relative flex items-center min-w-0 flex-1 justify-center">
+			<!-- Wave indicator: absolutely positioned left, fills gap without shifting title -->
 			{#if $sessionStore.isStreaming}
-				<div class="flex items-center gap-0.5 h-4 shrink-0" title="Streaming">
+				<div class="absolute left-1 top-1/2 -translate-y-1/2 flex items-center gap-0.5 h-4 pointer-events-none" title="Streaming">
 					<span class="w-1 h-1 rounded-full bg-green-500 animate-wave"></span>
 					<span class="w-1 h-1.5 rounded-full bg-green-500 animate-wave" style="animation-delay: 0.1s"></span>
 					<span class="w-1 h-2 rounded-full bg-green-500 animate-wave" style="animation-delay: 0.2s"></span>
@@ -467,7 +468,7 @@
 		</div>
 
 		<!-- Center: Git info + Title -->
-		<div class="flex items-center gap-2 flex-1 justify-center">
+		<div class="relative flex items-center gap-2 flex-1 justify-center">
 			<!-- Git info -->
 			<div class="flex items-center gap-2">
 				{#if $gitStore.status?.in_repo}
@@ -549,7 +550,7 @@
 				{/if}
 
 				{#if $sessionStore.isStreaming}
-					<span class="flex items-center gap-2 text-sm text-muted-foreground">
+					<span class="absolute left-2 top-1/2 -translate-y-1/2 flex items-center gap-2 text-sm text-muted-foreground pointer-events-none">
 						<span class="h-2 w-2 animate-pulse rounded-full bg-green-500"></span>
 						{$sessionStore.isThinking ? 'Thinking...' : 'Streaming...'}
 					</span>

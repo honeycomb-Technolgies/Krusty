@@ -123,8 +123,9 @@ impl Tool for MultiEditTool {
                     }
                 }
                 None => {
-                    let preview = if edit.old_string.len() > 60 {
-                        format!("{}...", &edit.old_string[..57])
+                    let preview = if edit.old_string.chars().count() > 60 {
+                        let prefix: String = edit.old_string.chars().take(57).collect();
+                        format!("{}...", prefix)
                     } else {
                         edit.old_string.clone()
                     };
@@ -147,30 +148,16 @@ impl Tool for MultiEditTool {
                     msg.push_str(&format!(" ({} failed)", errors.len()));
                 }
 
-                let mut output = json!({
+                let data = json!({
                     "message": msg,
                     "edits_applied": applied,
                     "edits_total": total,
-                    "file_path": path.display().to_string()
-                })
-                .to_string();
+                    "file_path": path.display().to_string(),
+                    "partial": !errors.is_empty()
+                });
 
-                if !errors.is_empty() {
-                    output.push_str("\n\n[ERRORS]\n");
-                    output.push_str(&errors.join("\n"));
-                }
-
-                if !diff.is_empty() {
-                    output.push_str("\n\n[DIFF]\n");
-                    output.push_str(&diff);
-                }
-
-                if errors.is_empty() {
-                    ToolResult::success(output)
-                } else {
-                    // Partial success - still wrote file but report as success with warnings
-                    ToolResult::success(output)
-                }
+                // Partial success still writes the file, so keep success with warnings.
+                ToolResult::success_data_with(data, errors, Some(diff), None)
             }
             Err(e) => ToolResult::error(format!("Failed to write file: {}", e)),
         }

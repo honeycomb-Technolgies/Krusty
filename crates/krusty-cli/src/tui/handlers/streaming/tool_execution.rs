@@ -286,12 +286,16 @@ impl App {
         for block in &mut self.runtime.blocks.read {
             if block.tool_use_id() == tool_use_id {
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(output_str) {
-                    let content = json.get("content").and_then(|v| v.as_str()).unwrap_or("");
-                    let total_lines = json
+                    let payload = json.get("data").unwrap_or(&json);
+                    let content = payload
+                        .get("content")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let total_lines = payload
                         .get("total_lines")
                         .and_then(|v| v.as_u64())
                         .unwrap_or(0) as usize;
-                    let lines_returned = json
+                    let lines_returned = payload
                         .get("lines_returned")
                         .and_then(|v| v.as_u64())
                         .unwrap_or(0) as usize;
@@ -310,7 +314,13 @@ impl App {
         for block in &mut self.runtime.blocks.bash {
             if block.tool_use_id() == Some(tool_use_id) {
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(output_str) {
-                    if let Some(process_id) = json.get("processId").and_then(|v| v.as_str()) {
+                    if let Some(process_id) =
+                        json.get("processId").and_then(|v| v.as_str()).or_else(|| {
+                            json.get("data")
+                                .and_then(|v| v.get("process_id"))
+                                .and_then(|v| v.as_str())
+                        })
+                    {
                         block.set_background_process_id(process_id.to_string());
                         tracing::info!(
                             tool_use_id = %tool_use_id,

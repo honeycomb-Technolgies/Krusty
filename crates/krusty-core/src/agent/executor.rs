@@ -61,19 +61,23 @@ pub(crate) async fn execute_tools(
             let approved = wait_for_approval(call, event_tx, input_rx).await;
 
             if !approved {
-                let output = "Tool execution denied by user".to_string();
+                let denied = crate::tools::registry::ToolResult::error_with_code(
+                    "permission_denied",
+                    "Tool execution denied by user",
+                );
+                let output = truncate_output(&denied.output);
                 let _ = event_tx.send(LoopEvent::ToolDenied {
                     id: call.id.clone(),
                 });
                 let _ = event_tx.send(LoopEvent::ToolResult {
                     id: call.id.clone(),
                     output: output.clone(),
-                    is_error: true,
+                    is_error: denied.is_error,
                 });
                 results.push(Content::ToolResult {
                     tool_use_id: call.id.clone(),
                     output: serde_json::Value::String(output),
-                    is_error: Some(true),
+                    is_error: Some(denied.is_error),
                 });
                 continue;
             }
@@ -190,9 +194,11 @@ pub(crate) async fn execute_tools(
         let result = tool_registry
             .execute(&call.name, call.arguments.clone(), &ctx)
             .await
-            .unwrap_or_else(|| crate::tools::registry::ToolResult {
-                output: format!("Unknown tool: {}", call.name),
-                is_error: true,
+            .unwrap_or_else(|| {
+                crate::tools::registry::ToolResult::error_with_code(
+                    "unknown_tool",
+                    format!("Unknown tool: {}", call.name),
+                )
             });
 
         drop(ctx);
@@ -236,14 +242,18 @@ async fn wait_for_approval(
             Ok(Some(_)) => continue,  // ignore unrelated inputs
             Ok(None) => return false, // channel closed
             Err(_) => {
+                let timeout_result = crate::tools::registry::ToolResult::error_with_code(
+                    "timeout",
+                    "Tool approval timed out after 5 minutes",
+                );
                 // Timeout
                 let _ = event_tx.send(LoopEvent::ToolDenied {
                     id: call.id.clone(),
                 });
                 let _ = event_tx.send(LoopEvent::ToolResult {
                     id: call.id.clone(),
-                    output: "Tool approval timed out after 5 minutes".to_string(),
-                    is_error: true,
+                    output: timeout_result.output,
+                    is_error: timeout_result.is_error,
                 });
                 return false;
             }

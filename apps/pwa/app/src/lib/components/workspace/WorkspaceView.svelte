@@ -337,7 +337,7 @@
 		window.open(url, '_blank', 'noopener,noreferrer');
 	}
 
-	function handleWindowClick(e: MouseEvent) {
+	function handleWindowClick(e: PointerEvent) {
 		if (tabMenuOpen === null) return;
 		const target = e.target as HTMLElement;
 		if (!target.closest('[data-tab-menu]')) {
@@ -567,8 +567,7 @@
 	}
 </script>
 
-<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-<div class="flex h-full flex-col bg-background" onclick={handleWindowClick}>
+<div class="flex h-full flex-col bg-background" onpointerdown={handleWindowClick} role="presentation">
 	{#if loading}
 		<div class="flex h-full items-center justify-center text-muted-foreground">
 			<RefreshCw class="h-5 w-5 animate-spin" />

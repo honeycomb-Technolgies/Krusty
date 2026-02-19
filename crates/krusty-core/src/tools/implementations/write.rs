@@ -93,31 +93,33 @@ impl Tool for WriteTool {
             Ok(_) => {
                 let line_count = params.content.lines().count();
 
-                let mut output = match &old_content {
+                let data = match &old_content {
                     Some(_) => json!({
                         "message": format!("Successfully overwrote file ({} lines)", line_count),
                         "bytes_written": params.content.len(),
+                        "line_count": line_count,
                         "file_path": path.display().to_string()
-                    })
-                    .to_string(),
+                    }),
                     None => json!({
                         "message": format!("Created new file ({} lines)", line_count),
                         "bytes_written": params.content.len(),
+                        "line_count": line_count,
                         "file_path": path.display().to_string()
-                    })
-                    .to_string(),
+                    }),
                 };
 
-                // Append diff when overwriting
-                if let Some(old) = &old_content {
+                let diff = if let Some(old) = &old_content {
                     let diff = generate_compact_diff(old, &params.content, &path);
                     if !diff.is_empty() {
-                        output.push_str("\n\n[DIFF]\n");
-                        output.push_str(&diff);
+                        Some(diff)
+                    } else {
+                        None
                     }
-                }
+                } else {
+                    None
+                };
 
-                ToolResult::success(output)
+                ToolResult::success_data_with(data, Vec::new(), diff, None)
             }
             Err(e) => ToolResult::error(format!("Failed to write file: {}", e)),
         }

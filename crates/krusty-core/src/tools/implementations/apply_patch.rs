@@ -84,7 +84,8 @@ impl Tool for ApplyPatchTool {
         let ops = parse_patch(&params.patch);
 
         if ops.is_empty() {
-            return ToolResult::error(
+            return ToolResult::error_with_code(
+                "invalid_patch",
                 "No operations found in patch. Ensure it uses '*** Begin Patch' / '*** End Patch' format."
                     .to_string(),
             );
@@ -113,7 +114,17 @@ impl Tool for ApplyPatchTool {
         }
 
         if !errors.is_empty() {
-            return ToolResult::error(format!("Patch partially failed:\n{}", errors.join("\n")));
+            return ToolResult::error_with_details(
+                "patch_partial_failure",
+                "Patch partially failed",
+                Some(json!({
+                    "files_modified": files_modified,
+                    "files_created": files_created,
+                    "files_deleted": files_deleted,
+                    "errors": errors,
+                })),
+                None,
+            );
         }
 
         let msg = format!(
@@ -123,15 +134,12 @@ impl Tool for ApplyPatchTool {
             files_deleted.len()
         );
 
-        ToolResult::success(
-            json!({
-                "message": msg,
-                "files_modified": files_modified,
-                "files_created": files_created,
-                "files_deleted": files_deleted,
-            })
-            .to_string(),
-        )
+        ToolResult::success_data(json!({
+            "message": msg,
+            "files_modified": files_modified,
+            "files_created": files_created,
+            "files_deleted": files_deleted,
+        }))
     }
 }
 
