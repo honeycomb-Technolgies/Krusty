@@ -86,19 +86,6 @@ fn first_text_block(content: &[Content]) -> Option<&str> {
     })
 }
 
-fn collect_system_message_text(messages: &[ModelMessage]) -> String {
-    let mut combined = String::new();
-    for message in messages.iter().filter(|m| m.role == Role::System) {
-        if let Some(text) = first_text_block(&message.content) {
-            if !combined.is_empty() {
-                combined.push_str("\n\n");
-            }
-            combined.push_str(text);
-        }
-    }
-    combined
-}
-
 /// Partition system messages into project-level (stable, cacheable) and
 /// session-level (dynamic, not cached) blocks.
 ///
@@ -198,15 +185,31 @@ fn build_codex_user_content(content: &[Content]) -> Vec<Value> {
     items
 }
 
+/// Build a combined system prompt for non-Anthropic providers (OpenAI, Google).
+///
+/// Orders content by stability for optimal automatic prefix caching:
+/// base prompt (static) → project context (stable) → session context (dynamic).
+/// OpenAI and Gemini 2.5+ use automatic prefix caching — putting stable content
+/// first maximizes the cacheable prefix without any explicit annotations.
 fn build_default_system_prompt(messages: &[ModelMessage], options: &CallOptions) -> String {
-    let system = collect_system_message_text(messages);
-    if !system.is_empty() {
-        format!("{}\n\n{}", KRUSTY_SYSTEM_PROMPT, system)
-    } else if let Some(custom) = &options.system_prompt {
+    let base = if let Some(custom) = &options.system_prompt {
         custom.clone()
     } else {
         KRUSTY_SYSTEM_PROMPT.to_string()
+    };
+
+    let (project_context, session_context) = partition_system_messages(messages);
+
+    let mut prompt = base;
+    if !project_context.is_empty() {
+        prompt.push_str("\n\n---\n\n");
+        prompt.push_str(&project_context);
     }
+    if !session_context.is_empty() {
+        prompt.push_str("\n\n---\n\n");
+        prompt.push_str(&session_context);
+    }
+    prompt
 }
 
 async fn ensure_success_stream_response(
@@ -629,9 +632,12 @@ impl AiClient {
             }
         }
 
-        // Add tools
+        // Add tools — sorted deterministically for stable prefix ordering.
+        // OpenAI uses automatic prefix caching; consistent tool order maximizes hits.
         if let Some(tools) = &options.tools {
-            let openai_tools = format_handler.convert_tools(tools);
+            let mut sorted: Vec<_> = tools.to_vec();
+            sorted.sort_by(|a, b| a.name.cmp(&b.name));
+            let openai_tools = format_handler.convert_tools(&sorted);
             if !openai_tools.is_empty() {
                 body["tools"] = serde_json::json!(openai_tools);
             }
@@ -879,8 +885,11 @@ impl AiClient {
             body["generationConfig"]["temperature"] = serde_json::json!(temp);
         }
 
+        // Sort tools deterministically — Gemini 2.5+ uses implicit prefix caching.
         if let Some(tools) = &options.tools {
-            let google_tools = format_handler.convert_tools(tools);
+            let mut sorted: Vec<_> = tools.to_vec();
+            sorted.sort_by(|a, b| a.name.cmp(&b.name));
+            let google_tools = format_handler.convert_tools(&sorted);
             if !google_tools.is_empty() {
                 body["tools"] = serde_json::json!([{
                     "functionDeclarations": google_tools

@@ -355,11 +355,13 @@ impl ProviderCapabilities {
     /// Get capabilities for a provider
     pub fn for_provider(provider: ProviderId) -> Self {
         match provider {
+            // OpenRouter passes through Anthropic's cache_control to Claude models.
+            // For non-Claude models, caching is automatic and the extra fields are ignored.
             ProviderId::OpenRouter => Self {
                 web_search: false, // Not via server tools
                 web_fetch: false,
                 context_management: false,
-                prompt_caching: false,
+                prompt_caching: true,
                 web_plugins: true,     // Uses plugins array
                 supports_vision: true, // Passes through to underlying model
             },
