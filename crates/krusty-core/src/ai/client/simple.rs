@@ -64,6 +64,9 @@ impl AiClient {
     }
 
     /// Simple non-streaming call using Anthropic format
+    ///
+    /// Uses cache_control on the system prompt so repeated calls with the same
+    /// system prompt (e.g., title generation, summarization) benefit from caching.
     async fn call_simple_anthropic(
         &self,
         model: &str,
@@ -78,7 +81,11 @@ impl AiClient {
                 "role": "user",
                 "content": user_message
             }],
-            "system": system_prompt
+            "system": [{
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": {"type": "ephemeral"}
+            }]
         });
 
         let request = self.build_request(&self.config().api_url());

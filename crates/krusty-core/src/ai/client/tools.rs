@@ -94,12 +94,43 @@ impl AiClient {
         max_tokens: usize,
         thinking_enabled: bool,
     ) -> Result<Value> {
+        // Sort tools deterministically to maintain stable cache prefix
+        let mut sorted_tools = tools;
+        sorted_tools.sort_by(|a, b| {
+            let name_a = a.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            let name_b = b.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            name_a.cmp(name_b)
+        });
+
+        // Add cache_control to system prompt and last tool for sub-agent caching.
+        // Sub-agents make multiple round-trips with the same system prompt and tools,
+        // so caching the prefix saves significant cost and latency.
+        let system_value = serde_json::json!([{
+            "type": "text",
+            "text": system_prompt,
+            "cache_control": {"type": "ephemeral"}
+        }]);
+
+        if let Some(last) = sorted_tools.last_mut() {
+            last["cache_control"] = serde_json::json!({"type": "ephemeral"});
+        }
+
+        // Add cache breakpoint to last conversation message
+        let mut cached_messages = messages;
+        if let Some(last_msg) = cached_messages.last_mut() {
+            if let Some(content_arr) = last_msg.get_mut("content").and_then(|c| c.as_array_mut()) {
+                if let Some(last_block) = content_arr.last_mut() {
+                    last_block["cache_control"] = serde_json::json!({"type": "ephemeral"});
+                }
+            }
+        }
+
         let mut body = serde_json::json!({
             "model": model,
             "max_tokens": max_tokens,
-            "messages": messages,
-            "system": system_prompt,
-            "tools": tools
+            "messages": cached_messages,
+            "system": system_value,
+            "tools": sorted_tools
         });
 
         // Add thinking configuration when enabled

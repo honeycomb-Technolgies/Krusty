@@ -99,6 +99,36 @@ fn collect_system_message_text(messages: &[ModelMessage]) -> String {
     combined
 }
 
+/// Partition system messages into project-level (stable, cacheable) and
+/// session-level (dynamic, not cached) blocks.
+///
+/// Project context (CLAUDE.md, KRAB.md, etc.) is identified by its
+/// `[PROJECT INSTRUCTIONS` prefix and rarely changes within a session.
+/// Everything else (plan state, skills list) changes frequently and should
+/// NOT be included in the cached prefix.
+fn partition_system_messages(messages: &[ModelMessage]) -> (String, String) {
+    let mut project_context = String::new();
+    let mut session_context = String::new();
+
+    for message in messages.iter().filter(|m| m.role == Role::System) {
+        if let Some(text) = first_text_block(&message.content) {
+            if text.starts_with("[PROJECT INSTRUCTIONS") {
+                if !project_context.is_empty() {
+                    project_context.push_str("\n\n");
+                }
+                project_context.push_str(text);
+            } else {
+                if !session_context.is_empty() {
+                    session_context.push_str("\n\n");
+                }
+                session_context.push_str(text);
+            }
+        }
+    }
+
+    (project_context, session_context)
+}
+
 fn collect_message_text(content: &[Content], separator: &str) -> String {
     let mut combined = String::new();
     for block in content {
@@ -317,25 +347,17 @@ impl AiClient {
         let anthropic_messages =
             format_handler.convert_messages(&messages, Some(self.provider_id()));
 
-        // Extract any system messages from conversation (e.g., pinch context)
-        let injected_context = collect_system_message_text(&messages);
+        // Partition system messages into stable (project) and dynamic (session) parts.
+        // Project context (CLAUDE.md) rarely changes and should be cached.
+        // Session context (plan state, skills) changes frequently and goes last.
+        let (project_context, session_context) = partition_system_messages(&messages);
 
-        // Build system prompt
-        let mut system = if let Some(custom) = &options.system_prompt {
+        // Build base system prompt
+        let base_system = if let Some(custom) = &options.system_prompt {
             custom.clone()
         } else {
             KRUSTY_SYSTEM_PROMPT.to_string()
         };
-
-        // Handle injected context
-        if !injected_context.is_empty() {
-            system.push_str("\n\n---\n\n");
-            system.push_str(&injected_context);
-            info!(
-                "Injected {} chars of context into system prompt",
-                injected_context.len()
-            );
-        }
 
         // Determine max_tokens based on reasoning format
         let fallback_tokens = options.max_tokens.unwrap_or(self.config().max_tokens) as u32;
@@ -354,36 +376,87 @@ impl AiClient {
             "stream": true,
         });
 
-        // Add system prompt with cache control
-        // For Anthropic OAuth, prepend CC identity prompt as first block
+        // Build system prompt blocks ordered by stability for optimal caching.
+        //
+        // Prompt caching is prefix-based: the API caches everything from the start
+        // up to each cache_control breakpoint. Static content MUST come first so
+        // that the maximum prefix is shared across requests.
+        //
+        // Order (most stable → least stable):
+        //   1. CC identity (Anthropic OAuth only) — globally stable, cached
+        //   2. Base system prompt (KRUSTY_SYSTEM_PROMPT) — globally stable, cached
+        //   3. Project context (CLAUDE.md / KRAB.md) — stable per project, cached
+        //   4. Session context (plan state, skills) — dynamic, NOT cached
+        //
+        // Dynamic session context is appended WITHOUT cache_control so it doesn't
+        // invalidate the cached prefix when plan state changes between turns.
         let is_anthropic_oauth = self.provider_id() == ProviderId::Anthropic
             && crate::auth::is_anthropic_oauth_token(self.api_key());
-        if !system.is_empty() {
-            if options.enable_caching {
-                if is_anthropic_oauth {
-                    // OAuth: CC identity prompt + Krusty system prompt as separate cached blocks
-                    body["system"] = serde_json::json!([
-                        {
-                            "type": "text",
-                            "text": "You are Claude Code, Anthropic's official CLI for Claude.",
-                            "cache_control": {"type": "ephemeral"}
-                        },
-                        {
-                            "type": "text",
-                            "text": system,
-                            "cache_control": {"type": "ephemeral"}
-                        }
-                    ]);
-                    debug!("CC identity + Krusty system prompt added for Anthropic OAuth");
-                } else {
-                    body["system"] = serde_json::json!([{
-                        "type": "text",
-                        "text": system,
-                        "cache_control": {"type": "ephemeral"}
-                    }]);
-                }
-                debug!("Cache breakpoint added to system prompt");
-            } else {
+
+        if options.enable_caching {
+            let mut system_blocks: Vec<Value> = Vec::new();
+
+            // Block 1 (optional): CC identity — globally cached across all sessions
+            if is_anthropic_oauth {
+                system_blocks.push(serde_json::json!({
+                    "type": "text",
+                    "text": "You are Claude Code, Anthropic's official CLI for Claude.",
+                    "cache_control": {"type": "ephemeral"}
+                }));
+            }
+
+            // Block 2: Base system prompt — globally cached, never changes
+            if !base_system.is_empty() {
+                system_blocks.push(serde_json::json!({
+                    "type": "text",
+                    "text": base_system,
+                    "cache_control": {"type": "ephemeral"}
+                }));
+            }
+
+            // Block 3 (optional): Project context — cached per project, stable within session
+            if !project_context.is_empty() {
+                system_blocks.push(serde_json::json!({
+                    "type": "text",
+                    "text": project_context,
+                    "cache_control": {"type": "ephemeral"}
+                }));
+                debug!(
+                    "Project context block added ({} chars, cached)",
+                    project_context.len()
+                );
+            }
+
+            // Block 4 (optional): Session context — dynamic, NO cache_control
+            // Plan state and skills change frequently. Placing them last without
+            // a cache breakpoint means they don't invalidate the static prefix.
+            if !session_context.is_empty() {
+                system_blocks.push(serde_json::json!({
+                    "type": "text",
+                    "text": session_context
+                }));
+                debug!(
+                    "Session context block added ({} chars, not cached)",
+                    session_context.len()
+                );
+            }
+
+            if !system_blocks.is_empty() {
+                body["system"] = Value::Array(system_blocks);
+            }
+            debug!("System prompt split into cache-optimized blocks");
+        } else {
+            // No caching: combine everything into a single string
+            let mut system = base_system;
+            if !project_context.is_empty() {
+                system.push_str("\n\n---\n\n");
+                system.push_str(&project_context);
+            }
+            if !session_context.is_empty() {
+                system.push_str("\n\n---\n\n");
+                system.push_str(&session_context);
+            }
+            if !system.is_empty() {
                 body["system"] = Value::String(system);
             }
         }
@@ -396,11 +469,15 @@ impl AiClient {
             }
         }
 
-        // Build tools array
+        // Build tools array — sorted deterministically by name.
+        // Tool ordering is part of the cached prefix. Non-deterministic ordering
+        // (e.g., from HashMap iteration) silently breaks the cache between turns.
         let mut all_tools: Vec<Value> = Vec::new();
 
         if let Some(tools) = &options.tools {
-            for tool in tools {
+            let mut sorted_tools: Vec<_> = tools.iter().collect();
+            sorted_tools.sort_by(|a, b| a.name.cmp(&b.name));
+            for tool in sorted_tools {
                 all_tools.push(serde_json::json!({
                     "name": tool.name,
                     "description": tool.description,
@@ -422,6 +499,24 @@ impl AiClient {
                 debug!("Cache breakpoint added to last tool");
             }
             body["tools"] = Value::Array(all_tools);
+        }
+
+        // Add cache breakpoint to the last conversation message.
+        // This ensures the conversation prefix from previous turns is cached,
+        // so each new turn only pays for the new messages appended at the end.
+        if options.enable_caching {
+            if let Some(messages_arr) = body.get_mut("messages").and_then(|m| m.as_array_mut()) {
+                if let Some(last_msg) = messages_arr.last_mut() {
+                    if let Some(content_arr) =
+                        last_msg.get_mut("content").and_then(|c| c.as_array_mut())
+                    {
+                        if let Some(last_block) = content_arr.last_mut() {
+                            last_block["cache_control"] = serde_json::json!({"type": "ephemeral"});
+                        }
+                    }
+                }
+                debug!("Cache breakpoint added to last conversation message");
+            }
         }
 
         // Add reasoning/thinking config

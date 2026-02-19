@@ -446,17 +446,23 @@ impl ToolRegistry {
         tools.get(name).cloned()
     }
 
-    /// Get all tools as AI tool definitions
+    /// Get all tools as AI tool definitions, sorted by name.
+    ///
+    /// Deterministic ordering is critical for prompt caching — tool definitions
+    /// are part of the cached prefix, and non-deterministic order (from HashMap
+    /// iteration) silently breaks the cache between API calls.
     pub async fn get_ai_tools(&self) -> Vec<AiTool> {
         let tools = self.tools.read().await;
-        tools
+        let mut ai_tools: Vec<AiTool> = tools
             .values()
             .map(|t| AiTool {
                 name: t.name().to_string(),
                 description: t.description().to_string(),
                 input_schema: t.parameters_schema(),
             })
-            .collect()
+            .collect();
+        ai_tools.sort_by(|a, b| a.name.cmp(&b.name));
+        ai_tools
     }
 
     /// Unregister all tools with names starting with the given prefix
