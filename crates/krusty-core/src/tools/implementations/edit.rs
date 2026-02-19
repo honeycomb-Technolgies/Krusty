@@ -100,19 +100,13 @@ impl Tool for EditTool {
 
             match fs::write(&path, &new_content).await {
                 Ok(_) => {
-                    let mut output = json!({
+                    let data = json!({
                         "message": format!("Replaced {} occurrence(s)", count),
                         "replacements": count,
                         "file_path": path.display().to_string()
-                    })
-                    .to_string();
+                    });
 
-                    if !diff.is_empty() {
-                        output.push_str("\n\n[DIFF]\n");
-                        output.push_str(&diff);
-                    }
-
-                    ToolResult::success(output)
+                    ToolResult::success_data_with(data, Vec::new(), Some(diff), None)
                 }
                 Err(e) => ToolResult::error(format!("Failed to write file: {}", e)),
             }
@@ -150,23 +144,20 @@ impl Tool for EditTool {
                     match fs::write(&path, &new_content).await {
                         Ok(_) => {
                             let mut msg = "Replaced 1 occurrence".to_string();
+                            let mut warnings = Vec::new();
                             if m.pass > 1 {
                                 msg.push_str(&format!(" (fuzzy match pass {})", m.pass));
+                                warnings.push(format!("Used fuzzy matching pass {}", m.pass));
                             }
 
-                            let mut output = json!({
+                            let data = json!({
                                 "message": msg,
                                 "replacements": 1,
-                                "file_path": path.display().to_string()
-                            })
-                            .to_string();
+                                "file_path": path.display().to_string(),
+                                "match_pass": m.pass
+                            });
 
-                            if !diff.is_empty() {
-                                output.push_str("\n\n[DIFF]\n");
-                                output.push_str(&diff);
-                            }
-
-                            ToolResult::success(output)
+                            ToolResult::success_data_with(data, warnings, Some(diff), None)
                         }
                         Err(e) => ToolResult::error(format!("Failed to write file: {}", e)),
                     }

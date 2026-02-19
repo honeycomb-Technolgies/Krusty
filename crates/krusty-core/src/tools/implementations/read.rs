@@ -115,14 +115,12 @@ impl Tool for ReadTool {
                 1024..1_048_576 => format!("{:.1} KB", size as f64 / 1024.0),
                 _ => format!("{:.1} MB", size as f64 / 1_048_576.0),
             };
-            return ToolResult::success(
-                json!({
-                    "content": format!("Binary file: {} ({})", path.display(), size_str),
-                    "total_lines": 0,
-                    "lines_returned": 0
-                })
-                .to_string(),
-            );
+            return ToolResult::success_data(json!({
+                "content": format!("Binary file: {} ({})", path.display(), size_str),
+                "total_lines": 0,
+                "lines_returned": 0,
+                "start_line": 1
+            }));
         }
 
         let content = match String::from_utf8(content) {
@@ -147,15 +145,12 @@ impl Tool for ReadTool {
 
         let content = lines[start..end].join("\n");
 
-        ToolResult::success(
-            json!({
-                "content": content,
-                "total_lines": total_lines,
-                "lines_returned": end - start,
-                "start_line": start + 1
-            })
-            .to_string(),
-        )
+        ToolResult::success_data(json!({
+            "content": content,
+            "total_lines": total_lines,
+            "lines_returned": end - start,
+            "start_line": start + 1
+        }))
     }
 }
 

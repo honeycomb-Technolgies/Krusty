@@ -169,11 +169,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 }
 
                 let send_result = if binary_output.load(Ordering::Relaxed) {
-                    ws_sink
-                        .lock()
-                        .await
-                        .send(Message::Binary(batch))
-                        .await
+                    ws_sink.lock().await.send(Message::Binary(batch)).await
                 } else {
                     let msg = serde_json::json!({
                         "type": "output",

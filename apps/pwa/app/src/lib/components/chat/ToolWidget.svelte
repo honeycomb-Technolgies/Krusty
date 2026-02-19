@@ -100,6 +100,55 @@
 		isBashTool ? String(toolCall.arguments?.command || '') : ''
 	);
 
+	function parseToolPayload(raw: string): Record<string, unknown> | null {
+		try {
+			const parsed = JSON.parse(raw);
+			if (parsed && typeof parsed === 'object') {
+				const payload = (parsed as { data?: unknown }).data;
+				if (payload && typeof payload === 'object') return payload as Record<string, unknown>;
+				return parsed as Record<string, unknown>;
+			}
+			return null;
+		} catch {
+			return null;
+		}
+	}
+
+	function parseToolErrorText(raw: string): string {
+		const payload = parseToolPayload(raw);
+		if (!payload) return raw;
+
+		const root = (() => {
+			try {
+				return JSON.parse(raw) as Record<string, unknown>;
+			} catch {
+				return null;
+			}
+		})();
+		const error = root && typeof root.error === 'object' ? root.error as Record<string, unknown> : null;
+		const errorMessage = error && typeof error.message === 'string' ? error.message : null;
+		if (errorMessage) return errorMessage;
+
+		const output = payload.output;
+		if (typeof output === 'string' && output.length > 0) return output;
+		return raw;
+	}
+
+	const bashOutput = $derived(() => {
+		if (!isBashTool || !toolCall.output) return '';
+		try {
+			const parsed = JSON.parse(toolCall.output);
+			return (
+				parsed?.data?.output ??
+				parsed?.output ??
+				parsed?.error?.message ??
+				toolCall.output
+			);
+		} catch {
+			return toolCall.output;
+		}
+	});
+
 	const toolFilePath = $derived(
 		String(toolCall.arguments?.file_path || 'file')
 	);
@@ -112,12 +161,50 @@
 	// Glob results: parse output as file list
 	const globResults = $derived(() => {
 		if (!isGlobTool || !toolCall.output) return [];
+		const payload = parseToolPayload(toolCall.output);
+		const matches = payload?.matches;
+		if (Array.isArray(matches)) {
+			return matches
+				.filter((v): v is string => typeof v === 'string')
+				.filter((l: string) => l.trim());
+		}
 		return toolCall.output.split('\n').filter((l: string) => l.trim());
 	});
 
 	// Grep results: parse output lines
 	const grepResults = $derived(() => {
 		if (!isGrepTool || !toolCall.output) return [];
+		const payload = parseToolPayload(toolCall.output);
+		const matches = payload?.matches;
+		if (Array.isArray(matches)) {
+			return matches
+				.map((m) => {
+					if (!m || typeof m !== 'object') return '';
+					const record = m as Record<string, unknown>;
+					const file = typeof record.file === 'string' ? record.file : '';
+					const line = typeof record.line === 'string' ? record.line : '';
+					const lineNumber = typeof record.line_number === 'number' ? record.line_number : null;
+					if (!file) return line;
+					return lineNumber != null ? `${file}:${lineNumber}: ${line}` : `${file}: ${line}`;
+				})
+				.filter((l: string) => l.trim());
+		}
+		const files = payload?.files;
+		if (Array.isArray(files)) {
+			return files.filter((v): v is string => typeof v === 'string');
+		}
+		const counts = payload?.counts;
+		if (Array.isArray(counts)) {
+			return counts
+				.map((c) => {
+					if (!c || typeof c !== 'object') return '';
+					const record = c as Record<string, unknown>;
+					const file = typeof record.file === 'string' ? record.file : '';
+					const count = typeof record.count === 'number' ? record.count : null;
+					return file && count != null ? `${file}: ${count}` : '';
+				})
+				.filter((l: string) => l.trim());
+		}
 		return toolCall.output.split('\n').filter((l: string) => l.trim());
 	});
 
@@ -182,24 +269,26 @@
 	// List results
 	const listResults = $derived(() => {
 		if (!isListTool || !toolCall.output) return [];
-		try {
-			const parsed = JSON.parse(toolCall.output);
-			return (parsed.output || '').split('\n').filter((l: string) => l.trim());
-		} catch {
-			return toolCall.output.split('\n').filter((l: string) => l.trim());
-		}
+		const payload = parseToolPayload(toolCall.output);
+		const output = typeof payload?.output === 'string' ? payload.output : toolCall.output;
+		return output.split('\n').filter((l: string) => l.trim());
 	});
+
+	const toolErrorText = $derived(
+		toolCall.output ? parseToolErrorText(toolCall.output) : ''
+	);
 
 	// Apply patch results
 	const patchResults = $derived(() => {
 		if (!isApplyPatchTool || !toolCall.output) return { modified: [], created: [], deleted: [], message: '' };
 		try {
 			const parsed = JSON.parse(toolCall.output);
+			const payload = parsed.data || parsed;
 			return {
-				modified: parsed.files_modified || [],
-				created: parsed.files_created || [],
-				deleted: parsed.files_deleted || [],
-				message: parsed.message || '',
+				modified: payload.files_modified || [],
+				created: payload.files_created || [],
+				deleted: payload.files_deleted || [],
+				message: payload.message || parsed?.error?.message || '',
 			};
 		} catch {
 			return { modified: [], created: [], deleted: [], message: toolCall.output };
@@ -373,7 +462,7 @@
 		<div bind:this={diffContainer} class="diff-wrapper {toolCall.status === 'running' ? 'diff-active' : ''}"></div>
 
 		{#if toolCall.status === 'error' && toolCall.output}
-			<pre class="mt-2 rounded-lg bg-red-500/10 border border-red-500/30 p-2.5 font-mono text-xs whitespace-pre-wrap text-red-300">{toolCall.output}</pre>
+			<pre class="mt-2 rounded-lg bg-red-500/10 border border-red-500/30 p-2.5 font-mono text-xs whitespace-pre-wrap text-red-300">{toolErrorText}</pre>
 		{/if}
 	</div>
 
@@ -400,8 +489,8 @@
 				</div>
 			</div>
 
-			<pre class="bash-body" bind:this={bashOutputEl}><span class="bash-prompt">$</span> <span class="bash-cmd">{bashCommand}</span>{#if toolCall.output}
-{toolCall.output}{/if}</pre>
+			<pre class="bash-body" bind:this={bashOutputEl}><span class="bash-prompt">$</span> <span class="bash-cmd">{bashCommand}</span>{#if bashOutput}
+{bashOutput}{/if}</pre>
 		</div>
 	</div>
 
@@ -441,7 +530,7 @@
 		<div bind:this={writeDiffContainer} class="diff-wrapper {toolCall.status === 'running' ? 'diff-active' : ''}"></div>
 
 		{#if toolCall.status === 'error' && toolCall.output}
-			<pre class="mt-2 rounded-lg bg-red-500/10 border border-red-500/30 p-2.5 font-mono text-xs whitespace-pre-wrap text-red-300">{toolCall.output}</pre>
+			<pre class="mt-2 rounded-lg bg-red-500/10 border border-red-500/30 p-2.5 font-mono text-xs whitespace-pre-wrap text-red-300">{toolErrorText}</pre>
 		{/if}
 	</div>
 
@@ -604,7 +693,7 @@
 		{/if}
 
 		{#if toolCall.status === 'error' && toolCall.output}
-			<pre class="mt-2 rounded-lg bg-red-500/10 border border-red-500/30 p-2.5 font-mono text-xs whitespace-pre-wrap text-red-300">{toolCall.output}</pre>
+			<pre class="mt-2 rounded-lg bg-red-500/10 border border-red-500/30 p-2.5 font-mono text-xs whitespace-pre-wrap text-red-300">{toolErrorText}</pre>
 		{/if}
 	</div>
 
@@ -633,7 +722,7 @@
 		<div bind:this={multiEditDiffContainer} class="diff-wrapper {toolCall.status === 'running' ? 'diff-active' : ''}"></div>
 
 		{#if toolCall.status === 'error' && toolCall.output}
-			<pre class="mt-2 rounded-lg bg-red-500/10 border border-red-500/30 p-2.5 font-mono text-xs whitespace-pre-wrap text-red-300">{toolCall.output}</pre>
+			<pre class="mt-2 rounded-lg bg-red-500/10 border border-red-500/30 p-2.5 font-mono text-xs whitespace-pre-wrap text-red-300">{toolErrorText}</pre>
 		{/if}
 	</div>
 
@@ -765,12 +854,6 @@
 {/if}
 
 <style>
-	/* === Shared === */
-	.tool-widget {
-		contain: layout style paint;
-		min-width: 0;
-	}
-
 	/* === Edit / Write tool === */
 	.edit-tool-widget {
 		min-width: 0;

@@ -2,6 +2,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { browser } from '$app/environment';
 	import { terminalStore, connectTerminal, disconnectTerminal, sendInput, sendResize } from '$stores/terminal';
+	import VirtualKeyboard from '$lib/components/keyboard/VirtualKeyboard.svelte';
 
 	interface Props {
 		tabId: string;
@@ -22,11 +23,17 @@
 	let lastRows = 0;
 	let initialized = false;
 
+	// Virtual keyboard state
+	let showKeyboard = $state(false);
+	let isMobile = false;
+	let keyboardHeight = $state(0);
+
 	// Get this tab's state
 	let tabState = $derived($terminalStore.tabs.find((t) => t.id === tabId));
 
 	onMount(() => {
 		if (!browser) return;
+		isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 		initTerminal();
 	});
 
@@ -125,6 +132,16 @@
 		}
 
 		terminal.open(terminalContainer);
+
+		// On mobile, suppress native keyboard from xterm's hidden textarea
+		if (isMobile) {
+			const xtermTextarea = terminalContainer.querySelector('textarea.xterm-helper-textarea');
+			if (xtermTextarea) {
+				xtermTextarea.setAttribute('inputmode', 'none');
+				xtermTextarea.setAttribute('readonly', 'true');
+			}
+		}
+
 		requestAnimationFrame(() => fitAndResize(true));
 
 		terminal.onData((data: string) => {
@@ -184,14 +201,43 @@
 		terminal?.focus();
 	}
 
-	export function handleInput(data: string) {
-		sendInput(tabId, data);
+	// Handle tap on terminal to show keyboard (prevent native keyboard)
+	function handleTerminalTap(e: Event) {
+		if (isMobile) {
+			e.preventDefault();
+			// Blur xterm's hidden textarea to prevent native keyboard
+			const xtermTextarea = terminalContainer?.querySelector('textarea.xterm-helper-textarea') as HTMLElement;
+			xtermTextarea?.blur();
+		}
+		showKeyboard = true;
+	}
+
+	// Handle key press from virtual keyboard
+	function handleKeyPress(key: string, _isEnter: boolean) {
+		sendInput(tabId, key);
+	}
+
+	function handleKeyboardClose() {
+		showKeyboard = false;
+		keyboardHeight = 0;
+	}
+
+	function handleKeyboardHeightChange(height: number) {
+		keyboardHeight = height;
+		// Re-fit xterm after keyboard height changes
+		requestAnimationFrame(() => fitAndResize(true));
 	}
 </script>
 
 <div
 	class="terminal-instance"
 	class:hidden={!isActive}
+	style:padding-bottom="{keyboardHeight}px"
+	role="button"
+	tabindex="0"
+	onclick={handleTerminalTap}
+	ontouchstart={(e) => { if (isMobile) { e.preventDefault(); handleTerminalTap(e); } }}
+	onkeydown={(e) => e.key === 'Enter' && handleTerminalTap(e)}
 >
 	<div bind:this={terminalContainer} class="terminal-container"></div>
 
@@ -214,6 +260,17 @@
 			</div>
 		</div>
 	{/if}
+
+	<!-- Virtual Keyboard -->
+	{#if showKeyboard}
+		<VirtualKeyboard
+			mode="terminal"
+			visible={showKeyboard}
+			onKeyPress={handleKeyPress}
+			onClose={handleKeyboardClose}
+			onHeightChange={handleKeyboardHeightChange}
+		/>
+	{/if}
 </div>
 
 <style>
@@ -221,6 +278,15 @@
 		position: relative;
 		height: 100%;
 		background: #0a0a0a;
+	}
+
+	.terminal-instance:focus {
+		outline: none;
+	}
+
+	.terminal-instance:focus-visible {
+		outline: 2px solid rgba(255, 107, 53, 0.5);
+		outline-offset: -2px;
 	}
 
 	.terminal-instance.hidden {

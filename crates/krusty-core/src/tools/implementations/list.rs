@@ -161,15 +161,12 @@ impl Tool for ListTool {
         let listing: Vec<String> = entries.iter().map(|e| e.display_path.clone()).collect();
         let output_text = listing.join("\n");
 
-        ToolResult::success(
-            json!({
-                "output": output_text,
-                "total_entries": total,
-                "directories": dir_count,
-                "files": file_count,
-                "truncated": total >= limit
-            })
-            .to_string(),
-        )
+        ToolResult::success_data(json!({
+            "output": output_text,
+            "total_entries": total,
+            "directories": dir_count,
+            "files": file_count,
+            "truncated": total >= limit
+        }))
     }
 }

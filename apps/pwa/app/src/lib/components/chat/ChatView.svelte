@@ -16,6 +16,7 @@
 	import Check from 'lucide-svelte/icons/check';
 	import Message from './Message.svelte';
 	import AsciiTitle from './AsciiTitle.svelte';
+	import VirtualKeyboard from '$lib/components/keyboard/VirtualKeyboard.svelte';
 	import { sessionStore, sendMessage, stopGeneration, togglePermissionMode, toggleThinking, setMode, thinkingLevelLabel, type Attachment, type SessionMode } from '$stores/session';
 
 	// Web Speech API type declarations (for browsers that support it)
@@ -40,6 +41,11 @@
 	// Voice transcription state
 	let isTranscribing = $state(false);
 	let transcribedText = $state('');
+
+	// Virtual keyboard state
+	let showKeyboard = $state(false);
+	let isMobile = $state(false);
+	let keyboardHeight = $state(0);
 
 	// Check for Web Speech API support (with type assertion)
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -244,6 +250,50 @@
 		}
 	}
 
+	// Virtual keyboard handlers — intercept touch to prevent native keyboard
+	function handleInputTouch(e: TouchEvent) {
+		if (!isMobile) return;
+		e.preventDefault();
+		showKeyboard = true;
+	}
+
+	function handleFocus(e: FocusEvent) {
+		if (isMobile) {
+			// Immediately blur to prevent native keyboard from appearing
+			(e.target as HTMLElement)?.blur();
+			showKeyboard = true;
+			return;
+		}
+	}
+
+	function handleKeyboardKeyPress(key: string, isEnter: boolean) {
+		if (isEnter) {
+			handleSubmit();
+			return;
+		} else if (key === '\x7f') {
+			// Backspace
+			inputValue = inputValue.slice(0, -1);
+		} else {
+			inputValue += key;
+		}
+		// Trigger auto resize after DOM updates
+		setTimeout(() => autoResize(), 0);
+	}
+
+	function handleKeyboardClose() {
+		showKeyboard = false;
+		keyboardHeight = 0;
+	}
+
+	function handleKeyboardHeightChange(height: number) {
+		keyboardHeight = height;
+		if (height > 0 && messagesContainer) {
+			requestAnimationFrame(() => {
+				messagesContainer.scrollTop = messagesContainer.scrollHeight;
+			});
+		}
+	}
+
 	$effect(() => {
 		// Auto-scroll on new messages
 		if ($sessionStore.messages.length && messagesContainer) {
@@ -252,7 +302,10 @@
 	});
 
 	onMount(() => {
-		inputElement?.focus();
+		isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+		if (!isMobile) {
+			inputElement?.focus();
+		}
 	});
 
 	onDestroy(() => {
@@ -260,7 +313,7 @@
 	});
 </script>
 
-<div class="flex h-full min-h-0 flex-col">
+<div class="flex h-full min-h-0 flex-col" style:padding-bottom="{keyboardHeight}px">
 	<!-- Error display -->
 	{#if $sessionStore.error}
 		<div class="mx-4 mt-2 rounded-lg bg-destructive/20 px-4 py-2 text-sm text-destructive">
@@ -419,9 +472,11 @@
 						bind:value={inputValue}
 						onkeydown={handleKeyDown}
 						oninput={autoResize}
+						onfocus={handleFocus}
+						ontouchstart={handleInputTouch}
 						placeholder={isTranscribing ? 'Listening...' : ($sessionStore.isStreaming ? 'Queue a message...' : 'Message Krusty...')}
 						rows={1}
-						inputmode="text"
+						inputmode={isMobile ? 'none' : 'text'}
 						enterkeyhint="send"
 						class="max-h-[200px] min-h-[36px] flex-1 resize-none bg-transparent py-2 text-sm
 							placeholder:text-muted-foreground focus:outline-none"
@@ -448,21 +503,21 @@
 							disabled={!$sessionStore.isStreaming && !hasDraftContent && !isSpeechSupported}
 							class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors
 								{isQueueing
-									? 'bg-amber-500 text-white hover:bg-amber-600'
-									: isStopping
-										? 'bg-destructive text-white hover:bg-destructive/90'
-										: canStartVoice
-											? 'bg-blue-500 text-white hover:bg-blue-600'
-											: 'bg-primary text-primary-foreground hover:bg-primary/90'
+										? 'bg-amber-500 text-white hover:bg-amber-600'
+										: isStopping
+												? 'bg-destructive text-white hover:bg-destructive/90'
+												: canStartVoice
+														? 'bg-blue-500 text-white hover:bg-blue-600'
+														: 'bg-primary text-primary-foreground hover:bg-primary/90'
 								}
-									{!$sessionStore.isStreaming && !hasDraftContent && !isSpeechSupported ? 'disabled:cursor-not-allowed disabled:opacity-50' : ''}"
+								{!$sessionStore.isStreaming && !hasDraftContent && !isSpeechSupported ? 'disabled:cursor-not-allowed disabled:opacity-50' : ''}"
 							title={isQueueing
 								? 'Queue message'
 								: isStopping
-									? 'Stop generation'
-									: canStartVoice
-										? 'Start voice transcription'
-										: 'Send message'
+										? 'Stop generation'
+										: canStartVoice
+												? 'Start voice transcription'
+												: 'Send message'
 							}
 						>
 							{#if isQueueing}
@@ -479,6 +534,17 @@
 				</div>
 			</div>
 		</div>
+	{/if}
+
+	<!-- Virtual Keyboard -->
+	{#if showKeyboard}
+		<VirtualKeyboard
+			mode="chat"
+			visible={showKeyboard}
+			onKeyPress={handleKeyboardKeyPress}
+			onClose={handleKeyboardClose}
+			onHeightChange={handleKeyboardHeightChange}
+		/>
 	{/if}
 </div>
 
