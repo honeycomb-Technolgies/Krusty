@@ -13,7 +13,13 @@
 	let terminalContainer: HTMLDivElement;
 	let terminal: any;
 	let fitAddon: any;
+	let webglAddon: any;
 	let resizeObserver: ResizeObserver | null = null;
+	let resizeTimeout: ReturnType<typeof setTimeout> | null = null;
+	let flushFrame: number | null = null;
+	let pendingOutput = '';
+	let lastCols = 0;
+	let lastRows = 0;
 	let initialized = false;
 
 	// Get this tab's state
@@ -24,10 +30,47 @@
 		initTerminal();
 	});
 
+	function flushOutputQueue() {
+		if (!terminal || pendingOutput.length === 0) return;
+		terminal.write(pendingOutput);
+		pendingOutput = '';
+	}
+
+	function scheduleOutputFlush() {
+		if (flushFrame !== null) return;
+		flushFrame = requestAnimationFrame(() => {
+			flushFrame = null;
+			flushOutputQueue();
+		});
+	}
+
+	function queueOutput(data: string) {
+		pendingOutput += data;
+		scheduleOutputFlush();
+	}
+
+	function fitAndResize(force = false) {
+		if (!terminal || !fitAddon) return;
+		fitAddon.fit();
+		const cols = terminal.cols;
+		const rows = terminal.rows;
+		if (!force && cols === lastCols && rows === lastRows) return;
+		lastCols = cols;
+		lastRows = rows;
+		sendResize(tabId, cols, rows);
+	}
+
 	async function initTerminal() {
 		const { Terminal } = await import('@xterm/xterm');
 		const { FitAddon } = await import('@xterm/addon-fit');
 		const { WebLinksAddon } = await import('@xterm/addon-web-links');
+		let WebglAddonCtor: any = null;
+		try {
+			const { WebglAddon } = await import('@xterm/addon-webgl');
+			WebglAddonCtor = WebglAddon;
+		} catch {
+			WebglAddonCtor = null;
+		}
 
 		await import('@xterm/xterm/css/xterm.css');
 
@@ -64,37 +107,48 @@
 		fitAddon = new FitAddon();
 		terminal.loadAddon(fitAddon);
 		terminal.loadAddon(new WebLinksAddon());
-
-		terminal.open(terminalContainer);
-
-		function fitAndResize() {
-			if (!terminal || !fitAddon) return;
-			fitAddon.fit();
-			sendResize(tabId, terminal.cols, terminal.rows);
+		if (WebglAddonCtor) {
+			try {
+				webglAddon = new WebglAddonCtor();
+				webglAddon.onContextLoss?.(() => {
+					try {
+						webglAddon?.dispose();
+					} catch {
+						// Ignore context-loss disposal failures and stay on non-WebGL rendering.
+					}
+					webglAddon = null;
+				});
+				terminal.loadAddon(webglAddon);
+			} catch {
+				webglAddon = null;
+			}
 		}
 
-		requestAnimationFrame(() => fitAndResize());
+		terminal.open(terminalContainer);
+		requestAnimationFrame(() => fitAndResize(true));
 
 		terminal.onData((data: string) => {
 			sendInput(tabId, data);
 		});
 
-		let resizeTimeout: ReturnType<typeof setTimeout>;
 		resizeObserver = new ResizeObserver(() => {
-			clearTimeout(resizeTimeout);
-			resizeTimeout = setTimeout(() => fitAndResize(), 50);
+			if (!isActive) return;
+			if (resizeTimeout) {
+				clearTimeout(resizeTimeout);
+			}
+			resizeTimeout = setTimeout(() => fitAndResize(), 75);
 		});
 		resizeObserver.observe(terminalContainer);
 
 		connectTerminal(tabId, (data: string) => {
-			terminal.write(data);
+			queueOutput(data);
 		});
 
 		const unsubscribe = terminalStore.subscribe((state) => {
 			const tab = state.tabs.find((t) => t.id === tabId);
 			if (tab?.connected && terminal && !initialized) {
 				initialized = true;
-				setTimeout(() => fitAndResize(), 100);
+				setTimeout(() => fitAndResize(true), 100);
 				unsubscribe();
 			}
 		});
@@ -104,16 +158,26 @@
 	$effect(() => {
 		if (isActive && terminal && fitAddon) {
 			requestAnimationFrame(() => {
-				fitAddon.fit();
-				sendResize(tabId, terminal.cols, terminal.rows);
+				flushOutputQueue();
+				fitAndResize(true);
 			});
 		}
 	});
 
 	onDestroy(() => {
+		if (resizeTimeout) {
+			clearTimeout(resizeTimeout);
+			resizeTimeout = null;
+		}
+		if (flushFrame !== null) {
+			cancelAnimationFrame(flushFrame);
+			flushFrame = null;
+		}
 		resizeObserver?.disconnect();
+		pendingOutput = '';
 		disconnectTerminal(tabId);
 		terminal?.dispose();
+		webglAddon = null;
 	});
 
 	export function focus() {
@@ -137,10 +201,10 @@
 				{#if tabState.error}
 					<div class="error-icon">!</div>
 					<p class="error-text">{tabState.error}</p>
-					<button
-						onclick={() => connectTerminal(tabId, (data) => terminal?.write(data))}
-						class="reconnect-btn"
-					>
+						<button
+							onclick={() => connectTerminal(tabId, (data) => queueOutput(data))}
+							class="reconnect-btn"
+						>
 						Reconnect
 					</button>
 				{:else}

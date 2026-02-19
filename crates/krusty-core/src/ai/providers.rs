@@ -347,6 +347,8 @@ pub struct ProviderCapabilities {
     pub prompt_caching: bool,
     /// Web search via plugins array (OpenRouter style)
     pub web_plugins: bool,
+    /// Native image/document content block support
+    pub supports_vision: bool,
 }
 
 impl ProviderCapabilities {
@@ -358,7 +360,8 @@ impl ProviderCapabilities {
                 web_fetch: false,
                 context_management: false,
                 prompt_caching: false,
-                web_plugins: true, // Uses plugins array
+                web_plugins: true,     // Uses plugins array
+                supports_vision: true, // Passes through to underlying model
             },
             // Anthropic: native prompt caching
             ProviderId::Anthropic => Self {
@@ -367,6 +370,7 @@ impl ProviderCapabilities {
                 context_management: false,
                 prompt_caching: true,
                 web_plugins: false,
+                supports_vision: true,
             },
             // OpenAI: supports tools but not server-executed web search
             ProviderId::OpenAI => Self {
@@ -375,8 +379,9 @@ impl ProviderCapabilities {
                 context_management: false,
                 prompt_caching: false,
                 web_plugins: false,
+                supports_vision: true,
             },
-            // Other providers: minimal capabilities
+            // Other providers: minimal capabilities (no vision)
             ProviderId::ZAi | ProviderId::MiniMax => Self::default(),
         }
     }
@@ -674,23 +679,28 @@ mod tests {
         assert!(!openrouter.web_search);
         assert!(!openrouter.web_fetch);
         assert!(openrouter.web_plugins);
+        assert!(openrouter.supports_vision);
 
         let zai = ProviderCapabilities::for_provider(ProviderId::ZAi);
         assert!(!zai.web_search);
         assert!(!zai.web_plugins);
+        assert!(!zai.supports_vision);
 
         let anthropic = ProviderCapabilities::for_provider(ProviderId::Anthropic);
         assert!(!anthropic.web_search);
         assert!(anthropic.prompt_caching);
         assert!(!anthropic.web_plugins);
+        assert!(anthropic.supports_vision);
 
         let openai = ProviderCapabilities::for_provider(ProviderId::OpenAI);
         assert!(!openai.web_search);
         assert!(!openai.web_plugins);
+        assert!(openai.supports_vision);
 
         let minimax = ProviderCapabilities::for_provider(ProviderId::MiniMax);
         assert!(!minimax.web_search);
         assert!(!minimax.web_plugins);
+        assert!(!minimax.supports_vision);
     }
 
     #[test]

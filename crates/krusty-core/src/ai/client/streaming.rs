@@ -25,7 +25,7 @@ use crate::ai::sse::{
 };
 use crate::ai::streaming::StreamPart;
 use crate::ai::transform::build_provider_params;
-use crate::ai::types::{Content, ModelMessage, Role};
+use crate::ai::types::{Content, ImageContent, ModelMessage, Role};
 
 /// Spawn a stream processing task for an HTTP SSE response.
 ///
@@ -110,6 +110,62 @@ fn collect_message_text(content: &[Content], separator: &str) -> String {
         }
     }
     combined
+}
+
+/// Convert image content to a URL accepted by Codex input_image:
+/// - pass-through remote URL
+/// - data URL for base64 payloads
+fn codex_image_url(image: &ImageContent) -> Option<String> {
+    if let Some(url) = &image.url {
+        return Some(url.clone());
+    }
+
+    image.base64.as_ref().map(|base64| {
+        let media_type = image.media_type.as_deref().unwrap_or("image/png");
+        format!("data:{};base64,{}", media_type, base64)
+    })
+}
+
+/// Build user content items for ChatGPT Codex input message format.
+/// Preserves block order (text/images) from the original conversation.
+fn build_codex_user_content(content: &[Content]) -> Vec<Value> {
+    let mut items: Vec<Value> = Vec::new();
+
+    for block in content {
+        match block {
+            Content::Text { text } => {
+                if !text.is_empty() {
+                    items.push(serde_json::json!({
+                        "type": "input_text",
+                        "text": text
+                    }));
+                }
+            }
+            Content::Image { image, detail } => {
+                if let Some(image_url) = codex_image_url(image) {
+                    let mut item = serde_json::json!({
+                        "type": "input_image",
+                        "image_url": image_url
+                    });
+                    if let Some(detail) = detail.as_deref().filter(|d| !d.is_empty()) {
+                        item["detail"] = serde_json::json!(detail);
+                    }
+                    items.push(item);
+                }
+            }
+            Content::Thinking { thinking, .. } => {
+                if !thinking.is_empty() {
+                    items.push(serde_json::json!({
+                        "type": "input_text",
+                        "text": format!("[Thinking]\n{}\n[/Thinking]", thinking)
+                    }));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    items
 }
 
 fn build_default_system_prompt(messages: &[ModelMessage], options: &CallOptions) -> String {
@@ -1183,11 +1239,22 @@ impl AiClient {
                 continue;
             }
 
-            // Regular message - extract text
-            let text = collect_message_text(&msg.content, "\n");
+            // Regular user messages preserve multimodal input blocks (text + images)
+            if role == "user" {
+                let user_content = build_codex_user_content(&msg.content);
+                if !user_content.is_empty() {
+                    input_messages.push(serde_json::json!({
+                        "type": "message",
+                        "role": "user",
+                        "content": user_content
+                    }));
+                }
+                continue;
+            }
 
+            // Non-user regular messages (assistant/tool): text-only fallback
+            let text = collect_message_text(&msg.content, "\n");
             if !text.is_empty() {
-                // Codex format: wrapped message with typed content
                 let content_type = if role == "assistant" {
                     "output_text"
                 } else {

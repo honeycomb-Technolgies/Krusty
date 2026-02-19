@@ -10,7 +10,7 @@
 	import Brain from 'lucide-svelte/icons/brain';
 	import Hammer from 'lucide-svelte/icons/hammer';
 	import FileText from 'lucide-svelte/icons/file-text';
-	import Bot from 'lucide-svelte/icons/bot';
+
 	import Mic from 'lucide-svelte/icons/mic';
 	import X from 'lucide-svelte/icons/x';
 	import Check from 'lucide-svelte/icons/check';
@@ -155,6 +155,11 @@
 	}
 
 	function stopTranscription() {
+		if (typeof window === 'undefined') {
+			isTranscribing = false;
+			return;
+		}
+
 		const recognition = (window as unknown as { _speechRecognition?: SpeechRecognitionType })._speechRecognition;
 		if (recognition) {
 			try {
@@ -201,8 +206,10 @@
 		sendMessage(inputValue.trim(), attachments);
 		inputValue = '';
 		attachedFiles = [];
-		// Reset input height after clearing
-		autoResize();
+		if (inputElement) {
+			inputElement.value = '';
+			inputElement.style.height = '';
+		}
 	}
 
 	function handleFileSelect(e: Event) {
@@ -264,7 +271,7 @@
 	<!-- Messages area -->
 	<div
 		bind:this={messagesContainer}
-		class="messages-scroll min-h-0 flex-1 overflow-y-auto px-4 py-4"
+		class="messages-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-4"
 	>
 		{#if !$sessionStore.sessionId && $sessionStore.messages.length === 0}
 			<!-- Welcome state - animated ASCII title -->
@@ -312,17 +319,7 @@
 
 			<div class="mx-auto max-w-3xl">
 				<div class="flex items-end gap-2 rounded-xl border border-border/50 bg-card/60 backdrop-blur-sm p-2">
-					<!-- Attachment button -->
-					<button
-						onclick={() => fileInput.click()}
-						class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground
-							transition-colors hover:bg-muted hover:text-foreground"
-						title="Attach file or image"
-					>
-						<Paperclip class="h-4 w-4" />
-					</button>
-
-					<!-- AI Controls: Robot button - shows Bot when closed, X when open -->
+					<!-- AI Controls -->
 					<div class="relative">
 						<button
 							onclick={showAiControls ? closeAiControls : toggleAiControls}
@@ -335,7 +332,7 @@
 							{#if showAiControls}
 								<X class="h-4 w-4" />
 							{:else}
-								<Bot class="h-4 w-4" />
+								<img src="/icon.svg" alt="AI Controls" class="h-8 w-8 rounded" />
 							{/if}
 						</button>
 
@@ -405,6 +402,16 @@
 							</div>
 						{/if}
 					</div>
+
+					<!-- Attachment button -->
+					<button
+						onclick={() => fileInput.click()}
+						class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground
+							transition-colors hover:bg-muted hover:text-foreground"
+						title="Attach file or image"
+					>
+						<Paperclip class="h-4 w-4" />
+					</button>
 
 					<!-- Text input -->
 					<textarea

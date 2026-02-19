@@ -11,6 +11,7 @@ use std::time::Instant;
 
 use axum::{
     body::Body,
+    extract::DefaultBodyLimit,
     http::{header, Method, Response, StatusCode, Uri},
     middleware,
     response::IntoResponse,
@@ -25,7 +26,10 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-use krusty_core::agent::{LoggingHook, PlanModeHook, SafetyHook, UserHookManager};
+use krusty_core::agent::{
+    AgentCancellation, LoggingHook, PlanModeHook, SafetyHook, UserHookManager, UserPostToolHook,
+    UserPreToolHook,
+};
 use krusty_core::ai::client::{AiClient, AiClientConfig};
 use krusty_core::ai::models::{create_model_registry, ModelMetadata, SharedModelRegistry};
 use krusty_core::ai::providers::{builtin_providers, get_provider, ProviderId};
@@ -36,13 +40,15 @@ use krusty_core::process::ProcessRegistry;
 use krusty_core::skills::SkillsManager;
 use krusty_core::storage::credentials::CredentialStore;
 use krusty_core::storage::Database;
-use krusty_core::tools::implementations::register_all_tools;
+use krusty_core::tools::implementations::{
+    register_all_tools, register_build_tool, register_explore_tool,
+};
 use krusty_core::tools::registry::ToolRegistry;
 
 type SessionGuard = Arc<Mutex<()>>;
 type SessionLockMap = HashMap<String, (SessionGuard, Instant)>;
-type PendingApprovalMap = HashMap<String, tokio::sync::oneshot::Sender<bool>>;
-
+type SessionInputMap =
+    HashMap<String, tokio::sync::mpsc::UnboundedSender<krusty_core::agent::LoopInput>>;
 pub mod auth;
 pub mod error;
 pub mod push;
@@ -93,12 +99,15 @@ pub struct AppState {
     pub mcp_manager: Arc<McpManager>,
     pub hook_manager: Arc<RwLock<UserHookManager>>,
     pub skills_manager: Arc<RwLock<SkillsManager>>,
+    pub cancellation: AgentCancellation,
     /// Per-session locks to prevent concurrent agentic loops on the same session.
     pub session_locks: Arc<RwLock<SessionLockMap>>,
-    /// Pending tool approval channels for supervised permission mode.
-    pub pending_approvals: Arc<RwLock<PendingApprovalMap>>,
+    /// Active orchestrator input channels for tool approvals / cancellation.
+    pub session_inputs: Arc<RwLock<SessionInputMap>>,
     /// Web Push notification service (None if VAPID init failed).
     pub push_service: Option<Arc<push::PushService>>,
+    /// Active OAuth flows keyed by provider storage key.
+    pub oauth_flows: Arc<Mutex<HashMap<String, routes::oauth::OAuthFlowState>>>,
 }
 
 /// Build an AI client from configured credentials and env overrides.
@@ -213,22 +222,48 @@ pub async fn build_router(config: &ServerConfig) -> anyhow::Result<(Router, AppS
     let ai_client = create_ai_client(&credential_store_inner).map(Arc::new);
 
     let process_registry = Arc::new(ProcessRegistry::new());
+    let cancellation = AgentCancellation::new();
+
+    // Load user hooks from database
+    let mut hook_manager_inner = UserHookManager::new();
+    if let Ok(db) = Database::new(&db_path) {
+        if let Err(e) = hook_manager_inner.load(&db) {
+            tracing::warn!("Failed to load hooks: {}", e);
+        }
+    }
+    let hook_manager = Arc::new(RwLock::new(hook_manager_inner));
+
+    // Build tool registry with full hook chain (matches TUI's init_tool_registry)
     let mut tool_registry_inner = ToolRegistry::new();
     tool_registry_inner.add_pre_hook(Arc::new(SafetyHook::new()));
     tool_registry_inner.add_pre_hook(Arc::new(PlanModeHook::new()));
     tool_registry_inner.add_post_hook(Arc::new(LoggingHook::new()));
+    tool_registry_inner.add_pre_hook(Arc::new(UserPreToolHook::new(hook_manager.clone())));
+    tool_registry_inner.add_post_hook(Arc::new(UserPostToolHook::new(hook_manager.clone())));
     let tool_registry = Arc::new(tool_registry_inner);
     register_all_tools(&tool_registry).await;
+
+    // Register sub-agent tools (explore + build) if AI client is available
+    if let Some(ref client) = ai_client {
+        register_explore_tool(&tool_registry, client.clone(), cancellation.clone()).await;
+        register_build_tool(&tool_registry, client.clone(), cancellation.clone()).await;
+        tracing::info!("Registered explore and build sub-agent tools");
+    }
 
     let model_registry = create_model_registry();
     initialize_models(&model_registry, &credential_store_inner).await;
 
+    // MCP server connections + tool registration
     let mcp_manager = Arc::new(McpManager::new(config.working_dir.clone()));
     if let Err(e) = mcp_manager.load_config().await {
         tracing::warn!("Failed to load MCP config: {}", e);
     } else if let Err(e) = mcp_manager.connect_all().await {
         tracing::warn!("Failed to connect MCP servers: {}", e);
     }
+    // Register MCP tools so they're visible to the AI
+    krusty_core::mcp::tool::register_mcp_tools(mcp_manager.clone(), &tool_registry).await;
+    let mcp_tool_count = tool_registry.get_ai_tools().await.len();
+    tracing::info!("Tool registry initialized with {} tools", mcp_tool_count);
 
     let push_service =
         match push::PushService::init(&paths::vapid_key_path(), Arc::new(db_path.clone())) {
@@ -242,13 +277,6 @@ pub async fn build_router(config: &ServerConfig) -> anyhow::Result<(Router, AppS
             }
         };
 
-    let mut hook_manager_inner = UserHookManager::new();
-    if let Ok(db) = Database::new(&db_path) {
-        if let Err(e) = hook_manager_inner.load(&db) {
-            tracing::warn!("Failed to load hooks: {}", e);
-        }
-    }
-
     let state = AppState {
         server_port: config.port,
         db_path: Arc::new(db_path),
@@ -259,13 +287,15 @@ pub async fn build_router(config: &ServerConfig) -> anyhow::Result<(Router, AppS
         model_registry,
         credential_store,
         mcp_manager,
-        hook_manager: Arc::new(RwLock::new(hook_manager_inner)),
+        hook_manager,
         skills_manager: Arc::new(RwLock::new(SkillsManager::with_defaults(
             &config.working_dir,
         ))),
+        cancellation,
         session_locks: Arc::new(RwLock::new(HashMap::new())),
-        pending_approvals: Arc::new(RwLock::new(HashMap::new())),
+        session_inputs: Arc::new(RwLock::new(HashMap::new())),
         push_service,
+        oauth_flows: Arc::new(Mutex::new(HashMap::new())),
     };
 
     let cors = CorsLayer::new()
@@ -292,6 +322,8 @@ pub async fn build_router(config: &ServerConfig) -> anyhow::Result<(Router, AppS
         .fallback(serve_pwa)
         .layer(cors)
         .layer(TraceLayer::new_for_http())
+        // Allow large request bodies for image uploads (up to 100MB)
+        .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
         .with_state(state.clone());
 
     Ok((app, state))

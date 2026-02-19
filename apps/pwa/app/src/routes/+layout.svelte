@@ -25,10 +25,27 @@
 	];
 
 	// iOS PWA viewport fix: set --vh variable to actual viewport height
+	// Only update when no input is focused (keyboard closed) to prevent layout thrashing
+	let keyboardOpen = false;
+
 	function setViewportHeight() {
+		if (keyboardOpen) return;
 		const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
 		const vh = viewportHeight * 0.01;
 		document.documentElement.style.setProperty('--vh', `${vh}px`);
+	}
+
+	function handleFocusIn(e: FocusEvent) {
+		const target = e.target as HTMLElement;
+		if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+			keyboardOpen = true;
+		}
+	}
+
+	function handleFocusOut() {
+		keyboardOpen = false;
+		// Recalculate after keyboard closes and animation settles
+		setTimeout(setViewportHeight, 300);
 	}
 
 	onMount(() => {
@@ -39,8 +56,9 @@
 		setViewportHeight();
 		window.addEventListener('resize', setViewportHeight);
 		window.visualViewport?.addEventListener('resize', setViewportHeight);
-		// Also handle orientation change on iOS
 		window.addEventListener('orientationchange', handleOrientationChange);
+		document.addEventListener('focusin', handleFocusIn);
+		document.addEventListener('focusout', handleFocusOut);
 
 		void validateWorkspace(apiClient);
 		if ('serviceWorker' in navigator) {
@@ -62,6 +80,8 @@
 			window.removeEventListener('resize', setViewportHeight);
 			window.visualViewport?.removeEventListener('resize', setViewportHeight);
 			window.removeEventListener('orientationchange', handleOrientationChange);
+			document.removeEventListener('focusin', handleFocusIn);
+			document.removeEventListener('focusout', handleFocusOut);
 		};
 	});
 
@@ -86,7 +106,7 @@
 {:else}
 	<!-- App pages -->
 	<PlasmaBackground />
-	<div class="app-container safe-top flex w-screen flex-col overflow-hidden">
+	<div class="app-container safe-top relative z-10 flex w-screen flex-col overflow-hidden">
 		<main class="flex-1 overflow-hidden">
 			{@render children()}
 		</main>

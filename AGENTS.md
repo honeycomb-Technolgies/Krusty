@@ -23,6 +23,13 @@ Repository-level engineering guardrails for Krusty.
 - Keep changes small and reversible.
 - Avoid hidden side effects and global state sprawl.
 
+## Default Dev Workflow
+- Build and run current local code only; do not require `git pull` for day-to-day refinement.
+- Run backend/API server from repo root: `cargo run -p krusty -- serve` (default `http://localhost:3000`).
+- Run PWA hot-reload server in parallel: `cd apps/pwa/app && bun run dev` (default `http://localhost:5173`).
+- Do active UI/PWA iteration at `http://localhost:5173` so HMR is enabled, with `/api` and `/ws` proxied to `:3000`.
+- Frontend edits hot-reload automatically; Rust backend edits require a backend restart.
+
 ## Required Validation
 - `cargo check --workspace`
 - `cargo test --workspace`

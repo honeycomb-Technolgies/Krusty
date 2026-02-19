@@ -9,6 +9,7 @@
 	import { sessionStore, loadSession, clearSession, setModel } from '$stores/session';
 	import { sessionsStore, loadSessions, deleteSession } from '$stores/sessions';
 	import { apiClient } from '$api/client';
+	import { workspaceStore } from '$stores/workspace';
 
 	const SIDEBAR_COLLAPSED_KEY = 'krusty:sidebar_collapsed';
 
@@ -93,14 +94,23 @@
 	}
 
 	onMount(() => {
-		loadSidebarState();
-		loadSessions();
-		loadDefaultModel();
-		
-		// Listen for model open event from ChatView AI controls
 		const openModelListener = () => {
 			showModelSelector = true;
 		};
+
+		void (async () => {
+			loadSidebarState();
+			await loadSessions();
+			loadDefaultModel();
+
+			// Restore last active session from workspace store
+			const saved = workspaceStore.getState();
+			if (saved.sessionId && !$sessionStore.sessionId) {
+				await loadSession(saved.sessionId);
+			}
+		})();
+
+		// Listen for model open event from ChatView AI controls
 		window.addEventListener('openmodel', openModelListener);
 
 		return () => {
@@ -117,7 +127,7 @@
 		onModelClick={handleModelClick}
 		onNewSession={handleNewSession}
 		onPinch={handlePinch}
-		onHistoryClick={() => (mobileSidebarOpen = true)}
+		onHistoryClick={() => (mobileSidebarOpen = !mobileSidebarOpen)}
 	/>
 
 	<!-- Content area with sidebar rail and chat -->

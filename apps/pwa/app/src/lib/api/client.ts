@@ -122,6 +122,20 @@ export interface ProviderStatus {
 	name: string;
 	configured: boolean;
 	has_oauth: boolean;
+	supports_oauth: boolean;
+}
+
+/** OAuth start response */
+export interface OAuthStartResponse {
+	auth_url: string;
+	provider: string;
+	paste_code: boolean;
+}
+
+/** OAuth status response */
+export interface OAuthStatusResponse {
+	has_token: boolean;
+	flow_active: boolean;
 }
 
 /** Push diagnostics summary */
@@ -397,6 +411,27 @@ export const apiClient = {
 
 	deleteCredential: (providerId: string) =>
 		request<void>(`/credentials/${providerId}`, { method: 'DELETE' }),
+
+	// OAuth
+	startOAuth: (provider: string) =>
+		request<OAuthStartResponse>('/auth/oauth/start', {
+			method: 'POST',
+			body: JSON.stringify({ provider })
+		}),
+
+	getOAuthStatus: (provider: string) =>
+		request<OAuthStatusResponse>(`/auth/oauth/status/${provider}`),
+
+	exchangeOAuthCode: (provider: string, code: string) =>
+		request<{ success: boolean }>('/auth/oauth/exchange', {
+			method: 'POST',
+			body: JSON.stringify({ provider, code })
+		}),
+
+	revokeOAuth: (provider: string) =>
+		request<OAuthStatusResponse>(`/auth/oauth/revoke/${provider}`, {
+			method: 'DELETE'
+		}),
 
 	// Push notifications
 	getVapidPublicKey: () =>
