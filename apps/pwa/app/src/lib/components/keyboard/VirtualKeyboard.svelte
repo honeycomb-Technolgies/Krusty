@@ -330,21 +330,20 @@
 
 	.keyboard-container {
 		position: fixed;
-		bottom: 0;
+		bottom: calc(4rem + var(--safe-area-bottom));
 		left: 0;
 		right: 0;
 		z-index: 1000;
-		
+
 		/* Glassmorphism styling */
 		background: rgba(20, 20, 25, 0.85);
 		backdrop-filter: blur(24px);
 		-webkit-backdrop-filter: blur(24px);
 		border-top: 1px solid rgba(255, 255, 255, 0.08);
 		border-radius: 20px 20px 0 0;
-		
-		/* Safe area padding */
+
+		/* Nav handles safe-area, keyboard sits above it */
 		padding: 8px 4px;
-		padding-bottom: max(8px, env(safe-area-inset-bottom, 0px));
 		
 		/* Animation */
 		animation: slideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);

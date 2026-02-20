@@ -9,6 +9,7 @@
 	import { loadSession } from '$stores/session';
 	import { apiClient } from '$api/client';
 	import { reconcilePushSubscription } from '$lib/push';
+	import { setNativeKeyboardState } from '$stores/keyboard';
 
 	interface NavItem {
 		href: string;
@@ -25,27 +26,23 @@
 	];
 
 	// iOS PWA viewport fix: set --vh variable to actual viewport height
-	// Only update when no input is focused (keyboard closed) to prevent layout thrashing
-	let keyboardOpen = false;
+	// Detect native keyboard via visualViewport shrinkage and keep --vh stable during keyboard
+	let stableInnerHeight = 0;
 
 	function setViewportHeight() {
-		if (keyboardOpen) return;
-		const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
-		const vh = viewportHeight * 0.01;
-		document.documentElement.style.setProperty('--vh', `${vh}px`);
-	}
+		const vvHeight = window.visualViewport?.height ?? window.innerHeight;
+		const innerH = window.innerHeight;
+		const nativeKbHeight = innerH - vvHeight;
+		const nativeKbOpen = nativeKbHeight > 100;
 
-	function handleFocusIn(e: FocusEvent) {
-		const target = e.target as HTMLElement;
-		if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
-			keyboardOpen = true;
+		setNativeKeyboardState(nativeKbOpen, nativeKbOpen ? nativeKbHeight : 0);
+
+		// Only update --vh when no native keyboard is pushing the viewport
+		if (!nativeKbOpen) {
+			stableInnerHeight = vvHeight;
+			const vh = vvHeight * 0.01;
+			document.documentElement.style.setProperty('--vh', `${vh}px`);
 		}
-	}
-
-	function handleFocusOut() {
-		keyboardOpen = false;
-		// Recalculate after keyboard closes and animation settles
-		setTimeout(setViewportHeight, 300);
 	}
 
 	onMount(() => {
@@ -57,8 +54,6 @@
 		window.addEventListener('resize', setViewportHeight);
 		window.visualViewport?.addEventListener('resize', setViewportHeight);
 		window.addEventListener('orientationchange', handleOrientationChange);
-		document.addEventListener('focusin', handleFocusIn);
-		document.addEventListener('focusout', handleFocusOut);
 
 		void validateWorkspace(apiClient);
 		if ('serviceWorker' in navigator) {
@@ -80,8 +75,6 @@
 			window.removeEventListener('resize', setViewportHeight);
 			window.visualViewport?.removeEventListener('resize', setViewportHeight);
 			window.removeEventListener('orientationchange', handleOrientationChange);
-			document.removeEventListener('focusin', handleFocusIn);
-			document.removeEventListener('focusout', handleFocusOut);
 		};
 	});
 

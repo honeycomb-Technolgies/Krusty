@@ -3,6 +3,7 @@
 	import { browser } from '$app/environment';
 	import { terminalStore, connectTerminal, disconnectTerminal, sendInput, sendResize } from '$stores/terminal';
 	import VirtualKeyboard from '$lib/components/keyboard/VirtualKeyboard.svelte';
+	import { setVirtualKeyboardHeight } from '$stores/keyboard';
 
 	interface Props {
 		tabId: string;
@@ -26,7 +27,6 @@
 	// Virtual keyboard state
 	let showKeyboard = $state(false);
 	let isMobile = false;
-	let keyboardHeight = $state(0);
 
 	// Get this tab's state
 	let tabState = $derived($terminalStore.tabs.find((t) => t.id === tabId));
@@ -219,12 +219,11 @@
 
 	function handleKeyboardClose() {
 		showKeyboard = false;
-		keyboardHeight = 0;
+		setVirtualKeyboardHeight(0);
 	}
 
 	function handleKeyboardHeightChange(height: number) {
-		keyboardHeight = height;
-		// Re-fit xterm after keyboard height changes
+		setVirtualKeyboardHeight(height);
 		requestAnimationFrame(() => fitAndResize(true));
 	}
 </script>
@@ -232,7 +231,7 @@
 <div
 	class="terminal-instance"
 	class:hidden={!isActive}
-	style:padding-bottom="{keyboardHeight}px"
+	style:padding-bottom="var(--keyboard-height)"
 	role="button"
 	tabindex="0"
 	onclick={handleTerminalTap}

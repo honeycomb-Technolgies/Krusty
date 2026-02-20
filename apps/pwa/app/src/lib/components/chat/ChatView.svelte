@@ -18,6 +18,7 @@
 	import AsciiTitle from './AsciiTitle.svelte';
 	import VirtualKeyboard from '$lib/components/keyboard/VirtualKeyboard.svelte';
 	import { sessionStore, sendMessage, stopGeneration, togglePermissionMode, toggleThinking, setMode, thinkingLevelLabel, type Attachment, type SessionMode } from '$stores/session';
+	import { setVirtualKeyboardHeight } from '$stores/keyboard';
 
 	// Web Speech API type declarations (for browsers that support it)
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -45,7 +46,6 @@
 	// Virtual keyboard state
 	let showKeyboard = $state(false);
 	let isMobile = $state(false);
-	let keyboardHeight = $state(0);
 
 	// Check for Web Speech API support (with type assertion)
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -282,11 +282,11 @@
 
 	function handleKeyboardClose() {
 		showKeyboard = false;
-		keyboardHeight = 0;
+		setVirtualKeyboardHeight(0);
 	}
 
 	function handleKeyboardHeightChange(height: number) {
-		keyboardHeight = height;
+		setVirtualKeyboardHeight(height);
 		if (height > 0 && messagesContainer) {
 			requestAnimationFrame(() => {
 				messagesContainer.scrollTop = messagesContainer.scrollHeight;
@@ -313,7 +313,7 @@
 	});
 </script>
 
-<div class="flex h-full min-h-0 flex-col" style:padding-bottom="{keyboardHeight}px">
+<div class="flex h-full min-h-0 flex-col" style:padding-bottom="var(--keyboard-height)">
 	<!-- Error display -->
 	{#if $sessionStore.error}
 		<div class="mx-4 mt-2 rounded-lg bg-destructive/20 px-4 py-2 text-sm text-destructive">
@@ -344,7 +344,7 @@
 
 	<!-- Input area - only show when session is active -->
 	{#if $sessionStore.sessionId}
-		<div class="shrink-0 px-4 pb-5">
+		<div class="shrink-0 px-4 pb-2">
 			<!-- Hidden file input - accepts all file types including images -->
 			<input
 				bind:this={fileInput}
