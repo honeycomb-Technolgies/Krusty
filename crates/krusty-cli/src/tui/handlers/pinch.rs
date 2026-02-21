@@ -360,6 +360,10 @@ impl App {
             &pinch_ctx,
             Some(&self.runtime.current_model),
             Some(&self.runtime.working_dir.to_string_lossy()),
+            self.runtime
+                .git_status
+                .as_ref()
+                .and_then(|status| status.branch.as_deref()),
         ) {
             Ok(new_id) => {
                 // Save pinch context as first message
@@ -524,6 +528,10 @@ impl App {
             &pinch_ctx,
             Some(&self.runtime.current_model),
             Some(&self.runtime.working_dir.to_string_lossy()),
+            self.runtime
+                .git_status
+                .as_ref()
+                .and_then(|status| status.branch.as_deref()),
         ) {
             Ok(new_id) => {
                 // Save pinch context as first message

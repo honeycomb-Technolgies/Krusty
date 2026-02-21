@@ -234,13 +234,22 @@ async fn exchange_code(
     let token_data = flow
         .exchange_code(&req.code, &verifier)
         .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("OAuth token exchange failed for {}: {}", provider_id, e);
+            AppError::Internal(e.to_string())
+        })?;
 
-    let mut store = OAuthTokenStore::load().map_err(|e| AppError::Internal(e.to_string()))?;
+    let mut store = OAuthTokenStore::load().map_err(|e| {
+        tracing::error!("Failed to load OAuth token store: {}", e);
+        AppError::Internal(e.to_string())
+    })?;
     store.set(provider_id, token_data);
-    store
-        .save()
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    store.save().map_err(|e| {
+        tracing::error!("Failed to save OAuth token: {}", e);
+        AppError::Internal(e.to_string())
+    })?;
+
+    tracing::info!("OAuth token stored successfully for {}", provider_id);
 
     // Clean up flow state
     state

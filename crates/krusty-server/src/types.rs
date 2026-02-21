@@ -13,6 +13,7 @@ pub struct CreateSessionRequest {
     pub title: Option<String>,
     pub model: Option<String>,
     pub working_dir: Option<String>,
+    pub target_branch: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -21,6 +22,7 @@ pub struct UpdateSessionRequest {
     pub working_dir: Option<String>,
     pub mode: Option<WorkMode>,
     pub model: Option<String>,
+    pub target_branch: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -53,6 +55,7 @@ pub struct SessionResponse {
     pub working_dir: Option<String>,
     pub mode: WorkMode,
     pub model: Option<String>,
+    pub target_branch: Option<String>,
 }
 
 impl From<SessionInfo> for SessionResponse {
@@ -66,6 +69,7 @@ impl From<SessionInfo> for SessionResponse {
             working_dir: s.working_dir,
             mode: s.work_mode,
             model: s.model,
+            target_branch: s.target_branch,
         }
     }
 }

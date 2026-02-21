@@ -1,6 +1,16 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import { ArrowLeft, Check, X, Eye, EyeOff, Loader2, LogIn, LogOut } from 'lucide-svelte';
+	import {
+		ArrowLeft,
+		Check,
+		X,
+		Eye,
+		EyeOff,
+		Loader2,
+		LogIn,
+		LogOut,
+		ExternalLink
+	} from 'lucide-svelte';
 	import { apiClient, type ProviderStatus } from '$lib/api/client';
 
 	interface Props {
@@ -26,6 +36,10 @@
 	let pasteCodeProvider = $state<string | null>(null);
 	let oauthPollingInterval = $state<ReturnType<typeof setInterval> | null>(null);
 	let pasteCodeInputEl = $state<HTMLInputElement>(undefined!);
+
+	// OAuth iframe modal
+	let oauthIframeUrl = $state<string | null>(null);
+	let oauthIframePasteCode = $state(false);
 
 	onMount(() => {
 		loadProviders();
@@ -101,18 +115,21 @@
 		error = null;
 		try {
 			const result = await apiClient.startOAuth(providerId);
-			const popup = window.open(result.auth_url, 'krusty-oauth', 'width=600,height=700');
+
+			// Show iframe modal instead of external popup
+			oauthIframeUrl = result.auth_url;
+			oauthIframePasteCode = result.paste_code;
 
 			if (result.paste_code) {
-				// Anthropic: show paste-code input
+				// Anthropic: show paste-code input in modal footer
 				pasteCodeProvider = providerId;
 				pasteCodeInput = '';
 				editingProvider = null;
 				oauthLoading = null;
-				setTimeout(() => pasteCodeInputEl?.focus(), 0);
+				setTimeout(() => pasteCodeInputEl?.focus(), 100);
 			} else {
 				// OpenAI: poll for completion
-				startPolling(providerId, popup);
+				startPolling(providerId);
 			}
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to start OAuth';
@@ -120,23 +137,39 @@
 		}
 	}
 
-	function startPolling(providerId: string, popup: Window | null) {
+	function closeOAuthModal() {
+		const hadPasteCode = oauthIframePasteCode;
+		oauthIframeUrl = null;
+		oauthIframePasteCode = false;
+		if (oauthLoading) {
+			stopPolling();
+			oauthLoading = null;
+		}
+		// Keep paste-code state so inline fallback UI shows
+		if (!hadPasteCode && pasteCodeProvider) {
+			pasteCodeProvider = null;
+			pasteCodeInput = '';
+		}
+	}
+
+	function openOAuthInNewTab() {
+		if (oauthIframeUrl) {
+			window.open(oauthIframeUrl, '_blank');
+		}
+	}
+
+	function startPolling(providerId: string) {
 		stopPolling();
 		oauthPollingInterval = setInterval(async () => {
-			// If popup was closed by user without completing, stop after a grace period
-			if (popup && popup.closed) {
-				// Give the callback server a moment to process
-				await new Promise((r) => setTimeout(r, 1000));
-			}
-
 			try {
 				const status = await apiClient.getOAuthStatus(providerId);
 				if (status.has_token) {
 					stopPolling();
 					oauthLoading = null;
+					oauthIframeUrl = null;
+					oauthIframePasteCode = false;
 					await loadProviders();
 				} else if (!status.flow_active) {
-					// Flow ended without token (timeout or error)
 					stopPolling();
 					oauthLoading = null;
 				}
@@ -156,6 +189,8 @@
 			pasteCodeProvider = null;
 			pasteCodeInput = '';
 			oauthLoading = null;
+			oauthIframeUrl = null;
+			oauthIframePasteCode = false;
 			await loadProviders();
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to exchange code';
@@ -166,6 +201,8 @@
 	function cancelPasteCode() {
 		pasteCodeProvider = null;
 		pasteCodeInput = '';
+		oauthIframeUrl = null;
+		oauthIframePasteCode = false;
 	}
 
 	async function revokeOAuth(providerId: string) {
@@ -190,6 +227,81 @@
 		return provider.configured || provider.has_oauth;
 	}
 </script>
+
+<!-- OAuth iframe modal -->
+{#if oauthIframeUrl}
+	<div class="fixed inset-0 z-50 flex flex-col bg-background">
+		<!-- Modal header -->
+		<div class="flex items-center justify-between border-b border-border px-4 py-3">
+			<h3 class="font-semibold">Sign in</h3>
+			<div class="flex items-center gap-2">
+				<button
+					onclick={openOAuthInNewTab}
+					class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+					title="Open in new tab"
+				>
+					<ExternalLink class="h-3.5 w-3.5" />
+					New tab
+				</button>
+				<button
+					onclick={closeOAuthModal}
+					class="rounded-lg p-2 hover:bg-muted"
+				>
+					<X class="h-5 w-5" />
+				</button>
+			</div>
+		</div>
+
+		<!-- Iframe -->
+		<div class="flex-1 overflow-hidden">
+			<iframe
+				src={oauthIframeUrl}
+				class="h-full w-full border-0"
+				title="OAuth sign-in"
+				allow="forms"
+			></iframe>
+		</div>
+
+		<!-- Modal footer: paste-code input (Anthropic) -->
+		{#if oauthIframePasteCode}
+			<div class="space-y-3 border-t border-border p-4">
+				<p class="text-xs text-muted-foreground">
+					Complete sign-in above, then paste the authorization code below.
+				</p>
+				<div class="flex gap-2">
+					<input
+						bind:this={pasteCodeInputEl}
+						type="text"
+						bind:value={pasteCodeInput}
+						placeholder="Paste authorization code..."
+						class="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm font-mono"
+					/>
+					<button
+						onclick={submitPasteCode}
+						disabled={!pasteCodeInput.trim() || oauthLoading === pasteCodeProvider}
+						class="rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+					>
+						{#if oauthLoading === pasteCodeProvider}
+							<Loader2 class="h-4 w-4 animate-spin" />
+						{:else}
+							Submit
+						{/if}
+					</button>
+				</div>
+			</div>
+		{/if}
+
+		<!-- Modal footer: polling status (OpenAI) -->
+		{#if oauthLoading && !oauthIframePasteCode}
+			<div
+				class="flex items-center justify-center gap-2 border-t border-border p-4 text-sm text-muted-foreground"
+			>
+				<Loader2 class="h-4 w-4 animate-spin" />
+				Waiting for authentication to complete...
+			</div>
+		{/if}
+	</div>
+{/if}
 
 <div class="flex h-full flex-col">
 	<!-- Header -->
@@ -291,11 +403,11 @@
 							{/if}
 						</div>
 
-						<!-- Paste-code input (Anthropic) -->
-						{#if pasteCodeProvider === provider.id}
+						<!-- Paste-code inline fallback (shown if modal closed but flow active) -->
+						{#if pasteCodeProvider === provider.id && !oauthIframeUrl}
 							<div class="mt-4 space-y-3">
 								<p class="text-xs text-muted-foreground">
-									Complete sign-in in the popup window, then paste the authorization code below.
+									Paste the authorization code from the sign-in page below.
 								</p>
 								<input
 									bind:this={pasteCodeInputEl}

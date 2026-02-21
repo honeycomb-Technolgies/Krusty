@@ -17,6 +17,7 @@ export interface SessionResponse {
 	mode: 'build' | 'plan';
 	updated_at: string;
 	model?: string | null;
+	target_branch?: string | null;
 }
 
 /** Message content block */
@@ -302,16 +303,16 @@ export const apiClient = {
 			directories: { name: string; path: string }[];
 		}>(`/files/browse${path ? `?path=${encodeURIComponent(path)}` : ''}`),
 
-	createSession: (title?: string, workingDir?: string) =>
+	createSession: (title?: string, workingDir?: string, targetBranch?: string) =>
 		request<SessionResponse>('/sessions', {
 			method: 'POST',
-			body: JSON.stringify({ title, working_dir: workingDir })
+			body: JSON.stringify({ title, working_dir: workingDir, target_branch: targetBranch })
 		}),
 
 	deleteSession: (id: string) =>
 		request<void>(`/sessions/${id}`, { method: 'DELETE' }),
 
-	updateSession: (id: string, data: { title?: string; working_dir?: string; mode?: 'build' | 'plan'; model?: string }) =>
+	updateSession: (id: string, data: { title?: string; working_dir?: string; mode?: 'build' | 'plan'; model?: string; target_branch?: string }) =>
 		request<SessionResponse>(`/sessions/${id}`, {
 			method: 'PATCH',
 			body: JSON.stringify(data)

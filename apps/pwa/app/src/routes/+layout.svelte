@@ -38,9 +38,10 @@
 		setNativeKeyboardState(nativeKbOpen, nativeKbOpen ? nativeKbHeight : 0);
 
 		// Only update --vh when no native keyboard is pushing the viewport
+		// Use innerHeight which includes safe areas with viewport-fit=cover in standalone PWA
 		if (!nativeKbOpen) {
-			stableInnerHeight = vvHeight;
-			const vh = vvHeight * 0.01;
+			stableInnerHeight = innerH;
+			const vh = innerH * 0.01;
 			document.documentElement.style.setProperty('--vh', `${vh}px`);
 		}
 	}
@@ -99,25 +100,32 @@
 {:else}
 	<!-- App pages -->
 	<PlasmaBackground />
-	<div class="app-container safe-top relative z-10 flex w-screen flex-col overflow-hidden">
+	<div class="app-container relative z-10 flex w-screen flex-col overflow-hidden">
+		<!-- Top safe area fill - extends chrome background behind iOS status bar -->
+		<div class="safe-area-top-fill shrink-0"></div>
+
 		<main class="flex-1 overflow-hidden">
 			{@render children()}
 		</main>
 
 		{#if isAppRoute}
-			<nav class="safe-bottom flex h-16 shrink-0 items-center justify-around border-t border-border/50 bg-card/60 backdrop-blur-sm">
-				{#each navItems as item}
-					{@const isActive = $page.url.pathname === item.href ||
-						(item.href !== '/app' && $page.url.pathname.startsWith(item.href))}
-					<a
-						href={item.href}
-						class="flex flex-col items-center gap-1 px-4 py-2 transition-colors
-							{isActive ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}"
-					>
-						<item.icon class="h-5 w-5" />
-						<span class="text-xs font-medium">{item.label}</span>
-					</a>
-				{/each}
+			<nav class="shrink-0 border-t border-border/50 bg-card/60 backdrop-blur-sm">
+				<div class="flex h-16 items-center justify-around">
+					{#each navItems as item}
+						{@const isActive = $page.url.pathname === item.href ||
+							(item.href !== '/app' && $page.url.pathname.startsWith(item.href))}
+						<a
+							href={item.href}
+							class="flex flex-col items-center gap-1 px-4 py-2 transition-colors
+								{isActive ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}"
+						>
+							<item.icon class="h-5 w-5" />
+							<span class="text-xs font-medium">{item.label}</span>
+						</a>
+					{/each}
+				</div>
+				<!-- Bottom safe area fill - extends nav background behind iOS home indicator -->
+				<div class="safe-area-bottom-fill"></div>
 			</nav>
 		{/if}
 	</div>
